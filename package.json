@@ -1,7 +1,7 @@
 {
   "name": "convorel",
   "version": "0.1.0",
-  "description": "Persistent ChatGPT browser reviews with a local read-only code MCP server",
+  "description": "让本地编码 Agent 与 ChatGPT 网页接力协作：CDP 浏览器控制、只读代码 MCP，以及可恢复的对话和标签页管理。",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
@@ -46,5 +46,21 @@
   },
   "trustedDependencies": [
     "agent-browser"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MarioJames/convorel.git"
+  },
+  "homepage": "https://github.com/MarioJames/convorel#readme",
+  "bugs": {
+    "url": "https://github.com/MarioJames/convorel/issues"
+  },
+  "keywords": [
+    "chatgpt",
+    "mcp",
+    "cdp",
+    "agent-browser",
+    "code-review",
+    "ai-agents"
   ]
 }
