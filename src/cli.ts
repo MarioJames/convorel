@@ -6,6 +6,7 @@ import { State } from "./state.ts";
 import { Browser, cdpEndpoint } from "./browser.ts";
 import { Review, type Config } from "./review.ts";
 import { Workspace } from "./workspace.ts";
+import { WorkspaceAccess, parseRoots } from "./workspace-access.ts";
 import { serve } from "./mcp.ts";
 import {
   cliPath,
@@ -41,7 +42,7 @@ review status|resume|wait|result --id ID [--run UUID]
 review finish --id ID --run UUID
 review attach --id ID --url CONVERSATION --user-message ID
 review organize --id ID --run UUID --type DES --topic TOPIC
-mcp serve --workspace PATH
+mcp serve [--roots JSON_ARRAY]
 tunnel instructions|doctor|run|recover-lock [--tunnel-id ID]
 Tunnel ID: --tunnel-id > CONVOREL_TUNNEL_ID environment > installation .env
 recover-lock
@@ -61,7 +62,9 @@ export async function main(args = process.argv.slice(2)) {
   if (area === "mcp") {
     if (sub !== "serve") throw new Error("UNKNOWN_MCP_COMMAND");
     const o = opts(rest);
-    await serve(required(o, "workspace"));
+    const roots = o.roots ?? tunnelEnv("CONVOREL_MCP_ROOTS");
+    if (!roots) throw new Error("MCP_ROOTS_REQUIRED");
+    await serve(parseRoots(roots));
     return 0;
   }
   if (area === "skill") {
@@ -132,8 +135,14 @@ export async function main(args = process.argv.slice(2)) {
     return 0;
   }
   const config = store.read<Config>("config"),
+    configuredRoots = tunnelEnv("CONVOREL_MCP_ROOTS"),
+    access = new WorkspaceAccess(
+      configuredRoots ? parseRoots(configuredRoots) : [config.workspace],
+    ),
     browser = new Browser(config.cdp, store.root),
     review = new Review(store, browser);
+  access.assertPrivate(store.root);
+  const roots = access.roots.map((ws) => ws.root);
   if (area === "doctor") {
     const report: any = {
       agentBrowser: null,
@@ -181,8 +190,8 @@ export async function main(args = process.argv.slice(2)) {
           cliPath,
           "mcp",
           "serve",
-          "--workspace",
-          config.workspace,
+          "--roots",
+          JSON.stringify(roots),
         ],
         env: childEnv(),
         stderr: "pipe",
@@ -198,7 +207,7 @@ export async function main(args = process.argv.slice(2)) {
       report.localMcp = {
         status: "verified",
         tools: tools.tools.map((t) => t.name),
-        workspaceId: new Workspace(config.workspace).id,
+        roots: (info.structuredContent as any).roots,
       };
     } catch (e) {
       report.localMcp = { status: "failed", error: String(e) };
@@ -220,7 +229,7 @@ export async function main(args = process.argv.slice(2)) {
         "TUNNEL_ID_MISSING: set --tunnel-id or CONVOREL_TUNNEL_ID in the environment or convorel .env",
       );
     if (sub === "instructions") {
-      print(tunnelInstructions(id, config.workspace));
+      print(tunnelInstructions(id, config.workspace, roots));
       return 0;
     }
     if (sub === "recover-lock") {
@@ -228,7 +237,7 @@ export async function main(args = process.argv.slice(2)) {
       return 0;
     }
     if (sub === "run" || sub === "doctor")
-      return runTunnel(sub, id, config.workspace);
+      return runTunnel(sub, id, config.workspace, roots);
     throw new Error("UNKNOWN_TUNNEL_COMMAND");
   }
   if (area !== "review") throw new Error("UNKNOWN_COMMAND");

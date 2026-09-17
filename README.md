@@ -122,11 +122,12 @@ bun --no-env-file src/cli.ts tunnel doctor --tunnel-id YOUR_TUNNEL_ID
 bun --no-env-file src/cli.ts tunnel run --tunnel-id YOUR_TUNNEL_ID
 ```
 
-在 convorel 安装目录复制 `.env.example` 为 `.env`，填写 `CONVOREL_TUNNEL_API_KEY` 和 `CONVOREL_TUNNEL_ID`；也可以通过同名环境变量提供，环境变量优先（空值也会覆盖文件值）。从其他目录调用已安装 CLI 或技能时，仍读取该安装目录的 `.env`，不读取共享代码工作区的 `.env`。隧道 ID 的优先级为 `--tunnel-id` > 环境变量 > `.env`；配置后可省略命令中的 `--tunnel-id`。仅加载这两个配置，不加载 `.env.local` 等变体，也不执行变量展开。
+在 convorel 安装目录复制 `.env.example` 为 `.env`，填写 `CONVOREL_TUNNEL_API_KEY` 和 `CONVOREL_TUNNEL_ID`；也可以通过同名环境变量提供，环境变量优先（空值也会覆盖文件值）。从其他目录调用已安装 CLI 或技能时，仍读取该安装目录的 `.env`，不读取共享代码工作区的 `.env`。隧道 ID 的优先级为 `--tunnel-id` > 环境变量 > `.env`；配置后可省略命令中的 `--tunnel-id`。`CONVOREL_MCP_ROOTS` 为允许读取的根目录 JSON 数组（支持绝对路径和 `~/`）；未设置时只允许初始化时指定的目录。不加载 `.env.local` 等变体，也不执行变量展开。
 
 ```dotenv
 CONVOREL_TUNNEL_API_KEY=你的_OpenAI_运行时密钥
 CONVOREL_TUNNEL_ID=tunnel_你的隧道ID
+CONVOREL_MCP_ROOTS='["~/workspaces","~/opensource"]'
 ```
 
 `.env` 已被 Git 忽略，可执行 `chmod 600 .env` 限制本机访问。convorel 仅在启动官方客户端时将密钥映射为它需要的 `CONTROL_PLANE_API_KEY`，不写入提示词或任务 JSON。保持客户端运行，再在 ChatGPT 中创建并启用对应的 developer app。一个 stdio 隧道 ID 同时只能运行一个客户端。
@@ -195,3 +196,9 @@ bun run test:package
 欢迎通过 [Issues](https://github.com/MarioJames/convorel/issues) 提供复现或建议；开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 采用 [Apache-2.0](LICENSE) 许可证。复用来源及第三方许可见 [NOTICE](NOTICE) 和 [第三方声明](THIRD_PARTY_LICENSES.md)。
+
+### 多目录只读访问
+
+对话中提供要 review 的完整项目路径即可。`workspace_info` 不传路径时列出允许根，传 `path` 时返回该目录的身份；`read_file`、`list_directory`、`search_workspace`、`git_status` 和 `git_diff` 都使用完整 `path`（支持绝对路径和 `~/`）。Git 工具的路径必须是真实 Git 根。远端不能添加允许根或扩大本地配置。
+
+所有根统一排除 `.env`、`.env.*` 及现有凭据文件，目录列表、搜索、读取和 Git 输出都执行同样的过滤。项目子目录继承允许根的忽略规则；符号链接、重复或嵌套根、越界路径会被拒绝。更改根配置后需重启隧道，已运行的 MCP 进程不会自动扩大范围。

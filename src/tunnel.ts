@@ -4,10 +4,16 @@ import { spawn } from "node:child_process";
 import { State, processIdentity } from "./state.ts";
 import { Workspace, sha } from "./workspace.ts";
 import { childEnv } from "./command.ts";
+import { WorkspaceAccess } from "./workspace-access.ts";
 import { tunnelEnv } from "./tunnel-env.ts";
 export const cliPath = resolve(import.meta.dir, "cli.ts");
 export const shellQuote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
-export function tunnelArgs(id: string, root: string, healthFile: string) {
+export function tunnelArgs(
+  id: string,
+  root: string,
+  healthFile: string,
+  roots = [root],
+) {
   if (!/^tunnel_[a-f0-9]{32}$/.test(id)) throw new Error("INVALID_TUNNEL_ID");
   const mcp = [
     process.execPath,
@@ -15,8 +21,8 @@ export function tunnelArgs(id: string, root: string, healthFile: string) {
     cliPath,
     "mcp",
     "serve",
-    "--workspace",
-    new Workspace(root).root,
+    "--roots",
+    JSON.stringify(new WorkspaceAccess(roots).roots.map((ws) => ws.root)),
   ]
     .map(shellQuote)
     .join(" ");
@@ -31,11 +37,14 @@ export function tunnelArgs(id: string, root: string, healthFile: string) {
     healthFile,
   ];
 }
-export function tunnelInstructions(id: string, root: string) {
-  const args = tunnelArgs(id, root, "/path/to/private/health-url");
+export function tunnelInstructions(id: string, root: string, roots = [root]) {
+  const args = tunnelArgs(id, root, "/path/to/private/health-url", roots);
   return {
     tunnelId: id,
-    workspaceId: new Workspace(root).id,
+    roots: new WorkspaceAccess(roots).roots.map((ws) => ({
+      path: ws.root,
+      workspaceId: ws.id,
+    })),
     requires: [
       "official tunnel-client on PATH",
       "CONVOREL_TUNNEL_API_KEY in the environment or convorel installation .env",
@@ -77,16 +86,19 @@ export async function runTunnel(
   action: "run" | "doctor",
   id: string,
   root: string,
+  roots = [root],
 ) {
   const registry = new State(join(homedir(), ".local/share/convorel-tunnels")),
     key = "tunnel-" + sha(id).slice(0, 24),
     workspace = new Workspace(root);
-  if (
-    registry.root === workspace.root ||
-    registry.root.startsWith(workspace.root + "/")
-  )
-    throw new Error("STATE_INSIDE_WORKSPACE");
-  const flags = tunnelArgs(id, root, join(registry.root, key + ".health-url"));
+  const access = new WorkspaceAccess(roots);
+  access.assertPrivate(registry.root);
+  const flags = tunnelArgs(
+    id,
+    root,
+    join(registry.root, key + ".health-url"),
+    roots,
+  );
   if (!Bun.which("tunnel-client"))
     throw new Error(
       "TUNNEL_CLIENT_MISSING: install official tunnel-client; see tunnel instructions",
@@ -113,6 +125,7 @@ export async function runTunnel(
       version: 1,
       tunnelId: id,
       workspace: workspace.root,
+      readRoots: roots,
     });
     const env = {
       ...childEnv(),
@@ -149,6 +162,7 @@ export async function runTunnel(
           version: 1,
           tunnelId: id,
           workspace: workspace.root,
+          readRoots: roots,
           pid: child.pid,
           identity: processIdentity(child.pid),
         });
@@ -157,6 +171,7 @@ export async function runTunnel(
         version: 1,
         tunnelId: id,
         workspace: workspace.root,
+        readRoots: roots,
         exitCode: code,
       });
       return code;

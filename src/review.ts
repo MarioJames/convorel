@@ -277,7 +277,7 @@ export class Review {
       }
       const runId = randomUUID(),
         marker = `[CONVOREL:${runId}]`;
-      const prompt = `${marker}\nExpected workspaceId: ${t.workspaceId}\nTemplate: v0.1\n\n${template()}\n\nUser request:\n${input}`;
+      const prompt = `${marker}\nDefault review path: ${t.config.workspace}\nDefault workspaceId: ${t.workspaceId}\nTemplate: v0.1\n\n${template()}\n\nUser request:\n${input}`;
       t.currentRun = runId;
       t.runs.push({
         id: runId,

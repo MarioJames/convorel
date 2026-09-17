@@ -1,10 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { Workspace } from "./workspace.ts";
-export function createServer(root: string) {
-  const ws = new Workspace(root),
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { WorkspaceAccess, fullPath } from "./workspace-access.ts";
+export function createServer(roots: string[]) {
+  const access = new WorkspaceAccess(roots),
     server = new McpServer({ name: "convorel", version: "0.1.0" });
+  access.assertPrivate(
+    process.env.CONVOREL_HOME || join(homedir(), ".local/share/convorel"),
+  );
+  access.assertPrivate(join(homedir(), ".local/share/convorel-tunnels"));
   const add = (
     name: string,
     description: string,
@@ -47,53 +53,74 @@ export function createServer(root: string) {
   };
   add(
     "workspace_info",
-    "Identify this fixed workspace before reading. Live read-only data; workspaceId is not authentication.",
-    {},
-    () => ws.info(),
+    "List allowed roots, or identify the full project path before reading. Read-only; workspaceId is not authentication.",
+    { path: z.string().optional() },
+    (a) => access.info(a.path),
   );
   add(
     "list_directory",
-    "List permitted workspace-relative paths. Honor truncation and nextOffset.",
+    "List permitted files under a full directory path. Honor truncation and nextOffset.",
     {
-      path: z.string().default("."),
+      path: z.string(),
       depth: z.number().int().min(1).max(4).default(1),
       offset: z.number().int().min(0).max(10000).default(0),
       limit: z.number().int().min(1).max(500).default(200),
     },
-    (a) => ws.list(a.path, a.depth, a.offset, a.limit),
+    async (a) => ({
+      ...(await access.directory(a.path).list(".", a.depth, a.offset, a.limit)),
+      path: fullPath(a.path),
+    }),
   );
   add(
     "read_file",
-    "Read bounded UTF-8 lines, with SHA-256 of the exact whole-file bytes observed.",
+    "Read a full file path within allowed roots, returning bounded UTF-8 lines and whole-file SHA-256.",
     {
       path: z.string(),
       startLine: z.number().int().min(1).max(10000000).default(1),
       maxLines: z.number().int().min(1).max(1000).default(400),
     },
-    (a) => ws.read(a.path, a.startLine, a.maxLines),
+    async (a) => {
+      const target = access.file(a.path);
+      return {
+        ...(await target.workspace.read(target.path, a.startLine, a.maxLines)),
+        path: fullPath(a.path),
+      };
+    },
   );
   add(
     "search_workspace",
     "Search literal text, never regex. Scan and output are bounded; check truncation and skippedFiles.",
-    { query: z.string().min(1).max(200) },
-    (a) => ws.search(a.query),
+    { path: z.string(), query: z.string().min(1).max(200) },
+    async (a) => ({
+      ...(await access.directory(a.path).search(a.query)),
+      path: fullPath(a.path),
+    }),
   );
   add(
     "git_status",
-    "Filtered Git status. Requires the workspace to be the Git top level. Failures are not a clean tree.",
-    {},
-    () => ws.status(),
+    "Filtered Git status for a full repository path. Requires the exact Git top level. Failures are not a clean tree.",
+    { path: z.string() },
+    async (a) => ({
+      ...(await access.directory(a.path).status()),
+      path: fullPath(a.path),
+    }),
   );
   add(
     "git_diff",
     "Filtered live Git diff; excludes sensitive paths on either rename side, submodules, external drivers and filters. Untracked file contents are excluded.",
-    { mode: z.enum(["unstaged", "staged", "head"]).default("unstaged") },
-    (a) => ws.diff(a.mode),
+    {
+      path: z.string(),
+      mode: z.enum(["unstaged", "staged", "head"]).default("unstaged"),
+    },
+    async (a) => ({
+      ...(await access.directory(a.path).diff(a.mode)),
+      path: fullPath(a.path),
+    }),
   );
   return server;
 }
-export async function serve(root: string) {
-  const s = createServer(root);
+export async function serve(roots: string[]) {
+  const s = createServer(roots);
   await s.connect(new StdioServerTransport());
   return s;
 }

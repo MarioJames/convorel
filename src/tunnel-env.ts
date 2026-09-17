@@ -4,7 +4,7 @@ import { parseEnv } from "node:util";
 
 // Resolve against this installation, never the caller's or shared workspace's cwd.
 export function tunnelEnv(
-  key: "CONVOREL_TUNNEL_API_KEY" | "CONVOREL_TUNNEL_ID",
+  key: "CONVOREL_TUNNEL_API_KEY" | "CONVOREL_TUNNEL_ID" | "CONVOREL_MCP_ROOTS",
   file = resolve(import.meta.dir, "../.env"),
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {

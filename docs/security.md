@@ -8,19 +8,19 @@ The CLI only operates the selected target. Task-owned targets may be closed afte
 
 ## Workspace
 
-The MCP process has one local root chosen by its operator. Remote tool arguments cannot select an arbitrary root, execute commands, modify source or modify the disclosure policy. By default symlinks, non-regular files, `.git`, dependencies, ignored files and common credential filenames are denied. Git results use the same exclusion rules.
+The MCP process has a fixed allowlist of local roots chosen by its operator through `CONVOREL_MCP_ROOTS` (a JSON array). Without an explicit allowlist, only the directory saved by init is permitted. Remote tool arguments cannot select an arbitrary root, execute commands, modify source or modify the disclosure policy. By default symlinks, non-regular files, `.git`, dependencies, ignored files and common credential filenames are denied. Git results use the same exclusion rules.
 
 Add workspace-specific exclusions in a root `.convorelignore` using gitignore syntax; nested `.gitignore` files are also applied. These rules may narrow access but cannot re-enable a hard-denied credential path. Unreadable policy files fail closed.
 
 Filename rules are not a universal secret scanner. A password written into an allowed source file can be returned. Only connect a workspace whose allowed contents may be shared with the account/workspace authorized for the tunnel. Requested file contents leave the machine as MCP responses even though the server has no public listener.
 
-Task IDs and workspace hashes are identities, not credentials. The server does not receive a trustworthy browser conversation binding. Any authorized client of that configured MCP connector can read its permitted root. Use separate connector/tunnel instances for separate disclosure boundaries.
+Task IDs and workspace hashes are identities, not credentials. The server does not receive a trustworthy browser conversation binding. Any authorized client of that configured MCP connector can read all its permitted roots. Requests use full paths; path hashes identify observations but are not authorization tokens. Use separate connector/tunnel instances for separate disclosure boundaries.
 
 Local processes with the same OS account can read or change these files already. This is not a sandbox for hostile local software. File checks and bounded descriptor reads protect ordinary path/symlink mistakes; they do not promise isolation from an adversary continuously racing directory renames, mounts or Git metadata. Do not point this server at an untrusted, concurrently manipulated filesystem.
 
 ## Tunnel
 
-Use the official OpenAI tunnel-client. Configure `CONVOREL_TUNNEL_API_KEY` in the shell or in `.env` at the convorel installation root. Explicit shell values take precedence. Tunnel commands read `CONVOREL_TUNNEL_ID` from the same file when no explicit ID is supplied; `--tunnel-id` overrides environment and file values. Only run/doctor consume the API key; only these two settings are read, and unrelated dotenv entries never alter the process environment or child command. The file is Git-ignored and denied by the MCP credential-path policy. The key is mapped to the official client’s `CONTROL_PLANE_API_KEY` in its child environment, never stored in JSON configuration, shell command arguments or logs. Stdout of `mcp serve` is exclusively MCP protocol output; diagnostics go to stderr.
+Use the official OpenAI tunnel-client. Configure `CONVOREL_TUNNEL_API_KEY` in the shell or in `.env` at the convorel installation root. Explicit shell values take precedence. Tunnel commands read `CONVOREL_TUNNEL_ID` from the same file when no explicit ID is supplied; `--tunnel-id` overrides environment and file values. Only run/doctor consume the API key; root settings are also read explicitly, and unrelated dotenv entries never alter the process environment or child command. The file is Git-ignored and denied by the MCP credential-path policy. The key is mapped to the official client’s `CONTROL_PLANE_API_KEY` in its child environment, never stored in JSON configuration, shell command arguments or logs. Stdout of `mcp serve` is exclusively MCP protocol output; diagnostics go to stderr.
 
 Tunnels are private developer connections. Distributing this open-source package does not distribute a shared tunnel, shared login or a public ChatGPT plugin. Each operator configures their own endpoint and ChatGPT app.
 
@@ -31,3 +31,7 @@ Source files, web pages, MCP outputs and reviewer replies are untrusted evidence
 ## Reporting
 
 Do not include credentials, private code, full browser network traces or session cookies in public issues. Report a minimal reproduction using synthetic files. No telemetry is implemented by this package. Browser/ChatGPT/tunnel providers have their own data policies.
+
+Child repository selection inherits ancestor ignore rules and root identity checks. Out-of-scope paths, traversal, symlink roots, and overlapping configured roots are rejected. Private task/tunnel state must remain outside every allowed root. Root changes require restarting the tunnel; the requested review path must be verified with workspace_info before reading code.
+
+Git metadata (gitdir, common-dir and objects) must stay within the same allowlist and cannot use symlink indirection. Git worktrees are supported when those sources are permitted. Object alternates and HTTP alternates are rejected; inherited GIT\_\* location overrides are not passed to Git.

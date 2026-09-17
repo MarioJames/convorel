@@ -8,6 +8,7 @@ import {
   fstatSync,
   readSync,
   opendirSync,
+  existsSync,
 } from "node:fs";
 import { resolve, join, relative, isAbsolute, basename } from "node:path";
 import { createHash } from "node:crypto";
@@ -68,6 +69,19 @@ export class Workspace {
   readonly root: string;
   readonly id: string;
   private rootIdentity: string;
+  private parent?: { workspace: Workspace; path: string };
+  gitStorageCheck?: (path: string) => boolean;
+  subdirectory(path: string) {
+    this.checkRoot();
+    const rel = this.normalize(path);
+    if (!rel) return this;
+    if (!this.allowed(rel, true)) throw new Error("ACCESS_DENIED");
+    const child = new Workspace(join(this.root, rel));
+    if (child.root !== join(this.root, rel)) throw new Error("ACCESS_DENIED");
+    child.parent = { workspace: this, path: rel };
+    child.gitStorageCheck = this.gitStorageCheck;
+    return child;
+  }
   constructor(root: string) {
     this.root = realpathSync(resolve(root));
     const st = statSync(this.root);
@@ -76,6 +90,11 @@ export class Workspace {
     this.id = sha(this.root).slice(0, 20);
   }
   checkRoot() {
+    if (this.parent) {
+      this.parent.workspace.checkRoot();
+      if (!this.parent.workspace.allowed(this.parent.path, true))
+        throw new Error("ACCESS_DENIED");
+    }
     const s = statSync(this.root);
     if (
       realpathSync(this.root) !== this.root ||
@@ -147,21 +166,26 @@ export class Workspace {
   allowed(p: string, isDir = false) {
     try {
       const rel = this.normalize(p);
+      if (
+        this.parent &&
+        !this.parent.workspace.allowed(join(this.parent.path, rel), isDir)
+      )
+        return false;
       if (!rel) return true;
       if (HARD.ignores(rel) || HARD.ignores(rel + "/")) return false;
-      const custom = ignore().add(this.policy(".convorelignore"));
-      if (custom.ignores(rel + (isDir ? "/" : ""))) return false;
-      // Each nested .gitignore is applied to its subtree. Hard/custom denies cannot be negated.
+      // Each ancestor policy is an independent deny boundary; child negations cannot undo it.
       const parts = rel.split("/");
       for (let i = 0; i < parts.length; i++) {
         const base = parts.slice(0, i).join("/"),
           sub = parts.slice(i).join("/") + (isDir ? "/" : "");
-        if (
-          ignore()
-            .add(this.policy(base ? base + "/.gitignore" : ".gitignore"))
-            .ignores(sub)
-        )
-          return false;
+        for (const name of [".gitignore", ".convorelignore"]) {
+          if (
+            ignore()
+              .add(this.policy(base ? base + "/" + name : name))
+              .ignores(sub)
+          )
+            return false;
+        }
       }
       let abs = this.root;
       for (const part of parts) {
@@ -380,6 +404,30 @@ export class Workspace {
     return r.stdout;
   }
   private gitReady() {
+    // Resolve Git's real data sources before any status/diff can return content.
+    const gitDir = this.git(["rev-parse", "--absolute-git-dir"]).trim();
+    const common = this.git([
+      "rev-parse",
+      "--path-format=absolute",
+      "--git-common-dir",
+    ]).trim();
+    const storageAllowed =
+      this.gitStorageCheck ||
+      ((path: string) => {
+        const rel = relative(this.root, path);
+        return (
+          (rel === "" || (!rel.startsWith("../") && !isAbsolute(rel))) &&
+          realpathSync(path) === path
+        );
+      });
+    for (const path of [gitDir, common, join(common, "objects")]) {
+      if (!storageAllowed(path)) throw new Error("GIT_STORAGE_OUTSIDE_ROOTS");
+    }
+    // Object alternates are recursively extensible; unsupported rather than followed implicitly.
+    for (const name of ["alternates", "http-alternates"]) {
+      if (existsSync(join(common, "objects/info", name)))
+        throw new Error("GIT_ALTERNATES_UNSUPPORTED");
+    }
     if (this.git(["rev-parse", "--show-toplevel"]).trim() !== this.root)
       throw new Error("GIT_ROOT_REQUIRED");
     if (

@@ -101,7 +101,14 @@ try {
   writeFileSync(join(workspace, "proof.txt"), "packaged MCP evidence\n");
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: ["--no-env-file", cli, "mcp", "serve", "--workspace", workspace],
+    args: [
+      "--no-env-file",
+      cli,
+      "mcp",
+      "serve",
+      "--roots",
+      JSON.stringify([workspace]),
+    ],
     env,
     stderr: "pipe",
   });
@@ -111,7 +118,7 @@ try {
     assert.equal((await client.listTools()).tools.length, 6);
     const result = await client.callTool({
       name: "read_file",
-      arguments: { path: "proof.txt" },
+      arguments: { path: join(workspace, "proof.txt") },
     });
     assert.equal(result.isError, undefined);
     assert.match(JSON.stringify(result), /packaged MCP evidence/);
