@@ -1,0 +1,5 @@
+convorel
+Includes modified browser review components from MarioJames/skill-foundry (Apache-2.0).
+Includes adapted sensitive-file policy from XiaoDuoYa/codex-with-chatgpt (MIT).
+Uses agent-browser (Apache-2.0) and the official Model Context Protocol TypeScript SDK (MIT).
+This is an independent community project, not an official OpenAI product.
