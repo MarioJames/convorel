@@ -5,7 +5,7 @@
 [![检查](https://github.com/MarioJames/convorel/actions/workflows/check.yml/badge.svg)](https://github.com/MarioJames/convorel/actions/workflows/check.yml)
 [![许可证](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Convorel 把已登录的 ChatGPT 网页接入本地开发流程：编码 Agent 提出问题，网页 AI 给出独立意见，再由本地 Agent 核对、修改和运行测试。需要代码证据时，ChatGPT 可以通过 MCP 按需读取你指定的工作区。
+Convorel 是面向本地 Agent 的持久会话生命周期与只读代码服务，把已登录的 ChatGPT 网页接入本地开发流程：编码 Agent 提出问题，网页 AI 给出独立意见，再由本地 Agent 核对、修改和运行测试。需要代码证据时，ChatGPT 可以通过 MCP 按需读取你指定的工作区。
 
 会话、请求、回复和标签页归属都保存在本地。进程中断后可以继续核对同一轮消息；完成后只清理自建且确认空闲的标签页，保留浏览器和登录状态。
 
@@ -17,16 +17,16 @@ Convorel 把已登录的 ChatGPT 网页接入本地开发流程：编码 Agent �
 - **只读代码访问**：提供工作区信息、目录、文件、文本搜索、Git 状态和 diff 六个 MCP 工具。
 - **可恢复的对话**：绑定任务、会话和精确消息 ID，保存完整提示词与最终回复；发送结果不确定时不自动重发。
 - **标签页管理**：绑定指定标签页，保护用户已有页面、草稿和新轮次；不因重连反复创建空白页。
-- **内置审查提示词**：要求核对工作区、引用文件与 hash，并区分事实、风险和建议。
-- **Agent 技能与初始化**：一个入口安装项目依赖、初始化配置、安装技能并检查连接。
+- **中性消息转发**：发送调用方提供的完整正文，仅添加关联标记，不拼入角色、审查策略或源码。
+- **初始化与连接检查**：一个入口安装项目依赖、初始化配置并检查连接。
 
-适合架构讨论、代码审查和实现方案交叉验证。编码与测试仍由本地 Agent 完成；远端回复是需要核实的审查意见。
+可用于问题解答、方案讨论和代码审查。技能负责发起任务、准备问题和处理答案；Convorel 负责会话创建、接续、持久化、恢复、轮次状态和资源释放。何时审查、如何组织证据和处理建议由调用方负责；审查工作流由独立的 `chatgpt-review` 技能维护，Convorel 不分发技能或审查模板。
 
 ## 两条独立通道
 
 ```mermaid
 flowchart LR
-  Agent[本地编码 Agent] --> CLI[Convorel CLI / 技能 / 提示词]
+  Agent[本地编码 Agent] --> CLI[Convorel CLI]
   CLI --> State[本地持久状态]
   CLI --> Browser[agent-browser / CDP]
   Browser --> ChatGPT[已登录的 ChatGPT 网页]
@@ -67,45 +67,41 @@ google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 
 
 将 `google-chrome` 换成实际安装的浏览器命令。调试端口只绑定本机，并使用单独的持久化 profile；[Chrome 136+ 要求使用非默认数据目录](https://developer.chrome.com/blog/remote-debugging-port)。
 
-### 3. 初始化并安装技能
+### 3. 初始化
 
-在 Convorel 目录执行，将 `--workspace` 替换为默认审查项目的绝对路径：
+在 Convorel 目录执行，将 `--workspace` 替换为代码工作区的绝对路径：
 
 ```bash
-bun --no-env-file setup.ts --workspace /absolute/path/to/your-project --cdp 9222
+bun --no-env-file setup.ts --workspace /absolute/path/to/your-project --cdp 9222 --model '6 Pro'
 ```
 
-`setup` 会安装锁定的本地依赖，将配置写入 `~/.local/share/convorel/`，把内置技能链接到 `~/.agents/skills/convorel`，并检查 CDP 和本地 MCP。重复执行会保留已配置的可选偏好；同名技能冲突会报错，不覆盖原文件。源码目录需保留，以供技能调用。
+`setup` 会安装锁定的本地依赖，将配置写入 `~/.local/share/convorel/`，并检查 CDP 和本地 MCP。重复执行会保留已配置的可选偏好。
 
-`--workspace` 保存默认审查上下文；未配置 `CONVOREL_MCP_ROOTS` 时，它也是唯一允许读取的目录。配置多目录后，对话中直接提供目标项目的完整路径即可，无需设置 `CONVOREL_WORKSPACE`。
+`--workspace` 保存默认代码工作区；未配置 `CONVOREL_MCP_ROOTS` 时，它也是唯一允许读取的目录。配置多目录后，对话中直接提供目标项目的完整路径即可，无需设置 `CONVOREL_WORKSPACE`。
 
-默认核对页面模型 **6 Pro**。若账号没有此模型，可以在初始化时传入 `--model '页面上的模型名称'`，并在网页中手动选好；程序不会静默降级。所有源码 CLI 命令保留 `--no-env-file`，避免自动加载调用目录或共享工作区的环境文件。隧道命令会单独读取 convorel 安装目录的 `.env`。
+首次初始化通过 `--model` 明确指定模型，例如 `6 Pro`。选择哪个模型由调用方决定；程序在每次发送前核对配置，不会静默降级。对于其他可见模型，先在网页中手动选好。所有源码 CLI 命令保留 `--no-env-file`，避免自动加载调用目录或共享工作区的环境文件。隧道命令会单独读取 convorel 安装目录的 `.env`。
 
 ### 4. 发起第一次讨论
 
-让支持本地技能的编码 Agent 使用已安装的 [Convorel 技能](skills/convorel/SKILL.md)，例如：
-
-> 用 convorel 审查下面这份实现方案，取得回复后核对建议、保存总结，并清理自建标签页。
-
-也可以直接使用 CLI。先创建一个不含敏感信息的请求文件：
+直接使用 CLI，先创建一个不含敏感信息的请求文件。文件内容由调用方完整编写：
 
 ```bash
 CONVOREL_PROMPT_FILE=$(mktemp)
 cat > "$CONVOREL_PROMPT_FILE" <<'PROMPT'
-请审查这个方案：本地 Agent 负责编码和测试，网页 AI 提供独立审查。
-列出两个主要风险和对应验证方法。本轮未提供代码，请只依据这段描述讨论。
+请解释内容哈希如何帮助识别文件变化。
+给出一个简短示例。
 PROMPT
 
-bun --no-env-file src/cli.ts review start \
-  --id first-review --prompt-file "$CONVOREL_PROMPT_FILE"
+bun --no-env-file src/cli.ts conversation start \
+  --id first-question --prompt-file "$CONVOREL_PROMPT_FILE"
 ```
 
 从输出中复制 `currentRun`，将下面的 `RUN_ID` 替换为该值：
 
 ```bash
-bun --no-env-file src/cli.ts review wait --id first-review --run RUN_ID
-bun --no-env-file src/cli.ts review result --id first-review --run RUN_ID
-bun --no-env-file src/cli.ts review finish --id first-review --run RUN_ID
+bun --no-env-file src/cli.ts conversation wait --id first-question --run RUN_ID
+bun --no-env-file src/cli.ts conversation result --id first-question --run RUN_ID
+bun --no-env-file src/cli.ts conversation finish --id first-question --run RUN_ID
 ```
 
 先消费、保存回复，再执行 `finish`。它保留会话链接和结果，只关闭经过核验的自有标签页；用户原有标签页不会关闭。
@@ -169,22 +165,22 @@ bun --no-env-file src/cli.ts tunnel run
 
 ```bash
 # 查看已保存的任务和轮次
-bun --no-env-file src/cli.ts review list
-bun --no-env-file src/cli.ts review status --id first-review --run RUN_ID
+bun --no-env-file src/cli.ts conversation list
+bun --no-env-file src/cli.ts conversation status --id first-question --run RUN_ID
 
 # 只观察现有消息，恢复中断后的状态，不再次点击发送
-bun --no-env-file src/cli.ts review resume --id first-review --run RUN_ID
+bun --no-env-file src/cli.ts conversation resume --id first-question --run RUN_ID
 
 # 消费上一轮结果后，用新的请求 ID 继续同一对话
-bun --no-env-file src/cli.ts review followup \
-  --id first-review --prompt-file /path/to/followup.md --request-id round-2
+bun --no-env-file src/cli.ts conversation followup \
+  --id first-question --prompt-file /path/to/followup.md --request-id round-2
 ```
 
 重复相同任务和请求不会重发；新问题使用 `followup` 和新请求 ID。后续操作使用它返回的新 `currentRun`。等待超时只停止本地监视，不会停止网页生成。
 
 同一允许范围内切换审查项目，只需在对话中提供新的完整路径，无需重新初始化。`CONVOREL_HOME` 用于隔离任务状态、默认项目和 CDP 配置；它不会自动隔离安装目录 `.env` 中的读取范围。确需独立状态时，将它设为允许目录之外的私有目录，再执行 `setup`。不同读取边界的连接应分别配置允许根和独立隧道。
 
-自定义技能安装位置用 `setup --skill-dir DIR`；完整命令见 `bun --no-env-file src/cli.ts --help`。
+完整命令见 `bun --no-env-file src/cli.ts --help`。
 
 ## 访问边界
 
@@ -206,7 +202,7 @@ bun run test:browser --chrome /path/to/installed/chrome
 bun run test:package
 ```
 
-浏览器回归使用一次性 profile，不登录账号、不发送 ChatGPT 消息。安装包验收覆盖含空格路径、项目目录外调用、技能入口和真实 MCP stdio 读取。具体测试环境及覆盖范围见[验证记录](docs/validation.md)。
+浏览器回归使用一次性 profile，不登录账号、不发送 ChatGPT 消息。安装包验收覆盖含空格路径、项目目录外调用、打包的浏览器控制器和真实 MCP stdio 读取。具体测试环境及覆盖范围见[验证记录](docs/validation.md)。
 
 欢迎通过 [Issues](https://github.com/MarioJames/convorel/issues) 提供复现或建议；开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

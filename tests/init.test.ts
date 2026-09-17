@@ -1,34 +1,7 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { skillInstall, skillUninstall, skillSource } from "../src/install.ts";
-test("skill install is repeatable, works outside cwd and preserves conflicting user files", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "convorel skill "));
-  try {
-    const first = skillInstall(dir);
-    expect(first.changed).toBe(true);
-    expect(skillInstall(dir).changed).toBe(false);
-    expect(realpathSync(first.destination)).toBe(realpathSync(skillSource));
-    const child = Bun.spawn(
-      [
-        process.execPath,
-        "--no-env-file",
-        join(first.destination, "scripts/convorel.ts"),
-        "--help",
-      ],
-      { cwd: "/", stdout: "pipe", stderr: "pipe" },
-    );
-    expect(await new Response(child.stdout).text()).toContain("review start");
-    expect(await child.exited).toBe(0);
-    expect(skillUninstall(dir).removed).toBe(true);
-    writeFileSync(first.destination, "user data");
-    expect(() => skillInstall(dir)).toThrow("CONFLICT");
-    expect(() => skillUninstall(dir)).toThrow("CONFLICT");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 test("repeat initialization keeps optional preferences and rejects a changed workspace", async () => {
   const { State } = await import("../src/state.ts");
   const root = mkdtempSync(join(tmpdir(), "convorel-init-"));
@@ -45,6 +18,8 @@ test("repeat initialization keeps optional preferences and rejects a changed wor
     });
   try {
     const args = ["--workspace", workspace, "--cdp", "9222"];
+    expect(run(args).exitCode).toBe(1);
+    expect(state.has("config")).toBe(false);
     expect(
       run([
         ...args,

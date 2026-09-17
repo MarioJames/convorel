@@ -5,8 +5,8 @@ Runnable v0.1 commands; consult validation.md for the verified environment and r
 ## Prerequisites
 
 - Linux, Bun >= 1.3, Node >= 24 (agent-browser package requirement), Git, an installed Chrome/Chromium.
-- Your own ChatGPT account and a supported model. Default model selection is `6 Pro`; another visible model can be configured for verification without automatic selection.
-- For code tools: your own OpenAI tunnel, runtime key and ChatGPT developer app. Browser-only review does not need these.
+- Your own ChatGPT account and a supported model. Choose the model explicitly at initialization with `--model`; `6 Pro` supports automatic selection, while other visible models are verified after manual selection.
+- For code tools: your own OpenAI tunnel, runtime key and ChatGPT developer app. Browser-only conversation does not need these.
 
 From the source directory, use the bootstrap command below; it runs `bun install --frozen-lockfile`. There is no published npm package assumed by this documentation. Invoke `bun --no-env-file src/cli.ts --help` or use the package's bin after a local installation.
 
@@ -24,34 +24,29 @@ Sign in manually. Keep this profile to preserve login. Chrome 136+ requires a no
 ## Initialize
 
 ```bash
-bun --no-env-file setup.ts --workspace /absolute/path/to/repo --cdp 9222
+bun --no-env-file setup.ts --workspace /absolute/path/to/repo --cdp 9222 --model '6 Pro'
 ```
 
 Configuration and task state live outside the shared repository under the user data directory. `CONVOREL_HOME` selects another private state root; never place it within an MCP-shared workspace. Use a separate state root for another configured workspace.
 
-## Install the Agent skill
+`setup` installs locked local dependencies, initializes private configuration and checks CDP/MCP. It does not install an Agent skill. Missing CDP produces a nonzero doctor result while preserving configuration. Bun, Git and Chrome remain user-managed prerequisites.
 
-`setup` links the bundled skill into `~/.agents/skills/convorel`. It is repeatable and never replaces an unrelated file/link. The package checkout must remain available. The skill invokes its own `scripts/convorel.ts` wrapper, so neither a global npm install nor the current shell directory is required.
+## Manage a persistent conversation
 
-```bash
-bun --no-env-file src/cli.ts skill install --dir /path/to/agent/skills
-bun --no-env-file src/cli.ts skill uninstall --dir /path/to/agent/skills
-```
-
-Only this installation's symlink is removed by uninstall; task state, browser profiles and dependencies remain. Use `setup --skill-dir DIR` to select a different directory during bootstrap. Bun, Git and Chrome are user-managed prerequisites; missing CDP yields a nonzero doctor result while preserving the initialized configuration and installed skill.
-
-## Browser review
+The caller writes the complete UTF-8 request file. Convorel sends `[CONVOREL:<runId>]`, two newlines and the file contents unchanged. The marker is a transport correlation key used to reconcile uncertain delivery; it is not a role or review instruction. Convorel does not load source files into the prompt, add workspace context, or select a review strategy. Include any desired code paths and context in the caller's message. Review policy and prompt preparation belong to the independent `chatgpt-review` skill.
 
 ```bash
-bun --no-env-file src/cli.ts review start --id auth-design --prompt-file /path/to/request.md
-bun --no-env-file src/cli.ts review wait --id auth-design
-bun --no-env-file src/cli.ts review result --id auth-design
-bun --no-env-file src/cli.ts review finish --id auth-design --run RUN_ID
+bun --no-env-file src/cli.ts conversation start --id auth-design --prompt-file /path/to/request.md
+bun --no-env-file src/cli.ts conversation wait --id auth-design --run RUN_ID
+bun --no-env-file src/cli.ts conversation result --id auth-design --run RUN_ID
+bun --no-env-file src/cli.ts conversation finish --id auth-design --run RUN_ID
 ```
 
 Replace RUN_ID with the returned currentRun. `--run` pins status, result, wait and finish to that exact round. `resume` reconciles an interrupted submission with its visible request marker; it does not press Send again. `followup` explicitly starts a new round after the prior reply is complete. A repeated `start` on the same task does not send again.
 
-`finish` closes only a verified, completed task-owned tab. Borrowed tabs remain open. It retains conversation links and results so later rounds restore the same conversation.
+`finish` closes only a verified, completed task-owned tab. Borrowed tabs remain open. It retains conversation links, earlier runs and results. Later `followup` calls reopen the saved URL when necessary and verify the previous completed turn before sending a successor; a new CLI process uses the same private state. A completed `resume` returns stored state without reopening the tab. Skills request these operations; Convorel owns their persistence, identity checks, recovery and cleanup mechanics.
+
+The prompt file is persisted unchanged. During pre-send draft verification, ordinary spaces and nonbreaking spaces are compared as equivalent because Chromium contenteditable may substitute them when rendering indentation. Other text changes still stop the send. Restoring a saved URL includes a bounded wait for the newly opened page/history; failures preserve the binding for inspection rather than create replacement tabs.
 
 ## Code access through a tunnel
 
@@ -73,12 +68,24 @@ See [official setup](https://developers.openai.com/api/docs/guides/secure-mcp-tu
 
 ## Recovery
 
-`review status` reads persisted state; `review resume` observes the page without resending. A successfully saved final reply is immutable even if a later page observation fails. If a lock remains after a crash, inspect its PID/identity, then use `recover-lock`; a live owner is never displaced. For a tunnel wrapper crash use `tunnel recover-lock --tunnel-id ID`, which also refuses a surviving native child. Do not start the same tunnel outside the wrapper in parallel.
+`conversation status` reads persisted state; `conversation resume` observes the page without resending. A successfully saved final reply is immutable even if a later page observation fails. If a lock remains after a crash, inspect its PID/identity, then use `recover-lock`; a live owner is never displaced. For a tunnel wrapper crash use `tunnel recover-lock --tunnel-id ID`, which also refuses a surviving native child. Do not start the same tunnel outside the wrapper in parallel.
 
-Submission failures before Send preserve the draft. Inspect it before further action. Uncertain submission must be reconciled, never blindly retried. A tab creation whose result was lost similarly needs operator inspection; the CLI will not accumulate replacement blank tabs.
+Submission failures before Send retain `prepared` with the error and any draft. `resume` only observes and keeps that state when no submitted marker exists. After resolving the reported precondition, explicitly continue the same saved run:
+
+```bash
+bun --no-env-file src/cli.ts conversation retry --id auth-design --run RUN_ID
+```
+
+`retry` is accepted only for `prepared`: it rechecks the page, model, prior completed turn and draft, retaining the same request/run/message. A changed draft is not overwritten. Once a run entered `submitting` or `delivery_unknown`, retry is rejected; use observation and inspect the exact existing turn. Legacy `needs_attention` records are not assumed safe to send again. Uncertain submission must be reconciled, never blindly retried. A tab creation whose result was lost similarly needs operator inspection; the CLI will not accumulate replacement blank tabs.
 
 ## Multiple read-only directories
 
 Set `CONVOREL_MCP_ROOTS` to a JSON array in the installation `.env` or process environment, for example `["~/workspaces","~/opensource"]`. No default-workspace environment variable is needed: give ChatGPT the full project path to review. Without this setting, the root saved by init is the sole allowed directory. Restart the tunnel after changing the allowlist.
 
 All MCP tools use full `path` arguments (absolute paths or `~/` paths). `workspace_info` without a path lists the roots; with a path it identifies that directory. The CLI can also serve explicitly with `mcp serve --roots '["/absolute/root-a","/absolute/root-b"]'`. Root selection cannot bypass nested `.convorelignore` or `.gitignore` rules. `.env`, `.env.*` and credential files remain denied. Git worktrees require their gitdir/common-dir/object storage to remain in permitted roots; alternate object stores are unsupported.
+
+## Upgrading earlier checkouts
+
+The command group is now `conversation` (formerly `review`); no alias is provided. Existing private task/config JSON and saved replies are retained without migration. Keep the same `CONVOREL_HOME`, task ID and current run when resuming or retrieving them. A new round uses the caller's complete message and does not apply the old review template.
+
+The bundled skill, its wrapper, `skill install|uninstall` and `setup --skill-dir` were removed. Remove an old `~/.agents/skills/convorel` link only after verifying that it points to this checkout's removed `skills/convorel` directory; preserve unrelated links/directories. Use the CLI's absolute path or installed executable from other working directories. For reviews, install/use `chatgpt-review` separately. No task state, browser profile or tunnel configuration needs to be deleted.

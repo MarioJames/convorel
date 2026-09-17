@@ -32,8 +32,7 @@ async function run(args: string[], cwd: string) {
 try {
   const archives = join(temp, "archives"),
     consumer = join(temp, "consumer project"),
-    workspace = join(temp, "code root"),
-    skills = join(temp, "installed skills");
+    workspace = join(temp, "code root");
   for (const path of [archives, consumer, workspace]) mkdirSync(path);
   await run(
     [process.execPath, "pm", "pack", "--destination", archives],
@@ -61,31 +60,7 @@ try {
   );
   assert.match(
     await run([process.execPath, "--no-env-file", cli, "--help"], temp),
-    /review start/,
-  );
-  await run(
-    [
-      process.execPath,
-      "--no-env-file",
-      cli,
-      "skill",
-      "install",
-      "--dir",
-      skills,
-    ],
-    temp,
-  );
-  assert.match(
-    await run(
-      [
-        process.execPath,
-        "--no-env-file",
-        join(skills, pkg.name, "scripts/convorel.ts"),
-        "--help",
-      ],
-      temp,
-    ),
-    /review start/,
+    /conversation start/,
   );
   // Resolve the browser controller from the installed artifact and run its native version path.
   const browserVersion = await run(
@@ -126,18 +101,6 @@ try {
     await client.close();
     await transport.close();
   }
-  await run(
-    [
-      process.execPath,
-      "--no-env-file",
-      cli,
-      "skill",
-      "uninstall",
-      "--dir",
-      skills,
-    ],
-    temp,
-  );
   console.log(
     JSON.stringify({
       passed: true,
@@ -146,7 +109,6 @@ try {
         "tarball install",
         "space paths",
         "non-project cwd",
-        "skill wrapper",
         "packaged agent-browser",
         "SDK stdio read",
       ],

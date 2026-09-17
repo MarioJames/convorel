@@ -1,10 +1,8 @@
 #!/usr/bin/env -S bun --no-env-file
-import { skillInstall, skillUninstall } from "./install.ts";
 import { readFileSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
 import { State } from "./state.ts";
 import { Browser, cdpEndpoint } from "./browser.ts";
-import { Review, type Config } from "./review.ts";
+import { Conversation, type Config } from "./conversation.ts";
 import { Workspace } from "./workspace.ts";
 import { WorkspaceAccess, parseRoots } from "./workspace-access.ts";
 import { serve } from "./mcp.ts";
@@ -31,17 +29,17 @@ function opts(args: string[]) {
 }
 const print = (x: unknown) => console.log(JSON.stringify(x, null, 2));
 const help = `convorel 0.1.0 (Bun, Linux)
-setup --workspace PATH --cdp PORT_OR_HTTP [--skill-dir DIR] [init options]
-skill install|uninstall [--dir DIR]
-init --workspace PATH --cdp PORT_OR_HTTP [--model LABEL] [--project-url URL --project-name NAME --timezone ZONE]
+setup --workspace PATH --cdp PORT_OR_HTTP [init options]
+init --workspace PATH --cdp PORT_OR_HTTP --model LABEL [--project-url URL --project-name NAME --timezone ZONE]
 doctor
-review list
-review start --id ID --prompt-file FILE [--request-id KEY]
-review followup --id ID --prompt-file FILE --request-id KEY
-review status|resume|wait|result --id ID [--run UUID]
-review finish --id ID --run UUID
-review attach --id ID --url CONVERSATION --user-message ID
-review organize --id ID --run UUID --type DES --topic TOPIC
+conversation list
+conversation start --id ID --prompt-file FILE [--request-id KEY]
+conversation followup --id ID --prompt-file FILE --request-id KEY
+conversation status|resume|wait|result --id ID [--run UUID]
+conversation retry --id ID --run UUID
+conversation finish --id ID --run UUID
+conversation attach --id ID --url CONVERSATION --user-message ID
+conversation organize --id ID --run UUID --type DES --topic TOPIC
 mcp serve [--roots JSON_ARRAY]
 tunnel instructions|doctor|run|recover-lock [--tunnel-id ID]
 Tunnel ID: --tunnel-id > CONVOREL_TUNNEL_ID environment > installation .env
@@ -67,22 +65,12 @@ export async function main(args = process.argv.slice(2)) {
     await serve(parseRoots(roots));
     return 0;
   }
-  if (area === "skill") {
-    const o = opts(rest);
-    if (sub === "install") print(skillInstall(o.dir));
-    else if (sub === "uninstall") print(skillUninstall(o.dir));
-    else throw new Error("UNKNOWN_SKILL_COMMAND");
-    return 0;
-  }
   if (area === "setup") {
-    const o = opts(args.slice(1)),
-      directory = o["skill-dir"];
-    delete o["skill-dir"];
+    const o = opts(args.slice(1));
     await main([
       "init",
       ...Object.entries(o).flatMap(([k, v]) => ["--" + k, v]),
     ]);
-    print({ skill: skillInstall(directory) });
     return main(["doctor"]);
   }
   const store = new State();
@@ -105,7 +93,7 @@ export async function main(args = process.argv.slice(2)) {
       version: 1,
       workspace,
       cdp,
-      model: o.model || "6 Pro",
+      model: o.model || "",
       projectUrl: o["project-url"],
       projectName: o["project-name"],
       timezone: o.timezone || "UTC",
@@ -129,6 +117,8 @@ export async function main(args = process.argv.slice(2)) {
         if (!o.timezone) config.timezone = old.timezone;
         config.language = old.language;
       }
+      if (!config.model.trim())
+        throw new Error("MODEL_REQUIRED: initialize with --model LABEL");
       store.write("config", config);
     });
     print({ ...config, stateDirectory: store.root });
@@ -140,7 +130,7 @@ export async function main(args = process.argv.slice(2)) {
       configuredRoots ? parseRoots(configuredRoots) : [config.workspace],
     ),
     browser = new Browser(config.cdp, store.root),
-    review = new Review(store, browser);
+    conversation = new Conversation(store, browser);
   access.assertPrivate(store.root);
   const roots = access.roots.map((ws) => ws.root);
   if (area === "doctor") {
@@ -240,7 +230,7 @@ export async function main(args = process.argv.slice(2)) {
       return runTunnel(sub, id, config.workspace, roots);
     throw new Error("UNKNOWN_TUNNEL_COMMAND");
   }
-  if (area !== "review") throw new Error("UNKNOWN_COMMAND");
+  if (area !== "conversation") throw new Error("UNKNOWN_COMMAND");
   if (sub === "list") {
     print(
       store.tasks().map((t) => ({
@@ -259,7 +249,7 @@ export async function main(args = process.argv.slice(2)) {
       realpathSync(required(o, "prompt-file")),
       "utf8",
     );
-    const t = await review.start(
+    const t = await conversation.start(
       id,
       input,
       sub === "followup"
@@ -268,39 +258,44 @@ export async function main(args = process.argv.slice(2)) {
       sub === "followup",
     );
     print(t);
-    return ["needs_attention", "delivery_unknown"].includes(
-      t.runs.at(-1)!.state,
-    )
-      ? 2
-      : 0;
+    return ["waiting", "complete"].includes(t.runs.at(-1)!.state) ? 0 : 2;
+  }
+  if (sub === "retry") {
+    const t = await conversation.retry(id, required(o, "run"));
+    print(t);
+    return ["waiting", "complete"].includes(t.runs.at(-1)!.state) ? 0 : 2;
   }
   if (sub === "attach") {
     print(
-      await review.attach(id, required(o, "url"), required(o, "user-message")),
+      await conversation.attach(
+        id,
+        required(o, "url"),
+        required(o, "user-message"),
+      ),
     );
     return 0;
   }
   if (sub === "status") {
-    const t = review.get(id);
+    const t = conversation.get(id);
     if (o.run && o.run !== t.currentRun) throw new Error("STALE_RUN");
     print(t);
     return 0;
   }
   if (sub === "resume") {
-    print(await review.resume(id, o.run));
+    print(await conversation.resume(id, o.run));
     return 0;
   }
   if (sub === "result") {
-    print(review.result(id, o.run));
+    print(conversation.result(id, o.run));
     return 0;
   }
   if (sub === "finish") {
-    print(await review.finish(id, required(o, "run")));
+    print(await conversation.finish(id, required(o, "run")));
     return 0;
   }
   if (sub === "organize") {
     print(
-      await review.organize(
+      await conversation.organize(
         id,
         required(o, "run"),
         required(o, "type"),
@@ -310,7 +305,7 @@ export async function main(args = process.argv.slice(2)) {
     return 0;
   }
   if (sub === "wait") {
-    const run = o.run || review.get(id).currentRun;
+    const run = o.run || conversation.get(id).currentRun;
     const seconds = Number(o["timeout-seconds"] || 1800);
     if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400)
       throw new Error("INVALID_TIMEOUT");
@@ -323,7 +318,7 @@ export async function main(args = process.argv.slice(2)) {
     process.on("SIGTERM", signal);
     try {
       while (!stop && Date.now() < deadline) {
-        const t = await review.poll(id, run),
+        const t = await conversation.poll(id, run),
           r = t.runs.at(-1)!;
         print({ id, runId: run, state: r.state, error: r.error });
         if (r.state === "complete") return 0;
@@ -342,7 +337,7 @@ export async function main(args = process.argv.slice(2)) {
       process.off("SIGTERM", signal);
     }
   }
-  throw new Error("UNKNOWN_REVIEW_COMMAND");
+  throw new Error("UNKNOWN_CONVERSATION_COMMAND");
 }
 if (import.meta.main) {
   try {

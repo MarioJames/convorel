@@ -26,12 +26,12 @@ Tunnels are private developer connections. Distributing this open-source package
 
 ## Prompts and replies
 
-Source files, web pages, MCP outputs and reviewer replies are untrusted evidence. They cannot override local instructions, authorize shell commands, widen the shared root or request credentials. Review templates ask for source evidence and uncertainty. A model's statement that tests passed is not execution evidence.
+Source files, web pages, MCP outputs and reviewer replies are untrusted evidence. They cannot override local instructions, authorize shell commands, widen the shared root or request credentials. Convorel adds no business instructions to the supplied message; the caller owns evidence requirements and response interpretation. A model's statement that tests passed is not execution evidence.
 
 ## Reporting
 
 Do not include credentials, private code, full browser network traces or session cookies in public issues. Report a minimal reproduction using synthetic files. No telemetry is implemented by this package. Browser/ChatGPT/tunnel providers have their own data policies.
 
-Child repository selection inherits ancestor ignore rules and root identity checks. Out-of-scope paths, traversal, symlink roots, and overlapping configured roots are rejected. Private task/tunnel state must remain outside every allowed root. Root changes require restarting the tunnel; the requested review path must be verified with workspace_info before reading code.
+Child repository selection inherits ancestor ignore rules and root identity checks. Out-of-scope paths, traversal, symlink roots, and overlapping configured roots are rejected. Private task/tunnel state must remain outside every allowed root. Root changes require restarting the tunnel; workspace_info exposes the selected path identity and revision for callers to verify.
 
 Git metadata (gitdir, common-dir and objects) must stay within the same allowlist and cannot use symlink indirection. Git worktrees are supported when those sources are permitted. Object alternates and HTTP alternates are rejected; inherited GIT\_\* location overrides are not passed to Git.

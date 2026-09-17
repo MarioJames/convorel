@@ -1,5 +1,27 @@
 # Validation — 2026-09-17
 
+## Conversation lifecycle ownership
+
+- `bun run check`: TypeScript and 51 tests / 241 assertions pass. Added behavioral coverage for reopening a completed conversation in a new service instance, preserving its earlier run, waiting for initial page/history loading, accepting Chromium's indentation NBSP representation and rejecting changed words or a redirected conversation. Both loading and indentation failures were reproduced before their fixes. Additional recovery tests reproduce an interrupted first task write and a pre-submit model failure, then verify atomic first-run publication, explicit same-run retry, changed-draft preservation and rejection of uncertain-delivery retries.
+- `bun run test:package`: tarball installation and real SDK stdio read pass. `bun run format:check` passes.
+- `bun run test:browser --chrome /usr/bin/google-chrome`: pass on isolated ephemeral CDP 57321; its browser, controller and temporary profile are released and the endpoint is verified unreachable.
+- The chatgpt-review skill now depends on Convorel for all live conversation lifecycle operations. Its duplicate browser/store/watcher implementation and dedicated tests are retired; old private records remain untouched. Source/installed skill validation, reference links and skill-foundry runtime contract checks pass.
+
+The existing ChatGPT design conversation was continued once using 6 Pro. It confirmed the lifecycle boundary and read current source through the configured read-only MCP; it explicitly distinguished the live working tree from the recorded HEAD. Its two source findings (empty first-task crash window and no explicit pre-submit continuation) were independently reproduced and fixed locally. The reviewer did not run tests. Initial page-loading and NBSP draft errors stopped before Send; after inspecting the exact saved draft and model, the same marked run was submitted once and reconciled. Organization initially encountered transient page readiness errors; a later idle-page verification succeeded, and finish verified owned-target closure with no pending organization. The watcher lane was released; conversation state and prior history remain. No app dev server was created and no user browser process was stopped.
+
+## Responsibility separation
+
+Validated after replacing the review entry point with `conversation` and moving prompt policy to the independent `chatgpt-review` skill:
+
+- `bun run check`: TypeScript and 45 tests / 204 assertions pass. The new initial/follow-up transport test verifies exact caller content plus the run marker; the previous implementation failed it by injecting the review template. Initialization requires an explicit model for new state and retains existing preferences.
+- `bun run format:check`: pass.
+- `bun run test:package`: pass for real tarball installation, paths containing spaces, CLI invocation outside the checkout, packaged agent-browser and SDK stdio reads.
+- `bun run test:browser --chrome /usr/bin/google-chrome`: pass with an isolated headless profile on ephemeral CDP port 56115. Tab count 1 → 2 → 1, pin protection and composer paragraph extraction pass. The test closes its controller/browser, verifies the port is unreachable and removes only its temporary profile.
+- No ChatGPT messages were sent and no user browser, private task state or running tunnel was touched. No app dev server was created; APP_URL and app console/network checks are not applicable to this CLI change. Live ChatGPT sending and cloud MCP access were not revalidated.
+- The bundled skill and installer were removed along with their dedicated tests. Review policy now lives in skill-foundry’s `chatgpt-review`; its source and local installation are synchronized and pass the skill structural validator.
+
+## Earlier v0.1 acceptance (before separation)
+
 Environment: Linux x86_64, Bun 1.4.2, Node 24.21.0, Git 2.47.3, installed Google Chrome, packaged agent-browser 0.34.0. No hosted service or published npm package is assumed.
 
 | Layer                         | Result               | Evidence and limits                                                                                                                                                                                                                                                                                                                                                                                                            |

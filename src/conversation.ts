@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { State } from "./state.ts";
 import { Browser } from "./browser.ts";
 import { Workspace, sha } from "./workspace.ts";
@@ -65,9 +64,7 @@ const same = (a: string, b: string) => {
     return false;
   }
 };
-const template = () =>
-  readFileSync(new URL("../prompts/review.md", import.meta.url), "utf8");
-export class Review {
+export class Conversation {
   constructor(
     public store: State,
     public browser: Browser,
@@ -138,7 +135,7 @@ export class Review {
     if (previous) {
       if (t.url && !same(previous.url, t.url))
         throw new Error("TARGET_NAVIGATED");
-      return previous.targetId;
+      return { target: previous.targetId, created: false };
     }
     if (!t.url && (t.opening || t.binding))
       throw new Error(
@@ -150,7 +147,7 @@ export class Review {
       t.binding = { target: existing[0].targetId, epoch, owned: false };
       this.claim(t);
       this.save(t);
-      return t.binding.target;
+      return { target: t.binding.target, created: false };
     }
     if (t.opening)
       throw new Error("OPEN_UNKNOWN: no automatic second creation attempt");
@@ -167,12 +164,34 @@ export class Review {
     t.opening = false;
     this.claim(t);
     this.save(t);
-    return created.targetId;
+    return { target: created.targetId, created: true };
   }
   private async page(t: Task) {
-    const target = await this.open(t);
+    const { target, created } = await this.open(t);
     this.guard(t);
-    return this.browser.page(target);
+    const b = await this.browser.page(target);
+    // A newly opened saved URL can initially expose about:blank or partial history.
+    // Wait only on that new target; changed URLs and blocked pages still fail closed.
+    if (created && t.url) {
+      const current = this.current(t);
+      const anchor = current.userMessageId ? current : t.runs.at(-2);
+      const userId = anchor?.userMessageId;
+      const replyId = anchor?.reply?.id;
+      for (let n = 0; n < 20; n++) {
+        const p: PageState = await b.read();
+        this.guard(t);
+        const blank =
+          p.url === "about:blank" && !p.hasComposer && !p.messages.length;
+        const loading =
+          same(p.url, t.url) &&
+          (!p.hasComposer ||
+            (userId && !p.messages.some((m) => m.id === userId)) ||
+            (replyId && !p.messages.some((m) => m.id === replyId)));
+        if (p.blocked || (!blank && !loading)) break;
+        await Bun.sleep(250);
+      }
+    }
+    return b;
   }
   private async observe(t: Task, b: any) {
     const p: PageState = await b.read();
@@ -194,6 +213,7 @@ export class Review {
       const found = p.messages.filter(
         (m) => m.role === "user" && m.text.includes(r.marker),
       );
+      if (!found.length && r.state === "prepared") return t;
       if (found.length !== 1 || !found[0].id) {
         r.state = "delivery_unknown";
         r.error = "No unique submitted user message matches the marker";
@@ -269,15 +289,16 @@ export class Review {
           throw new Error("REQUEST_ALREADY_BOUND_TO_ANOTHER_TASK");
       }
       // Check the previous completed turn before assigning a successor.
-      this.begin(t);
       if (t.currentRun) {
+        this.begin(t);
         const b = await this.page(t),
           p = await this.observe(t, b);
         this.safeCompleted(t, p);
       }
+      t.attemptId = randomUUID();
       const runId = randomUUID(),
         marker = `[CONVOREL:${runId}]`;
-      const prompt = `${marker}\nDefault review path: ${t.config.workspace}\nDefault workspaceId: ${t.workspaceId}\nTemplate: v0.1\n\n${template()}\n\nUser request:\n${input}`;
+      const prompt = `${marker}\n\n${input}`;
       t.currentRun = runId;
       t.runs.push({
         id: runId,
@@ -290,63 +311,97 @@ export class Review {
         createdAt: new Date().toISOString(),
       });
       this.save(t);
-      const r = this.current(t);
-      try {
-        const b = await this.page(t);
-        let p = await this.observe(t, b);
-        // A new page may still be loading. No side effects during this bounded readiness wait.
-        for (let n = 0; !p.hasComposer && !p.blocked && n < 20; n++) {
-          await Bun.sleep(250);
-          p = await this.observe(t, b);
-        }
-        if (p.generating || !p.hasComposer || p.draft?.trim() || p.attachments)
-          throw new Error("PAGE_NOT_IDLE");
-        const observed = await this.verify(b, {
-          url: p.url,
-          target: t.binding!.target,
-          model: t.config.model,
-        });
-        this.guard(t);
-        r.observedModel = observed.observedModel;
-        p = await this.observe(t, b);
-        if (p.generating || p.draft?.trim() || p.attachments)
-          throw new Error("PAGE_NOT_IDLE");
-        await b.run("fill", "#prompt-textarea", prompt);
-        this.guard(t);
-        p = await this.observe(t, b);
-        if (p.draft?.trim() !== prompt.trim() || p.generating || p.attachments)
-          throw new Error("DRAFT_CHANGED");
-        // Durable write precedes the first action capable of submitting a message.
-        r.state = "submitting";
-        this.save(t);
-        this.guard(t);
-        await b.run(
-          "find",
-          "role",
-          "button",
-          "click",
-          "--name",
-          "Send prompt",
-          "--exact",
-        );
-        this.guard(t);
-        for (let n = 0; n < 12; n++) {
-          await this.reconcile(t, b);
-          if (r.userMessageId) return t;
-          await Bun.sleep(250);
-        }
-        return t;
-      } catch (e) {
-        r.state =
-          r.state === "submitting" || r.state === "delivery_unknown"
-            ? "delivery_unknown"
-            : "needs_attention";
-        r.error = String(e);
-        this.guard(t);
-        this.save(t);
-        return t;
-      }
+      return this.submitPrepared(t);
     });
+  }
+  async retry(id: string, run: string) {
+    return this.store.locked(async () => {
+      const t = this.get(id);
+      if (this.current(t, run).state !== "prepared")
+        throw new Error("RUN_NOT_PREPARED");
+      this.begin(t);
+      return this.submitPrepared(t);
+    });
+  }
+  private async submitPrepared(t: Task) {
+    const r = this.current(t),
+      prompt = r.prompt;
+    const draftText = (text: string) => text.replace(/\u00a0/g, " ").trim();
+    try {
+      const b = await this.page(t);
+      let p = await this.observe(t, b);
+      // A new page may still be loading. No side effects during this bounded readiness wait.
+      for (let n = 0; !p.hasComposer && !p.blocked && n < 20; n++) {
+        await Bun.sleep(250);
+        p = await this.observe(t, b);
+      }
+      if (
+        p.messages.some((m) => m.role === "user" && m.text.includes(r.marker))
+      )
+        return this.reconcile(t, b);
+      const checkDraft = (page: PageState) => {
+        if (page.generating || !page.hasComposer || page.attachments)
+          throw new Error("PAGE_NOT_IDLE");
+        if (page.draft?.trim() && draftText(page.draft) !== draftText(prompt))
+          throw new Error("DRAFT_CHANGED");
+        const previous = t.runs.at(-2);
+        if (previous) this.safeCompleted(t, { ...page, draft: "" }, previous);
+        else if (page.messages.length)
+          throw new Error("UNEXPECTED_CONVERSATION_HISTORY");
+      };
+      checkDraft(p);
+      const observed = await this.verify(b, {
+        url: p.url,
+        target: t.binding!.target,
+        model: t.config.model,
+      });
+      this.guard(t);
+      r.observedModel = observed.observedModel;
+      p = await this.observe(t, b);
+      checkDraft(p);
+      if (!p.draft?.trim()) await b.run("fill", "#prompt-textarea", prompt);
+      this.guard(t);
+      p = await this.observe(t, b);
+      // Chromium contenteditable may render ordinary indentation as NBSP.
+      // Normalize only this presentation difference, retaining exact persisted input.
+      if (
+        draftText(p.draft || "") !== draftText(prompt) ||
+        p.generating ||
+        p.attachments
+      )
+        throw new Error("DRAFT_CHANGED");
+      checkDraft(p);
+      r.error = undefined;
+      // Durable write precedes the first action capable of submitting a message.
+      r.state = "submitting";
+      this.save(t);
+      this.guard(t);
+      await b.run(
+        "find",
+        "role",
+        "button",
+        "click",
+        "--name",
+        "Send prompt",
+        "--exact",
+      );
+      this.guard(t);
+      for (let n = 0; n < 12; n++) {
+        await this.reconcile(t, b);
+        if (r.userMessageId) return t;
+        await Bun.sleep(250);
+      }
+      return t;
+    } catch (e) {
+      r.state =
+        r.state === "submitting" || r.state === "delivery_unknown"
+          ? "delivery_unknown"
+          : "prepared";
+      r.error = String(e);
+      this.guard(t);
+      this.save(t);
+      return t;
+    }
   }
   async poll(id: string, run?: string) {
     return this.store.locked(async () => {
@@ -374,8 +429,7 @@ export class Review {
       branch: r.branch,
     };
   }
-  private safeCompleted(t: Task, p: PageState) {
-    const r = this.current(t);
+  private safeCompleted(t: Task, p: PageState, r = this.current(t)) {
     if (r.state !== "complete" || !r.reply || !t.url || !r.userMessageId)
       throw new Error("RESULT_NOT_COMPLETE");
     if (

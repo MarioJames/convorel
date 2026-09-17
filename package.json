@@ -17,8 +17,6 @@
     "setup.ts",
     "bun.lock",
     "src",
-    "prompts",
-    "skills",
     "docs",
     "README.md",
     "LICENSE",
