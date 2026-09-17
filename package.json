@@ -1,7 +1,7 @@
 {
   "name": "convorel",
   "version": "0.1.0",
-  "description": "让本地编码 Agent 与 ChatGPT 网页接力协作：CDP 浏览器控制、只读代码 MCP，以及可恢复的对话和标签页管理。",
+  "description": "让编码 Agent 与 ChatGPT 围绕真实代码持续协作，将独立意见带回本地实现与验证。",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
