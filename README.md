@@ -9,7 +9,7 @@ Convorel 把已登录的 ChatGPT 网页接入本地开发流程：编码 Agent �
 
 会话、请求、回复和标签页归属都保存在本地。进程中断后可以继续核对同一轮消息；完成后只清理自建且确认空闲的标签页，保留浏览器和登录状态。
 
-[快速开始](#快速开始) · [接入指南](docs/quickstart.md) · [架构](docs/architecture.md) · [访问边界](docs/security.md) · [验证记录](docs/validation.md)
+[快速开始](#快速开始) · [接入指南](docs/quickstart.md) · [架构](docs/architecture.md) · [访问边界](docs/security.md)
 
 ## 能做什么
 
@@ -54,7 +54,7 @@ git clone https://github.com/MarioJames/convorel.git
 cd convorel
 ```
 
-当前按源码安装使用，不假定 npm 包已经发布。
+以下步骤使用源码安装。
 
 ### 2. 准备浏览器
 
@@ -135,7 +135,7 @@ bun --no-env-file src/cli.ts tunnel run --tunnel-id YOUR_TUNNEL_ID
 | `git_status`       | 返回经过路径过滤的 Git 状态           |
 | `git_diff`         | 读取工作区、暂存区或相对 HEAD 的 diff |
 
-首次云端验证应使用内容已知的测试文件，让 ChatGPT 实际调用工具，再比对返回内容和 hash。`doctor` 的本地 MCP 成功不代表网页到本地代码的整条链路已接通。
+连接完成后，可以让 ChatGPT 读取一个内容已知的测试文件，并比对返回内容和 hash，确认工作区配置正确。
 
 ## 续谈、恢复和多工作区
 
@@ -163,9 +163,7 @@ bun --no-env-file setup.ts --workspace /absolute/path/to/project-b --cdp 9222
 
 代码访问边界不同的工作区使用独立隧道。自定义技能安装位置用 `setup --skill-dir DIR`；完整命令见 `bun --no-env-file src/cli.ts --help`。
 
-## 验证与限制
-
-当前首版本地验证已通过：38 项行为测试、TypeScript 检查、真实 Chrome 标签页回归、安装包验收，以及实际 ChatGPT 对话的发送、读取和整理。**ChatGPT → 隧道 → 本地代码的端到端验证尚未完成**，不能以本地 MCP 测试代替。完整环境和证据范围见[验证记录](docs/validation.md)。
+## 访问边界
 
 - 只读 MCP 没有文件写入或任意 shell 工具；凭据文件、符号链接、硬链接和忽略路径受到限制，Git diff 同时检查重命名前后路径。
 - `.convorelignore` 和 `.gitignore` 可以进一步收窄范围；文件名规则不能识别写在普通源码里的所有秘密。
@@ -185,7 +183,7 @@ bun run test:browser --chrome /path/to/installed/chrome
 bun run test:package
 ```
 
-浏览器回归使用一次性 profile，不登录账号、不发送 ChatGPT 消息。安装包验收覆盖含空格路径、项目目录外调用、技能入口和真实 MCP stdio 读取。
+浏览器回归使用一次性 profile，不登录账号、不发送 ChatGPT 消息。安装包验收覆盖含空格路径、项目目录外调用、技能入口和真实 MCP stdio 读取。具体测试环境及覆盖范围见[验证记录](docs/validation.md)。
 
 欢迎通过 [Issues](https://github.com/MarioJames/convorel/issues) 提供复现或建议；开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
