@@ -14,6 +14,7 @@ import {
   recoverTunnelLock,
 } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
+import { tunnelEnv } from "./tunnel-env.ts";
 import { projectId } from "./chatgpt/organize.ts";
 import { MODEL_SCRIPT } from "./chatgpt/model.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -41,7 +42,8 @@ review finish --id ID --run UUID
 review attach --id ID --url CONVERSATION --user-message ID
 review organize --id ID --run UUID --type DES --topic TOPIC
 mcp serve --workspace PATH
-tunnel instructions|doctor|run|recover-lock --tunnel-id ID
+tunnel instructions|doctor|run|recover-lock [--tunnel-id ID]
+Tunnel ID: --tunnel-id > CONVOREL_TUNNEL_ID environment > installation .env
 recover-lock
 Use CONVOREL_HOME for a private state directory outside the shared workspace.
 Invoke as: bun --no-env-file src/cli.ts ... or the installed executable.
@@ -212,7 +214,11 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (area === "tunnel") {
     const o = opts(rest),
-      id = required(o, "tunnel-id");
+      id = o["tunnel-id"] ?? tunnelEnv("CONVOREL_TUNNEL_ID");
+    if (!id)
+      throw new Error(
+        "TUNNEL_ID_MISSING: set --tunnel-id or CONVOREL_TUNNEL_ID in the environment or convorel .env",
+      );
     if (sub === "instructions") {
       print(tunnelInstructions(id, config.workspace));
       return 0;

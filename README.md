@@ -77,7 +77,7 @@ bun --no-env-file setup.ts --workspace /absolute/path/to/your-project --cdp 9222
 
 `setup` 会安装锁定的本地依赖，将配置写入 `~/.local/share/convorel/`，把内置技能链接到 `~/.agents/skills/convorel`，并检查 CDP 和本地 MCP。重复执行会保留已配置的可选偏好；同名技能冲突会报错，不覆盖原文件。源码目录需保留，以供技能调用。
 
-默认核对页面模型 **6 Pro**。若账号没有此模型，可以在初始化时传入 `--model '页面上的模型名称'`，并在网页中手动选好；程序不会静默降级。所有源码 CLI 命令保留 `--no-env-file`，避免自动加载工作区的环境文件。
+默认核对页面模型 **6 Pro**。若账号没有此模型，可以在初始化时传入 `--model '页面上的模型名称'`，并在网页中手动选好；程序不会静默降级。所有源码 CLI 命令保留 `--no-env-file`，避免自动加载调用目录或共享工作区的环境文件。隧道命令会单独读取 convorel 安装目录的 `.env`。
 
 ### 4. 发起第一次讨论
 
@@ -122,7 +122,14 @@ bun --no-env-file src/cli.ts tunnel doctor --tunnel-id YOUR_TUNNEL_ID
 bun --no-env-file src/cli.ts tunnel run --tunnel-id YOUR_TUNNEL_ID
 ```
 
-密钥在本机通过 `CONTROL_PLANE_API_KEY` 提供，不写入源码、提示词或任务 JSON。保持客户端运行，再在 ChatGPT 中创建并启用对应的 developer app。一个 stdio 隧道 ID 同时只能运行一个客户端。
+在 convorel 安装目录复制 `.env.example` 为 `.env`，填写 `CONVOREL_TUNNEL_API_KEY` 和 `CONVOREL_TUNNEL_ID`；也可以通过同名环境变量提供，环境变量优先（空值也会覆盖文件值）。从其他目录调用已安装 CLI 或技能时，仍读取该安装目录的 `.env`，不读取共享代码工作区的 `.env`。隧道 ID 的优先级为 `--tunnel-id` > 环境变量 > `.env`；配置后可省略命令中的 `--tunnel-id`。仅加载这两个配置，不加载 `.env.local` 等变体，也不执行变量展开。
+
+```dotenv
+CONVOREL_TUNNEL_API_KEY=你的_OpenAI_运行时密钥
+CONVOREL_TUNNEL_ID=tunnel_你的隧道ID
+```
+
+`.env` 已被 Git 忽略，可执行 `chmod 600 .env` 限制本机访问。convorel 仅在启动官方客户端时将密钥映射为它需要的 `CONTROL_PLANE_API_KEY`，不写入提示词或任务 JSON。保持客户端运行，再在 ChatGPT 中创建并启用对应的 developer app。一个 stdio 隧道 ID 同时只能运行一个客户端。
 
 完整凭据、权限和网页配置步骤见[接入指南](docs/quickstart.md#code-access-through-a-tunnel)与 [OpenAI 官方文档](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)。
 

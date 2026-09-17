@@ -56,6 +56,10 @@ try {
   const installed = join(consumer, "node_modules", pkg.name),
     cli = join(installed, "src/cli.ts");
   assert.match(
+    await Bun.file(join(installed, ".env.example")).text(),
+    /^CONVOREL_TUNNEL_API_KEY=$/m,
+  );
+  assert.match(
     await run([process.execPath, "--no-env-file", cli, "--help"], temp),
     /review start/,
   );

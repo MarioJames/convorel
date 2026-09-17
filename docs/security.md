@@ -20,7 +20,7 @@ Local processes with the same OS account can read or change these files already.
 
 ## Tunnel
 
-Use the official OpenAI tunnel-client. Keys are passed using its documented environment variables, never stored in this package's JSON configuration, shell command arguments or logs. Stdout of `mcp serve` is exclusively MCP protocol output; diagnostics go to stderr.
+Use the official OpenAI tunnel-client. Configure `CONVOREL_TUNNEL_API_KEY` in the shell or in `.env` at the convorel installation root. Explicit shell values take precedence. Tunnel commands read `CONVOREL_TUNNEL_ID` from the same file when no explicit ID is supplied; `--tunnel-id` overrides environment and file values. Only run/doctor consume the API key; only these two settings are read, and unrelated dotenv entries never alter the process environment or child command. The file is Git-ignored and denied by the MCP credential-path policy. The key is mapped to the official client’s `CONTROL_PLANE_API_KEY` in its child environment, never stored in JSON configuration, shell command arguments or logs. Stdout of `mcp serve` is exclusively MCP protocol output; diagnostics go to stderr.
 
 Tunnels are private developer connections. Distributing this open-source package does not distribute a shared tunnel, shared login or a public ChatGPT plugin. Each operator configures their own endpoint and ChatGPT app.
 

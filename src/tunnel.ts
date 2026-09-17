@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { State, processIdentity } from "./state.ts";
 import { Workspace, sha } from "./workspace.ts";
 import { childEnv } from "./command.ts";
+import { tunnelEnv } from "./tunnel-env.ts";
 export const cliPath = resolve(import.meta.dir, "cli.ts");
 export const shellQuote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 export function tunnelArgs(id: string, root: string, healthFile: string) {
@@ -37,7 +38,7 @@ export function tunnelInstructions(id: string, root: string) {
     workspaceId: new Workspace(root).id,
     requires: [
       "official tunnel-client on PATH",
-      "CONTROL_PLANE_API_KEY in local environment",
+      "CONVOREL_TUNNEL_API_KEY in the environment or convorel installation .env",
       "Platform tunnel associated with target ChatGPT workspace",
       "ChatGPT developer app connected and enabled",
     ],
@@ -90,9 +91,10 @@ export async function runTunnel(
     throw new Error(
       "TUNNEL_CLIENT_MISSING: install official tunnel-client; see tunnel instructions",
     );
-  if (!process.env.CONTROL_PLANE_API_KEY)
+  const apiKey = tunnelEnv("CONVOREL_TUNNEL_API_KEY");
+  if (!apiKey)
     throw new Error(
-      "TUNNEL_CREDENTIAL_MISSING: set CONTROL_PLANE_API_KEY locally",
+      "TUNNEL_CREDENTIAL_MISSING: set CONVOREL_TUNNEL_API_KEY in the environment or convorel .env",
     );
   return registry.locked(async () => {
     const previous = registry.has(key) ? registry.read<any>(key) : null;
@@ -114,7 +116,7 @@ export async function runTunnel(
     });
     const env = {
       ...childEnv(),
-      CONTROL_PLANE_API_KEY: process.env.CONTROL_PLANE_API_KEY!,
+      CONTROL_PLANE_API_KEY: apiKey,
     };
     const child = spawn(
       "tunnel-client",
