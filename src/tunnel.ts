@@ -5,7 +5,7 @@ import { State, processIdentity } from "./state.ts";
 import { Workspace, sha } from "./workspace.ts";
 import { childEnv } from "./command.ts";
 import { WorkspaceAccess } from "./workspace-access.ts";
-import { tunnelEnv } from "./tunnel-env.ts";
+import { installationEnv } from "./env.ts";
 export const cliPath = resolve(import.meta.dir, "cli.ts");
 export const shellQuote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 export function tunnelArgs(
@@ -103,7 +103,7 @@ export async function runTunnel(
     throw new Error(
       "TUNNEL_CLIENT_MISSING: install official tunnel-client; see tunnel instructions",
     );
-  const apiKey = tunnelEnv("CONVOREL_TUNNEL_API_KEY");
+  const apiKey = installationEnv("CONVOREL_TUNNEL_API_KEY");
   if (!apiKey)
     throw new Error(
       "TUNNEL_CREDENTIAL_MISSING: set CONVOREL_TUNNEL_API_KEY in the environment or convorel .env",

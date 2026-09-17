@@ -15,6 +15,7 @@ export interface PageState {
   hasComposer: boolean;
   draft?: string;
   attachments?: boolean;
+  sendReady?: boolean;
 }
 export type Outcome = {
   state: "waiting" | "complete" | "blocked" | "superseded";
@@ -80,13 +81,18 @@ export const PAGE_SCRIPT = `(() => {
   const alerts = Array.from(document.querySelectorAll('[role="alert"]')).filter(visible).map(e => e.innerText).join(' ');
   const error = /something went wrong|unable to load conversation|出了点问题|无法加载对话/i.test(alerts);
   const composer = document.querySelector('#prompt-textarea');
+  const send = buttons.find(e => /^(Send prompt|发送提示|发送消息|发送)$/.test(label(e)));
+  const rect = send?.getBoundingClientRect();
+  const hit = rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  const sendReady = !!send && !send.disabled && send.getAttribute('aria-disabled') !== 'true'
+    && !!hit && (hit === send || send.contains(hit));
   // ProseMirror renders every input line as a paragraph. innerText inserts extra blank lines.
   const draft = composer?.tagName === 'TEXTAREA' ? composer.value : (composer && Array.from(composer.children).every(e => e.tagName === 'P')
     ? Array.from(composer.children).map(e => Array.from(e.childNodes).filter(n => !(n.nodeType === 1 && n.classList?.contains('ProseMirror-trailingBreak'))).map(n => n.nodeName === 'BR' ? '\\n' : n.textContent).join('')).join('\\n')
     : composer?.innerText || '');
   return { url:location.href, title:document.title, messages,
     generating:buttons.some(e => /^(Stop answering|Stop generating|停止回答|停止生成)$/.test(label(e))),
-    draft,
+    draft, sendReady,
     attachments: Array.from(document.querySelectorAll('button')).some(e => visible(e) && /remove (file|attachment)|移除附件|删除附件/i.test(label(e))),
     hasComposer:!!document.querySelector('[contenteditable="true"][role="textbox"], #prompt-textarea'),
     blocked:challenge ? 'Human verification required' : login ? 'Login required' : error ? 'Conversation UI reported an error' : null };

@@ -34,9 +34,11 @@ function fixture(
     wrongProject?: boolean;
     changePinned?: boolean;
     metadataFallback?: boolean;
+    initialProject?: string;
+    menuProjectId?: string | null;
   } = {},
 ) {
-  let saved = body(),
+  let saved = { ...body(), gizmo_id: options.initialProject ?? null },
     pending = "",
     menu = "",
     editing = false,
@@ -105,7 +107,15 @@ function fixture(
               menu === "options"
                 ? [item("Rename"), item("Move to project")]
                 : menu === "projects"
-                  ? [item("Agent reviews")]
+                  ? [
+                      {
+                        ...item("Agent reviews"),
+                        projectId:
+                          options.menuProjectId === undefined
+                            ? "g-p-example"
+                            : options.menuProjectId,
+                      },
+                    ]
                   : [],
           },
         };
@@ -161,6 +171,58 @@ function fixture(
 }
 
 describe("conversation organization", () => {
+  test("project identity is checked before moving and verified rename progress survives that failure", async () => {
+    for (const menuProjectId of [null, "g-p-other"]) {
+      const b = fixture({ menuProjectId });
+      const progress: any[] = [];
+      await expect(
+        organizeConversation(b, url, preferences, "FEA", "Topic", (p) =>
+          progress.push(structuredClone(p)),
+        ),
+      ).rejects.toThrow("identity");
+      expect(b.saved().gizmo_id).toBeNull();
+      expect(b.mutations.some((args) => args.includes("Agent reviews"))).toBe(
+        false,
+      );
+      expect(progress.at(-1)).toMatchObject({
+        rename: { verified: true },
+        project: { state: "pending" },
+      });
+    }
+  });
+  test("without a configured project only renames and preserves existing placement", async () => {
+    for (const initialProject of [undefined, "g-p-user-project"]) {
+      const b = fixture({ initialProject });
+      const naming = { timezone: "Asia/Shanghai", language: "en" as const };
+      expect(
+        await organizeConversation(b, url, naming, "FEA", "内置审查技能"),
+      ).toMatchObject({
+        verified: true,
+        title: "0916｜FEA｜内置审查技能",
+        projectId: initialProject ?? null,
+      });
+      expect(b.saved()).toMatchObject({
+        gizmo_id: initialProject ?? null,
+        is_archived: false,
+      });
+      expect(b.mutations.some((args) => args.includes("Move to project"))).toBe(
+        false,
+      );
+    }
+  });
+  test("partial project preferences fail before UI changes", async () => {
+    const b = fixture();
+    await expect(
+      organizeConversation(
+        b,
+        url,
+        { ...preferences, projectName: undefined },
+        "FEA",
+        "Topic",
+      ),
+    ).rejects.toThrow("Project");
+    expect(b.mutations).toHaveLength(0);
+  });
   test("uses actual creation time in the configured timezone and language", () => {
     const meta = metadataFromResponse(
       { status: 200, responseBody: JSON.stringify(body()) },
@@ -176,7 +238,7 @@ describe("conversation organization", () => {
         language: "zh",
       }),
     ).toBe("0915｜修复｜迁移衔接");
-    expect(projectId(preferences.projectUrl)).toBe("g-p-example");
+    expect(projectId(preferences.projectUrl!)).toBe("g-p-example");
   });
   test("does not replace missing creation metadata with update time or another conversation", () => {
     for (const patch of [

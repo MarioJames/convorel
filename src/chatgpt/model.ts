@@ -39,6 +39,10 @@ export const MODEL_SCRIPT = `(() => {
   const label = e => (e?.innerText || '').replace(/\\s+/g, ' ').trim();
   const disabled = e => !!e && (e.disabled || e.getAttribute('aria-disabled') === 'true'
     || !!e.querySelector('[aria-disabled="true"], [data-locked="true"]'));
+  const numeric = (e, key) => {
+    const value = e.getAttribute(key);
+    return value === null || value.trim() === '' ? null : Number(value);
+  };
   const composer = document.querySelector('#prompt-textarea');
   const form = composer?.closest('form');
   const controls = Array.from(form?.querySelectorAll('button[aria-haspopup="menu"]') || [])
@@ -63,8 +67,8 @@ export const MODEL_SCRIPT = `(() => {
     control: control ? { selector: '#' + CSS.escape(control.id), label: label(control),
       disabled: disabled(control), expanded: control.getAttribute('aria-expanded') === 'true' } : null,
     menuLabel: select ? label(select) : null,
-    power: slider ? { value: Number(slider.getAttribute('aria-valuenow')), min: Number(slider.getAttribute('aria-valuemin')),
-      max: Number(slider.getAttribute('aria-valuemax')), disabled: disabled(power),
+    power: slider ? { value: numeric(slider, 'aria-valuenow'), min: numeric(slider, 'aria-valuemin'),
+      max: numeric(slider, 'aria-valuemax'), disabled: disabled(power),
       focused: document.activeElement === power,
       description: (power.getAttribute('aria-describedby') || '').split(/\\s+/).map(id => label(document.getElementById(id))).join(' ') } : null,
     latest: latest ? { checked: latest.getAttribute('aria-checked') === 'true', disabled: disabled(latest) } : null };
@@ -80,12 +84,8 @@ export function modelUrl(value: string) {
 
 export async function ensureModel(b: Browser, opts: Record<string, string>) {
   const expectedUrl = modelUrl(required(opts, "url"));
-  const expectedModel = opts.model || "6 Pro";
-  if (expectedModel !== "6 Pro")
-    throw new Error(
-      'Automated selection currently supports only --model "6 Pro"',
-    );
-  const read = async (): Promise<ModelState> => {
+  const expectedModel = opts.model?.trim() || undefined;
+  const read = async (loading = false): Promise<ModelState> => {
     const state: ModelState = (await b.run("eval", MODEL_SCRIPT)).result;
     if (!state || typeof state.url !== "string")
       throw new Error("Unrecognized model UI response");
@@ -94,7 +94,10 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     if (state.blocked) throw new Error(state.blocked);
     if (state.generating)
       throw new Error("Response is generating; refusing model interaction");
-    if (!state.hasComposer || !state.control || state.control.disabled)
+    if (
+      !loading &&
+      (!state.hasComposer || !state.control || state.control.disabled)
+    )
       throw new Error("Model control unavailable or ambiguous");
     return state;
   };
@@ -114,8 +117,46 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     }
     throw new Error(reason);
   };
-  let state = await read();
+  let state = await read(true);
+  for (
+    let n = 0;
+    (!state.hasComposer || !state.control || state.control.disabled) && n < 20;
+    n++
+  ) {
+    await Bun.sleep(250);
+    state = await read(true);
+  }
+  if (!state.hasComposer || !state.control || state.control.disabled)
+    throw new Error("Model control unavailable or ambiguous");
   const before = state.control!.label;
+  if (
+    opts["verify-only"] === "true" ||
+    (expectedModel && !/\bPro$/i.test(expectedModel))
+  ) {
+    if (!expectedModel)
+      throw new Error("MODEL_UNVERIFIED: exact observed model required");
+    if (state.control!.expanded || before !== expectedModel)
+      throw new Error(
+        "MODEL_UNVERIFIED: select the configured model in this tab",
+      );
+    const confirmed = await read();
+    if (
+      confirmed.control!.expanded ||
+      confirmed.control!.label !== expectedModel
+    )
+      throw new Error("MODEL_UNVERIFIED: configured model did not persist");
+    return {
+      verified: true,
+      expectedModel,
+      observedModel: expectedModel,
+      before,
+      changed: false,
+      url: confirmed.url,
+      target: required(opts, "target"),
+      session: b.session,
+      verifiedAt: new Date().toISOString(),
+    };
+  }
   let changed = false;
   if (state.control!.expanded) {
     await act("press", "Escape");
@@ -126,7 +167,8 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     (s) => !!s.power && s.menuLabel !== null,
     "Power menu unavailable",
   );
-  if (state.menuLabel !== expectedModel) {
+  let latestVerified = false;
+  if (!expectedModel || state.menuLabel !== expectedModel) {
     await act("click", SELECT);
     state = await wait((s) => !!s.latest, "Latest model option unavailable");
     if (state.latest!.disabled) throw new Error("Latest model option disabled");
@@ -144,20 +186,44 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
       (s) => !!s.power && s.menuLabel !== null,
       "Power menu unavailable after model selection",
     );
+    // Verify the model family, even when an older Pro has an identical effort label.
+    await act("click", SELECT);
+    state = await wait((s) => !!s.latest, "Latest model option unavailable");
+    if (!state.latest!.checked || state.latest!.disabled)
+      throw new Error("Latest selection did not persist");
+    latestVerified = true;
+    await act(
+      "find",
+      "role",
+      "menuitemradio",
+      "click",
+      "--name",
+      "Latest",
+      "--exact",
+    );
+    state = await wait(
+      (s) => !!s.power && s.menuLabel !== null,
+      "Power menu unavailable after Latest verification",
+    );
   }
-  for (let step = 0; step < 5; step++) {
+  const min = state.power?.min,
+    max = state.power?.max;
+  for (let step = 0; step < 32; step++) {
     const power = state.power;
     if (
       !power ||
       power.disabled ||
-      power.min !== 0 ||
-      power.max !== 4 ||
-      !Number.isInteger(power.value) ||
-      power.value < 0 ||
-      power.value > 4
+      !Number.isFinite(power.min) ||
+      !Number.isFinite(power.max) ||
+      power.min !== min ||
+      power.max !== max ||
+      power.max <= power.min ||
+      !Number.isFinite(power.value) ||
+      power.value < power.min ||
+      power.value > power.max
     )
       throw new Error("Pro power control unavailable or changed");
-    if (power.value === 4) break;
+    if (power.value === power.max) break;
     await act("focus", POWER);
     state = await read();
     if (!state.power?.focused)
@@ -171,28 +237,39 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     );
   }
   if (
-    state.menuLabel !== expectedModel ||
-    state.power?.value !== 4 ||
-    !/\bPro, 5 of 5\./.test(state.power.description)
+    (expectedModel && state.menuLabel !== expectedModel) ||
+    !state.menuLabel ||
+    !/\bPro$/i.test(state.menuLabel) ||
+    !state.power ||
+    state.power.disabled ||
+    state.power.min !== min ||
+    state.power.max !== max ||
+    state.power.value !== max ||
+    !/\bPro\b/i.test(state.power.description)
   )
-    throw new Error("Pro selection did not match expected model 6 Pro");
+    throw new Error(
+      `Pro selection did not match expected model ${expectedModel || "Latest Pro"}`,
+    );
+  const selectedModel = state.menuLabel;
   const evidence = {
     menuLabel: state.menuLabel,
     power: state.power.value,
+    maximum: state.power.max,
+    latest: latestVerified,
     description: state.power.description,
   };
   await act("press", "Escape");
   state = await wait(
-    (s) => !s.control!.expanded && s.control!.label === expectedModel,
-    "Closed model control did not confirm 6 Pro",
+    (s) => !s.control!.expanded && s.control!.label === selectedModel,
+    "Closed model control did not confirm selected Pro",
   );
   // A second read prevents a transient label from being treated as final confirmation.
   state = await read();
-  if (state.control!.expanded || state.control!.label !== expectedModel)
+  if (state.control!.expanded || state.control!.label !== selectedModel)
     throw new Error("Model selection did not persist");
   return {
     verified: true,
-    expectedModel,
+    expectedModel: expectedModel || "latest-pro",
     observedModel: state.control!.label,
     before,
     changed,

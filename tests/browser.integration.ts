@@ -62,7 +62,8 @@ try {
   const html =
     '<main><div data-message-author-role="user" data-message-id="u1">Review</div>' +
     '<div data-turn="assistant"><div data-message-author-role="assistant" data-message-id="a1">Done</div>' +
-    '<button aria-label="Copy response">Copy</button></div><textarea id="prompt-textarea"></textarea></main>';
+    '<button aria-label="Copy response">Copy</button></div><textarea id="prompt-textarea"></textarea>' +
+    '<button aria-label="Send prompt">Send</button></main>';
   const url = "data:text/html," + encodeURIComponent(html);
   const created = await tabs("new", url);
   assert.equal(
@@ -75,6 +76,18 @@ try {
   assert.equal(page.url, url);
   assert.equal(page.messages.at(-1)?.text, "Done");
   assert.equal(page.messages.at(-1)?.final, true);
+  assert.equal(page.sendReady, true);
+  await b.run(
+    "eval",
+    `(() => {const e=document.createElement('div');e.id='closing-overlay';e.style.cssText='position:fixed;inset:0;z-index:9999';document.body.append(e);})()`,
+  );
+  assert.equal(
+    (await b.read()).sendReady,
+    false,
+    "a closing popover overlay must block sending",
+  );
+  await b.run("eval", `document.querySelector('#closing-overlay').remove()`);
+  assert.equal((await b.read()).sendReady, true);
   await (await controller.page(created.targetId)).read();
   assert.equal(
     (await list()).length,

@@ -13,8 +13,10 @@ import {
   recoverTunnelLock,
 } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
-import { tunnelEnv } from "./tunnel-env.ts";
-import { projectId } from "./chatgpt/organize.ts";
+import { installationEnv } from "./env.ts";
+import { conversationConfig } from "./config.ts";
+import { installSkill } from "./skills.ts";
+import { waitForConversation, watcherLockName } from "./wait.ts";
 import { MODEL_SCRIPT } from "./chatgpt/model.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -29,8 +31,9 @@ function opts(args: string[]) {
 }
 const print = (x: unknown) => console.log(JSON.stringify(x, null, 2));
 const help = `convorel 0.1.0 (Bun, Linux)
-setup --workspace PATH --cdp PORT_OR_HTTP [init options]
-init --workspace PATH --cdp PORT_OR_HTTP --model LABEL [--project-url URL --project-name NAME --timezone ZONE]
+setup --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claude-code]
+init --workspace PATH --cdp PORT_OR_HTTP
+skills install --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH]
 doctor
 conversation list
 conversation start --id ID --prompt-file FILE [--request-id KEY]
@@ -39,11 +42,13 @@ conversation status|resume|wait|result --id ID [--run UUID]
 conversation retry --id ID --run UUID
 conversation finish --id ID --run UUID
 conversation attach --id ID --url CONVERSATION --user-message ID
-conversation organize --id ID --run UUID --type DES --topic TOPIC
+conversation organize --id ID --run UUID --type DES --topic TOPIC [--language en|zh]
 mcp serve [--roots JSON_ARRAY]
 tunnel instructions|doctor|run|recover-lock [--tunnel-id ID]
+Model/project: CONVOREL_MODEL, CONVOREL_PROJECT_URL, CONVOREL_PROJECT_NAME
+Process environment (including empty) > installation .env. Unset model: Latest + maximum Pro.
 Tunnel ID: --tunnel-id > CONVOREL_TUNNEL_ID environment > installation .env
-recover-lock
+recover-lock [--watch-task ID]
 Use CONVOREL_HOME for a private state directory outside the shared workspace.
 Invoke as: bun --no-env-file src/cli.ts ... or the installed executable.
 No command installs system tools or creates OpenAI resources.`;
@@ -60,22 +65,35 @@ export async function main(args = process.argv.slice(2)) {
   if (area === "mcp") {
     if (sub !== "serve") throw new Error("UNKNOWN_MCP_COMMAND");
     const o = opts(rest);
-    const roots = o.roots ?? tunnelEnv("CONVOREL_MCP_ROOTS");
+    const roots = o.roots ?? installationEnv("CONVOREL_MCP_ROOTS");
     if (!roots) throw new Error("MCP_ROOTS_REQUIRED");
     await serve(parseRoots(roots));
     return 0;
   }
   if (area === "setup") {
     const o = opts(args.slice(1));
+    const agent = o.agent;
+    delete o.agent;
     await main([
       "init",
       ...Object.entries(o).flatMap(([k, v]) => ["--" + k, v]),
     ]);
+    if (agent) print(await installSkill({ agent }));
     return main(["doctor"]);
+  }
+  if (area === "skills") {
+    if (sub !== "install") throw new Error("UNKNOWN_SKILLS_COMMAND");
+    print(await installSkill(opts(rest)));
+    return 0;
   }
   const store = new State();
   if (area === "recover-lock") {
-    print(store.recoverLock());
+    const o = opts(args.slice(1));
+    print(
+      store.recoverLock(
+        o["watch-task"] ? watcherLockName(o["watch-task"]) : "operation",
+      ),
+    );
     return 0;
   }
   if (area === "init") {
@@ -84,21 +102,13 @@ export async function main(args = process.argv.slice(2)) {
       cdp = cdpEndpoint(required(o, "cdp"));
     if (store.root === workspace || store.root.startsWith(workspace + "/"))
       throw new Error("STATE_INSIDE_WORKSPACE");
-    if (o["project-url"]) {
-      projectId(o["project-url"]);
-      required(o, "project-name");
-    }
-    if (o.timezone) new Intl.DateTimeFormat("en", { timeZone: o.timezone });
-    const config: Config = {
-      version: 1,
-      workspace,
-      cdp,
-      model: o.model || "",
-      projectUrl: o["project-url"],
-      projectName: o["project-name"],
-      timezone: o.timezone || "UTC",
-      language: "en",
-    };
+    for (const key of Object.keys(o))
+      if (!["workspace", "cdp"].includes(key))
+        throw new Error(
+          `Unknown init option --${key}; configure model/project through CONVOREL_* environment variables`,
+        );
+    const config: Config = { version: 1, workspace, cdp };
+    const effective = conversationConfig(config);
     await store.locked(async () => {
       if (store.has("config")) {
         const old = store.read<Config>("config");
@@ -107,25 +117,17 @@ export async function main(args = process.argv.slice(2)) {
             "CONFIG_BINDING_IMMUTABLE: choose a separate CONVOREL_HOME for another workspace/browser",
           );
       }
-      const old = store.has("config")
-        ? store.read<Config>("config")
-        : undefined;
-      if (old) {
-        if (!o.model) config.model = old.model;
-        if (!o["project-url"]) config.projectUrl = old.projectUrl;
-        if (!o["project-name"]) config.projectName = old.projectName;
-        if (!o.timezone) config.timezone = old.timezone;
-        config.language = old.language;
-      }
-      if (!config.model.trim())
-        throw new Error("MODEL_REQUIRED: initialize with --model LABEL");
       store.write("config", config);
     });
-    print({ ...config, stateDirectory: store.root });
+    print({
+      ...effective,
+      modelPolicy: effective.model || "latest-pro",
+      stateDirectory: store.root,
+    });
     return 0;
   }
   const config = store.read<Config>("config"),
-    configuredRoots = tunnelEnv("CONVOREL_MCP_ROOTS"),
+    configuredRoots = installationEnv("CONVOREL_MCP_ROOTS"),
     access = new WorkspaceAccess(
       configuredRoots ? parseRoots(configuredRoots) : [config.workspace],
     ),
@@ -167,7 +169,8 @@ export async function main(args = process.argv.slice(2)) {
           p.blocked ||
           (!p.hasComposer ? "unrecognized_or_loading" : "recognized");
         report.browser.model = m.control?.label || "unavailable";
-        report.browser.expectedModel = config.model;
+        report.browser.expectedModel =
+          conversationConfig(config).model || "latest-pro";
       }
     } catch (e) {
       report.browser = { status: "failed", error: String(e) };
@@ -213,7 +216,7 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (area === "tunnel") {
     const o = opts(rest),
-      id = o["tunnel-id"] ?? tunnelEnv("CONVOREL_TUNNEL_ID");
+      id = o["tunnel-id"] ?? installationEnv("CONVOREL_TUNNEL_ID");
     if (!id)
       throw new Error(
         "TUNNEL_ID_MISSING: set --tunnel-id or CONVOREL_TUNNEL_ID in the environment or convorel .env",
@@ -294,44 +297,33 @@ export async function main(args = process.argv.slice(2)) {
     return 0;
   }
   if (sub === "organize") {
-    print(
-      await conversation.organize(
-        id,
-        required(o, "run"),
-        required(o, "type"),
-        required(o, "topic"),
-      ),
+    const organization = await conversation.organize(
+      id,
+      required(o, "run"),
+      required(o, "type"),
+      required(o, "topic"),
+      o.language || "en",
     );
-    return 0;
+    print(organization);
+    return organization.verified === true ? 0 : 2;
   }
   if (sub === "wait") {
     const run = o.run || conversation.get(id).currentRun;
     const seconds = Number(o["timeout-seconds"] || 1800);
-    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400)
-      throw new Error("INVALID_TIMEOUT");
-    const deadline = Date.now() + seconds * 1000;
-    let stop = false;
-    const signal = () => {
-      stop = true;
-    };
+    const controller = new AbortController();
+    const signal = () => controller.abort();
     process.on("SIGINT", signal);
     process.on("SIGTERM", signal);
     try {
-      while (!stop && Date.now() < deadline) {
-        const t = await conversation.poll(id, run),
-          r = t.runs.at(-1)!;
-        print({ id, runId: run, state: r.state, error: r.error });
-        if (r.state === "complete") return 0;
-        if (r.state !== "waiting") return 2;
-        await Bun.sleep(Math.min(60000, Math.max(1, deadline - Date.now())));
-      }
-      print({
+      return await waitForConversation(
+        store,
+        conversation,
         id,
-        runId: run,
-        state: stop ? "cancelled" : "timeout",
-        remoteGenerationStopped: false,
-      });
-      return 2;
+        run,
+        seconds,
+        controller.signal,
+        print,
+      );
     } finally {
       process.off("SIGINT", signal);
       process.off("SIGTERM", signal);

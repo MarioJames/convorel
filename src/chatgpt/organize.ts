@@ -2,8 +2,8 @@
 import { conversationId } from "./page.ts";
 
 export interface OrganizationPreferences {
-  projectName: string;
-  projectUrl: string;
+  projectName?: string;
+  projectUrl?: string;
   timezone: string;
   language: "en" | "zh";
 }
@@ -20,6 +20,10 @@ export interface ConversationMetadata {
   archived: boolean;
   starred: boolean | null;
   pinnedTime: unknown;
+}
+export interface OrganizationProgress {
+  rename: { verified: boolean; title: string };
+  project: { state: "skipped" | "pending" | "verified"; id: string | null };
 }
 const types: Record<string, string> = {
   FEA: "功能",
@@ -48,9 +52,11 @@ export function projectId(value: string) {
   return match[1];
 }
 export function validatePreferences(value: OrganizationPreferences) {
-  projectId(value.projectUrl);
-  if (!value.projectName?.trim() || !["en", "zh"].includes(value.language))
-    throw new Error("Project name and title language are required");
+  if (!!value.projectUrl !== !!value.projectName?.trim())
+    throw new Error("Project URL and name must be configured together");
+  if (value.projectUrl) projectId(value.projectUrl);
+  if (!["en", "zh"].includes(value.language))
+    throw new Error("Title language must be en or zh");
   if (!value.timezone) throw new Error("Title timezone is required");
   new Intl.DateTimeFormat("en", { timeZone: value.timezone });
   return value;
@@ -125,9 +131,17 @@ export function organizationUiScript(id: string) {
     const button = buttons.length === 1 ? buttons[0] : null;
     const chats = Array.from(document.querySelectorAll('button')).find(e => visible(e) && /^(Chats|聊天)$/.test(e.innerText.trim()));
     const input = Array.from(document.querySelectorAll('input[aria-label="Chat title"],input[aria-label="聊天标题"]')).find(visible);
-    const items = Array.from(document.querySelectorAll('[role="menuitem"]')).filter(visible).map(e => ({
-      label: e.getAttribute('aria-label') || e.innerText.trim(), text: e.innerText.trim(), disabled: e.getAttribute('aria-disabled') === 'true'
-    }));
+    const items = Array.from(document.querySelectorAll('[role="menuitem"]')).filter(visible).map(e => {
+      const href = e.getAttribute('href') || e.querySelector('a[href]')?.getAttribute('href');
+      let projectId = e.getAttribute('data-project-id');
+      if (href) {
+        const target = new URL(href, location.href);
+        if (target.origin === 'https://chatgpt.com')
+          projectId = target.pathname.match(/^\\/g\\/(g-p-[a-z0-9]+)(?:-[^/]+)?\\/project$/i)?.[1] || projectId;
+      }
+      return { label: e.getAttribute('aria-label') || e.innerText.trim(), text: e.innerText.trim(),
+        disabled: e.getAttribute('aria-disabled') === 'true', projectId };
+    });
     return { options: button ? 'a[data-sidebar-item][href$="/c/' + ${JSON.stringify(id)} + '"] button[aria-haspopup="menu"]' : null,
       chats: chats ? { label: chats.innerText.trim(), expanded: chats.getAttribute('aria-expanded') === 'true' } : null,
       titleInput: input ? 'input[aria-label=' + JSON.stringify(input.getAttribute('aria-label')) + ']' : null, items };
@@ -140,10 +154,13 @@ export async function organizeConversation(
   preferences: OrganizationPreferences,
   type: string,
   topic: string,
+  onProgress: (progress: OrganizationProgress) => void = () => {},
 ) {
   validatePreferences(preferences);
   const id = conversationId(url);
-  const expectedProject = projectId(preferences.projectUrl);
+  const configuredProject = preferences.projectUrl
+    ? projectId(preferences.projectUrl)
+    : undefined;
   // Validate naming inputs before any external mutation, using an arbitrary valid date only for validation.
   conversationTitle("2000-01-01T00:00:00Z", type, topic, preferences);
   const guard = async () => {
@@ -310,12 +327,33 @@ export async function organizeConversation(
     );
   };
   const before = await freshMetadata(false);
+  // An absent destination preserves placement, including an existing user project.
+  const expectedProject = configuredProject ?? before.projectId;
   if (before.archived)
     throw new Error(
       "Conversation is archived; refusing to change its archive status",
     );
   const title = conversationTitle(before.createdAt, type, topic, preferences);
+  const progress: OrganizationProgress = {
+    rename: { verified: false, title },
+    project: {
+      state: configuredProject ? "pending" : "skipped",
+      id: expectedProject,
+    },
+  };
+  onProgress(progress);
   let current = before;
+  const checkPreserved = () => {
+    if (
+      current.createdAt !== before.createdAt ||
+      current.archived !== before.archived ||
+      current.starred !== before.starred ||
+      current.pinnedTime !== before.pinnedTime
+    )
+      throw new Error(
+        "Unrelated conversation metadata changed; inspect before continuing",
+      );
+  };
   if (current.title !== title) {
     await openOptions();
     await menuItem(["Rename", "重命名"]);
@@ -336,6 +374,9 @@ export async function organizeConversation(
         "Renamed title did not persist; organization not verified",
       );
   }
+  checkPreserved();
+  progress.rename.verified = true;
+  onProgress(progress);
   if (current.projectId !== expectedProject) {
     await openOptions();
     await menuItem(["Move to project", "移至项目", "移动到项目"]);
@@ -349,6 +390,10 @@ export async function organizeConversation(
     );
     if (matches.length !== 1 || matches[0].disabled)
       throw new Error("Requested project is unavailable or ambiguous");
+    if (matches[0].projectId !== expectedProject)
+      throw new Error(
+        "Project identity unavailable or mismatched before move; select no destination",
+      );
     const previous = new Set<string>(
       (await requests()).map((r: any) => r.requestId),
     );
@@ -371,16 +416,11 @@ export async function organizeConversation(
     throw new Error(
       "Title/project did not persist after reload; organization not verified",
     );
-  if (
-    current.createdAt !== before.createdAt ||
-    current.archived !== before.archived ||
-    current.starred !== before.starred ||
-    current.pinnedTime !== before.pinnedTime
-  )
-    throw new Error(
-      "Unrelated conversation metadata changed; inspect before continuing",
-    );
+  checkPreserved();
+  if (configuredProject) progress.project.state = "verified";
+  onProgress(progress);
   return {
+    ...progress,
     verified: true,
     changed: before.title !== title || before.projectId !== expectedProject,
     title,

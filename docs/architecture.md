@@ -1,14 +1,14 @@
 # Architecture and v0.1 decisions
 
-Status: design reviewed in ChatGPT 6 Pro; local v0.1 implemented. The review assessed the proposal, without remote source access or test execution. Implementation evidence is tracked in validation.md.
+Status: the bundled-skill boundary was reviewed with ChatGPT using read-only MCP evidence from the baseline and an in-progress diff. The reviewer did not run local tests or claim to validate the final revision. Implementation evidence and live-browser limits are tracked in validation.md.
 
 ## Product boundary
 
 A local coding agent retains ownership of edits and tests. It talks to ChatGPT through the user's existing logged-in browser. ChatGPT can independently inspect the explicitly shared working directory through read-only MCP tools. This package provides the CLI, browser adapter, state, and MCP server. It does not include a model subscription, browser login, tunnel credentials, or hosted infrastructure.
 
-Convorel owns the persistent conversation lifecycle and read-only code access. It is the source of truth for task-to-conversation bindings, runs, delivery/completion state, saved replies and owned browser resources. The `conversation` API creates or reuses a conversation, continues it across turns and process restarts, reconciles interrupted operations, persists messages/results and releases owned tabs. It prepends only a run correlation marker; it does not inject a persona, evidence rules, project paths or source contents. The independently maintained `chatgpt-review` skill owns review triggers, context selection, reviewer instructions, findings and decision gates. Setup and package distribution do not install that skill.
+Convorel owns the persistent conversation lifecycle and read-only code access. It is the source of truth for task-to-conversation bindings, runs, delivery/completion state, saved replies and owned browser resources. The `conversation` API creates or reuses a conversation, continues it across turns and process restarts, reconciles interrupted operations, persists messages/results and releases owned tabs. It prepends only a run correlation marker; it does not inject a persona, evidence rules, project paths or source contents. The bundled, independently installable `chatgpt-review` skill owns review triggers, context selection, reviewer instructions, findings and decision gates. Bundling it does not inject review policy into the transport. The skill resolves a separately installed CLI through PATH or CONVOREL_BIN, never relative to its own installation directory.
 
-The caller explicitly selects a model when initializing state. Browser-side model verification is a transport precondition; choosing a review model is the caller's policy. Request IDs, run IDs, message/branch matching, private state and tab ownership remain service-level safeguards regardless of message purpose.
+The default model policy selects Latest with Power at its Pro endpoint, without pinning a version; callers can explicitly override it. Model and paired project settings resolve from process environment (including empty values), then the installation-root .env. New tasks snapshot their configuration; continuation keeps the existing snapshot. Browser-side model verification remains a transport precondition. Request IDs, run IDs, message/branch matching, private state and tab ownership remain service-level safeguards regardless of message purpose.
 
 ```mermaid
 flowchart LR
@@ -28,7 +28,7 @@ The two channels are independent. A browser-only conversation works without the 
 - `agent-browser` 0.34.0 remains the browser controller. CDP is its transport, not a second competing controller.
 - The SDK v1 maintenance line is retained to match the inspected existing MCP design. It provides standard stdio framing, discovery and tool validation; we do not implement MCP JSON-RPC manually.
 - Sensitive-file patterns draw from `XiaoDuoYa/codex-with-chatgpt` (MIT). Its desktop browser, Cloudflare and OAuth deployment are not copied.
-- No mandatory Herdr or memory database. Stdout JSON and process exit status are the integration contract.
+- No mandatory Herdr or memory database. Stdout JSON and process exit status are the integration contract. Optional Herdr guidance is loaded from the skill reference only when needed and reuses the installed Herdr skill/CLI; an unresolved caller falls back to host processes or bounded waits. Notifications never replace an exact run-bound result.
 
 ## Skills and service responsibilities
 
@@ -46,6 +46,8 @@ The two channels are independent. A browser-only conversation works without the 
 A skill requests lifecycle operations; it does not implement a second conversation registry, browser ownership tracker or recovery state machine. Closing a task's tab is resource release, not deletion of the remote conversation or local history. `followup` restores the saved URL and verifies the preceding completed turn before creating its successor. `resume` reconciles a pending run; for an already completed run it returns the saved result without reopening a tab.
 
 Lifecycle ownership does not promise that ChatGPT keeps a remote conversation forever or remains reachable. Login failures, remote deletion, changed branches and uncertain UI actions must produce explicit failure/pending states rather than silently creating a replacement conversation. This release uses explicit CLI calls and a foreground `wait` process; it does not claim a resident daemon, durable job scheduling or automatic business retries.
+
+自动命名使用 `MMDD｜TYPE｜Topic`，从远端 `createdAt` 转 `Asia/Shanghai` 得到日期，默认英文 TYPE，明确要求中文时使用 `organize --language zh`。无项目配置仍命名且不移动会话；有目标项目才核验授权归属。标题、项目整理和自有标签页释放分别记录结果，不能用 cleanup 成功掩盖组织失败。
 
 ## Durable identities
 
@@ -84,7 +86,7 @@ Reads observe the live filesystem. Per-file hashes and timestamps identify obser
 
 ## Distribution
 
-A standalone Bun package with source, lockfile, CLI, tests, CI, architecture, security and setup docs. Linux is the initial validated platform. Package installation can include the pinned agent-browser binary without downloading a browser. Chrome and tunnel-client remain user-controlled prerequisites. Publishing npm/GitHub releases is separate from local implementation.
+A standalone Bun package with source, lockfile, CLI, the chatgpt-review skill and references, tests, CI, architecture, security and setup docs. The skills install command wraps the pinned skills@1.6.0 CLI against this installation’s local skills directory, supports Codex/Claude Code individually or together and user/project scope (default user), and rejects pre-existing same-name canonical or selected-Agent destinations before installation. It runs before State/config initialization and verifies the installed entry point. setup optionally installs after initialization and before doctor when --agent is supplied. Skills CLI can also install the skill independently; neither route requires a runtime adjacent to the skill. Linux is the initial validated platform. Package installation can include the pinned agent-browser binary without downloading a browser. Chrome and tunnel-client remain user-controlled prerequisites. Publishing npm/GitHub releases is separate from local implementation.
 
 ## Sources
 

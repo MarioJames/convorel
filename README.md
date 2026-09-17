@@ -13,14 +13,14 @@ Convorel 是面向本地 Agent 的持久会话生命周期与只读代码服务�
 
 ## 能做什么
 
-- **网页协作**：通过内置的 agent-browser 和 CDP 使用你自己的 Chrome，发送问题前核对模型。
+- **网页协作**：通过内置的 agent-browser 和 CDP 使用你自己的有头 Chrome，发送问题前核对模型。
 - **只读代码访问**：提供工作区信息、目录、文件、文本搜索、Git 状态和 diff 六个 MCP 工具。
 - **可恢复的对话**：绑定任务、会话和精确消息 ID，保存完整提示词与最终回复；发送结果不确定时不自动重发。
 - **标签页管理**：绑定指定标签页，保护用户已有页面、草稿和新轮次；不因重连反复创建空白页。
 - **中性消息转发**：发送调用方提供的完整正文，仅添加关联标记，不拼入角色、审查策略或源码。
 - **初始化与连接检查**：一个入口安装项目依赖、初始化配置并检查连接。
 
-可用于问题解答、方案讨论和代码审查。技能负责发起任务、准备问题和处理答案；Convorel 负责会话创建、接续、持久化、恢复、轮次状态和资源释放。何时审查、如何组织证据和处理建议由调用方负责；审查工作流由独立的 `chatgpt-review` 技能维护，Convorel 不分发技能或审查模板。
+可用于问题解答、方案讨论和代码审查。技能负责发起任务、准备问题和处理答案；Convorel 负责会话创建、接续、持久化、恢复、轮次状态和资源释放。何时审查、如何组织证据和处理建议由调用方负责；审查工作流由包内的 [`chatgpt-review`](skills/chatgpt-review/SKILL.md) 技能提供，也可单独安装；服务层仍只转发调用方准备的正文。Herdr 是可选的后台等待增强。
 
 ## 两条独立通道
 
@@ -45,7 +45,7 @@ flowchart LR
 
 ## 快速开始
 
-首版支持 **Linux**，需要 Bun ≥ 1.3、Node ≥ 24、Git 和已安装的 Chrome/Chromium。当前仅实现 ChatGPT 网页适配。
+首版支持 **Linux**，需要 Bun ≥ 1.3、Node ≥ 24、Git 和已安装的 Google Chrome。当前仅实现 ChatGPT 网页适配。
 
 ### 1. 获取项目
 
@@ -58,7 +58,7 @@ cd convorel
 
 ### 2. 准备浏览器
 
-在另一个终端启动 Chrome，随后手动登录 ChatGPT；已有兼容的 CDP 浏览器可以直接复用。
+在另一个终端启动 Chrome，随后手动登录 ChatGPT；已有 Convorel 专用的有头 Chrome CDP 会话可以直接复用。验收侧 browser-harness 使用独立的自带 Chromium + 无头模式，其配置、session 和 profile 不用于这里。
 
 ```bash
 google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
@@ -72,14 +72,14 @@ google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 
 在 Convorel 目录执行，将 `--workspace` 替换为代码工作区的绝对路径：
 
 ```bash
-bun --no-env-file setup.ts --workspace /absolute/path/to/your-project --cdp 9222 --model '6 Pro'
+bun --no-env-file setup.ts --workspace /absolute/path/to/your-project --cdp 9222
 ```
 
-`setup` 会安装锁定的本地依赖，将配置写入 `~/.local/share/convorel/`，并检查 CDP 和本地 MCP。重复执行会保留已配置的可选偏好。
+`setup` 会安装锁定的本地依赖，将配置写入 `~/.local/share/convorel/`，并检查 CDP 和本地 MCP。模型和项目偏好从环境配置读取，新任务保存当时的配置。
 
 `--workspace` 保存默认代码工作区；未配置 `CONVOREL_MCP_ROOTS` 时，它也是唯一允许读取的目录。配置多目录后，对话中直接提供目标项目的完整路径即可，无需设置 `CONVOREL_WORKSPACE`。
 
-首次初始化通过 `--model` 明确指定模型，例如 `6 Pro`。选择哪个模型由调用方决定；程序在每次发送前核对配置，不会静默降级。对于其他可见模型，先在网页中手动选好。所有源码 CLI 命令保留 `--no-env-file`，避免自动加载调用目录或共享工作区的环境文件。隧道命令会单独读取 convorel 安装目录的 `.env`。
+模型默认选择 **Latest 的 Power 末端 Pro**，不锁定版本；可用 `CONVOREL_MODEL` 明确覆盖，程序每次发送前核验，不静默降级。对于其他可见模型，先在网页中手动选好。所有源码 CLI 命令保留 `--no-env-file`，避免自动加载调用目录或共享工作区的环境文件；Convorel 只按已知配置项读取安装根 `.env`。
 
 ### 4. 发起第一次讨论
 
@@ -101,10 +101,43 @@ bun --no-env-file src/cli.ts conversation start \
 ```bash
 bun --no-env-file src/cli.ts conversation wait --id first-question --run RUN_ID
 bun --no-env-file src/cli.ts conversation result --id first-question --run RUN_ID
+bun --no-env-file src/cli.ts conversation organize --id first-question --run RUN_ID --type EXP --topic '内容哈希'
 bun --no-env-file src/cli.ts conversation finish --id first-question --run RUN_ID
 ```
 
 先消费、保存回复，再执行 `finish`。它保留会话链接和结果，只关闭经过核验的自有标签页；用户原有标签页不会关闭。
+
+## 安装审查技能
+
+Convorel 提供现有 Skills CLI 的薄包装，支持 Codex 和 Claude Code，也可用 `--agent codex,claude-code` 同时安装。此入口无需先初始化浏览器或任务配置，`--scope` 默认 `user`：
+
+```bash
+bun --no-env-file src/cli.ts skills install --agent codex --scope user
+# 仅安装到指定项目
+bun --no-env-file src/cli.ts skills install --agent claude-code --scope project --cwd /absolute/path/to/project
+```
+
+包装入口固定使用 `skills@1.6.0` 从本安装包的 `skills` 目录安装；预检公共 `.agents/skills` 及所选 Agent 的目标路径（包含旧 `.codex/skills`），发现同名目录或链接就拒绝覆盖，安装后核验技能入口。也可在初始化时增加 `--agent codex`，例如 `bun --no-env-file setup.ts --workspace /absolute/path/to/project --cdp 9222 --agent codex`：初始化后安装技能，再执行 doctor。省略 `--agent` 不安装技能。
+
+在 Convorel 源码或安装包目录中使用现有 Skills CLI：
+
+```bash
+bunx skills add ./skills --skill chatgpt-review -a codex -g
+```
+
+`-g` 表示用户范围；直接使用 Skills CLI 时保留交互确认，遇到同名个人技能应取消覆盖；包装入口会预先拒绝此类冲突。源码发布后也可将 `./skills` 换为 `https://github.com/MarioJames/convorel`。安装技能不安装 Convorel 运行时；让 `convorel` 在 `PATH` 中，或在 Agent 进程环境设置 `CONVOREL_BIN=/absolute/path/to/convorel/src/cli.ts`。技能会以 `bun --no-env-file` 执行该脚本，即使技能安装到另一个目录也无需相对路径。
+
+可在 Convorel 安装根 `.env` 配置审查目标：
+
+```dotenv
+CONVOREL_PROJECT_URL=https://chatgpt.com/g/g-p-实际项目ID/project
+CONVOREL_PROJECT_NAME=实际项目名称
+# 可选：CONVOREL_MODEL=用户明确选择的模型
+```
+
+URL 必须来自实际项目页面，URL/name 成对配置；不配置项目时，技能仍自动命名会话但不移动它。标题使用 `MMDD｜TYPE｜Topic`，日期来自会话 `createdAt` 转 `Asia/Shanghai`；默认英文 TYPE，明确要求中文时用 `organize --language zh`。同名进程环境变量包括空值都优先于安装根 `.env`。新 task 保存配置 snapshot，续谈保留原模型/项目，修改环境不会改写旧 task。
+
+技能会整理证据、处理意见并清理已完成的自有标签页。等待可以使用宿主后台进程或分段 CLI wait；Herdr 可用时才增强为 service lane，无需安装 Herdr 或记忆服务。
 
 ## 让 ChatGPT 读取本地代码
 
@@ -202,7 +235,7 @@ bun run test:browser --chrome /path/to/installed/chrome
 bun run test:package
 ```
 
-浏览器回归使用一次性 profile，不登录账号、不发送 ChatGPT 消息。安装包验收覆盖含空格路径、项目目录外调用、打包的浏览器控制器和真实 MCP stdio 读取。具体测试环境及覆盖范围见[验证记录](docs/validation.md)。
+浏览器回归使用一次性 profile，不登录账号、不发送 ChatGPT 消息。安装包验收覆盖含空格路径、项目目录外调用、内置技能及引用文件、打包的浏览器控制器和真实 MCP stdio 读取。具体测试环境及覆盖范围见[验证记录](docs/validation.md)。
 
 欢迎通过 [Issues](https://github.com/MarioJames/convorel/issues) 提供复现或建议；开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

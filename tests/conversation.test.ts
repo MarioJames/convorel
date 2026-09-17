@@ -20,6 +20,8 @@ class FakeBrowser {
   sends = 0;
   nextTarget = 0;
   failSend = false;
+  delayedUrl = false;
+  sendReady = true;
   async epoch() {
     return this.epochValue;
   }
@@ -35,6 +37,7 @@ class FakeBrowser {
         hasComposer: true,
         blocked: null,
         draft: "",
+        sendReady: this.sendReady,
       });
       return { targetId };
     }
@@ -57,7 +60,8 @@ class FakeBrowser {
           self.sends++;
           const text = p.draft;
           p.draft = "";
-          p.url = "https://chatgpt.com/c/test-conversation";
+          if (!self.delayedUrl)
+            p.url = "https://chatgpt.com/c/test-conversation";
           self.targets.find((t) => t.targetId === target).url = p.url;
           p.messages.push({
             id: "u" + self.sends,
@@ -98,6 +102,116 @@ function setup() {
   }));
   return { state, browser, conversation };
 }
+test("model drift after filling the draft stops before sending", async () => {
+  const { state, browser } = setup();
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async (_b, opts) => ({
+      observedModel: opts["verify-only"] === "true" ? "Changed model" : "6 Pro",
+    }),
+  );
+  const t = await conversation.start("model-drift", "Conversation");
+  expect(t.runs[0]).toMatchObject({
+    state: "prepared",
+    error: "Error: MODEL_CHANGED_BEFORE_SEND",
+  });
+  expect(browser.sends).toBe(0);
+  expect([...browser.pages.values()][0].draft).toContain(t.runs[0].marker);
+});
+test("an obstructed Send button retains a prepared run without clicking", async () => {
+  const { browser, conversation } = setup();
+  browser.sendReady = false;
+  const t = await conversation.start("obstructed", "Conversation");
+  expect(t.runs[0]).toMatchObject({
+    state: "prepared",
+    error: "Error: SEND_CONTROL_UNAVAILABLE",
+  });
+  expect(browser.sends).toBe(0);
+  [...browser.pages.values()][0].sendReady = true;
+  expect((await conversation.retry(t.id, t.currentRun)).runs[0].state).toBe(
+    "waiting",
+  );
+  expect(browser.sends).toBe(1);
+});
+test("a submitted message can precede its persisted conversation URL without allowing a resend", async () => {
+  const { browser, conversation } = setup();
+  browser.delayedUrl = true;
+  const first = await conversation.start("url-pending", "Conversation");
+  expect(first.url).toBeUndefined();
+  expect(first.runs[0].state).toBe("waiting");
+  expect(first.runs[0].userMessageId).toBe("u1");
+  await expect(conversation.retry(first.id, first.currentRun)).rejects.toThrow(
+    "RUN_NOT_PREPARED",
+  );
+  const p = [...browser.pages.values()][0];
+  p.url = "https://chatgpt.com/c/test-conversation";
+  browser.targets[0].url = p.url;
+  browser.complete();
+  expect((await conversation.resume(first.id, first.currentRun)).url).toBe(
+    p.url,
+  );
+  expect(conversation.result(first.id, first.currentRun).reply.text).toBe(
+    "Answer",
+  );
+  expect(browser.sends).toBe(1);
+});
+test("resume recovers a saved draft URL only on its original target with the exact submitted message", async () => {
+  const { state, browser, conversation } = setup();
+  const first = await conversation.start("legacy-pending", "Conversation");
+  first.url = "https://chatgpt.com/";
+  first.runs[0].state = "delivery_unknown";
+  state.write("task-" + first.id, first);
+  browser.complete();
+  expect((await conversation.resume(first.id, first.currentRun)).url).toBe(
+    "https://chatgpt.com/c/test-conversation",
+  );
+  expect(browser.sends).toBe(1);
+});
+test("draft URL recovery never trusts a different submitted message", async () => {
+  const { state, browser, conversation } = setup();
+  const first = await conversation.start("wrong-pending", "Conversation");
+  first.url = "https://chatgpt.com/";
+  first.runs[0].state = "delivery_unknown";
+  state.write("task-" + first.id, first);
+  [...browser.pages.values()][0].messages[0].id = "unrelated-user";
+  await expect(conversation.resume(first.id, first.currentRun)).rejects.toThrow(
+    "PENDING_URL_UNVERIFIED",
+  );
+  expect(browser.sends).toBe(1);
+  expect(state.read<any>("task-" + first.id).url).toBe("https://chatgpt.com/");
+});
+test("new tasks resolve environment preferences while followups retain their original snapshot", async () => {
+  const { state, browser, conversation } = setup();
+  const keys = [
+    "CONVOREL_MODEL",
+    "CONVOREL_PROJECT_URL",
+    "CONVOREL_PROJECT_NAME",
+  ] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  try {
+    process.env.CONVOREL_MODEL = "7 Pro";
+    process.env.CONVOREL_PROJECT_URL = "";
+    process.env.CONVOREL_PROJECT_NAME = "";
+    const first = await conversation.start("preferences", "First");
+    expect(first.config.model).toBe("7 Pro");
+    expect(first.config.projectUrl).toBeUndefined();
+    browser.complete();
+    await conversation.poll(first.id, first.currentRun);
+    process.env.CONVOREL_MODEL = "";
+    const next = await conversation.start(first.id, "Followup", "second", true);
+    expect(next.config.model).toBe("7 Pro");
+    browser.delayedUrl = true;
+    const other = await conversation.start("default-preferences", "Other");
+    expect(other.config.model).toBeUndefined();
+    expect(state.read<any>("config").model).toBe("6 Pro");
+  } finally {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+});
 test("duplicate start never resends, exact reply persists, finish closes owned page and a new service instance retains its result", async () => {
   const { state, browser, conversation } = setup();
   const first = await conversation.start("design", "Conversation");

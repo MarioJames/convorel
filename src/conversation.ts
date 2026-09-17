@@ -8,18 +8,10 @@ import {
   type Message,
   type PageState,
 } from "./chatgpt/page.ts";
-import { ensureModel, MODEL_SCRIPT } from "./chatgpt/model.ts";
+import { ensureModel } from "./chatgpt/model.ts";
 import { organizeConversation } from "./chatgpt/organize.ts";
-export interface Config {
-  version: 1;
-  workspace: string;
-  cdp: string;
-  model: string;
-  projectUrl?: string;
-  projectName?: string;
-  timezone?: string;
-  language?: "en" | "zh";
-}
+import { conversationConfig, type Config } from "./config.ts";
+export type { Config } from "./config.ts";
 interface Run {
   id: string;
   requestId: string;
@@ -68,22 +60,10 @@ export class Conversation {
   constructor(
     public store: State,
     public browser: Browser,
-    private verify = async (b: any, opts: Record<string, string>) => {
-      if (opts.model === "6 Pro") return ensureModel(b, opts);
-      const p = (await b.run("eval", MODEL_SCRIPT)).result;
-      if (
-        p.url !== opts.url ||
-        p.blocked ||
-        p.generating ||
-        !p.hasComposer ||
-        p.control?.disabled ||
-        p.control?.label !== opts.model
-      )
-        throw new Error(
-          "MODEL_UNVERIFIED: select the configured model in this tab",
-        );
-      return { observedModel: p.control.label };
-    },
+    private verify: (
+      b: any,
+      opts: Record<string, string>,
+    ) => Promise<{ observedModel: string }> = ensureModel,
   ) {}
   get(id: string): Task {
     return this.store.read<Task>("task-" + id);
@@ -209,7 +189,7 @@ export class Conversation {
   private async reconcile(t: Task, b: any) {
     const r = this.current(t),
       p = await this.observe(t, b);
-    if (!r.userMessageId) {
+    if (!r.userMessageId || !t.url) {
       const found = p.messages.filter(
         (m) => m.role === "user" && m.text.includes(r.marker),
       );
@@ -220,9 +200,21 @@ export class Conversation {
         this.save(t);
         return t;
       }
+      if (r.userMessageId && r.userMessageId !== found[0].id)
+        throw new Error("SUBMITTED_MESSAGE_CHANGED");
       r.userMessageId = found[0].id;
+      try {
+        conversationId(p.url);
+      } catch {
+        if (p.url !== (t.config.projectUrl || "https://chatgpt.com/"))
+          throw new Error("CONVERSATION_CHANGED");
+        r.state = "waiting";
+        r.error =
+          "Awaiting persisted conversation URL for the submitted message";
+        this.save(t);
+        return t;
+      }
       t.url = p.url;
-      conversationId(t.url);
       this.claim(t);
     }
     const outcome = classify(p, t.url!, r.userMessageId);
@@ -269,7 +261,7 @@ export class Conversation {
           throw new Error("PRIOR_RUN_NOT_COMPLETE");
       } else {
         if (followup) throw new Error("TASK_NOT_FOUND");
-        const config = this.store.read<Config>("config");
+        const config = conversationConfig(this.store.read<Config>("config"));
         t = {
           version: 1,
           id,
@@ -353,7 +345,7 @@ export class Conversation {
       const observed = await this.verify(b, {
         url: p.url,
         target: t.binding!.target,
-        model: t.config.model,
+        model: t.config.model || "",
       });
       this.guard(t);
       r.observedModel = observed.observedModel;
@@ -362,6 +354,14 @@ export class Conversation {
       if (!p.draft?.trim()) await b.run("fill", "#prompt-textarea", prompt);
       this.guard(t);
       p = await this.observe(t, b);
+      // Model popovers can leave a closing overlay after their label has updated.
+      // Wait for a genuinely enabled, unobstructed Send button before crossing the send boundary.
+      for (let n = 0; p.sendReady === false && n < 20; n++) {
+        checkDraft(p);
+        await Bun.sleep(100);
+        p = await this.observe(t, b);
+      }
+      if (p.sendReady === false) throw new Error("SEND_CONTROL_UNAVAILABLE");
       // Chromium contenteditable may render ordinary indentation as NBSP.
       // Normalize only this presentation difference, retaining exact persisted input.
       if (
@@ -371,6 +371,19 @@ export class Conversation {
       )
         throw new Error("DRAFT_CHANGED");
       checkDraft(p);
+      const finalModel = await this.verify(b, {
+        url: p.url,
+        target: t.binding!.target,
+        model: r.observedModel!,
+        "verify-only": "true",
+      });
+      if (finalModel.observedModel !== r.observedModel)
+        throw new Error("MODEL_CHANGED_BEFORE_SEND");
+      p = await this.observe(t, b);
+      checkDraft(p);
+      if (draftText(p.draft || "") !== draftText(prompt))
+        throw new Error("DRAFT_CHANGED");
+      if (p.sendReady === false) throw new Error("SEND_CONTROL_UNAVAILABLE");
       r.error = undefined;
       // Durable write precedes the first action capable of submitting a message.
       r.state = "submitting";
@@ -408,6 +421,38 @@ export class Conversation {
       const t = this.get(id);
       if (this.current(t, run).state === "complete") return t;
       this.begin(t);
+      // Recover a previously saved initial URL without guessing another tab or resending.
+      if (t.url === (t.config.projectUrl || "https://chatgpt.com/")) {
+        const r = this.current(t);
+        if (
+          t.runs.length !== 1 ||
+          !r.marker ||
+          !r.userMessageId ||
+          !["delivery_unknown", "waiting", "submitting"].includes(r.state) ||
+          !t.binding ||
+          t.binding.closed ||
+          t.binding.epoch !== (await this.browser.epoch())
+        )
+          throw new Error("PENDING_URL_UNVERIFIED");
+        this.guard(t);
+        const b = await this.browser.page(t.binding.target);
+        const p: PageState = await b.read();
+        this.guard(t);
+        const matches = p.messages.filter(
+          (m) => m.role === "user" && m.text.includes(r.marker),
+        );
+        if (
+          p.blocked ||
+          matches.length !== 1 ||
+          matches[0].id !== r.userMessageId
+        )
+          throw new Error("PENDING_URL_UNVERIFIED");
+        conversationId(p.url);
+        t.url = p.url;
+        this.claim(t);
+        this.save(t);
+        return this.reconcile(t, b);
+      }
       return this.reconcile(t, await this.page(t));
     });
   }
@@ -514,7 +559,7 @@ export class Conversation {
     return this.store.locked(async () => {
       conversationId(url);
       if (this.store.has("task-" + id)) throw new Error("TASK_EXISTS");
-      const config = this.store.read<Config>("config"),
+      const config = conversationConfig(this.store.read<Config>("config")),
         run = randomUUID();
       const t: Task = {
         version: 1,
@@ -543,14 +588,22 @@ export class Conversation {
       return this.reconcile(t, await this.page(t));
     });
   }
-  async organize(id: string, run: string, type: string, topic: string) {
+  async organize(
+    id: string,
+    run: string,
+    type: string,
+    topic: string,
+    language = "en",
+  ) {
+    if (language !== "en" && language !== "zh")
+      throw new Error("Title language must be en or zh");
     return this.store.locked(async () => {
       const t = this.get(id);
       this.current(t, run);
       this.result(id, run);
       this.begin(t);
-      if (!t.config.projectUrl || !t.config.projectName)
-        throw new Error("PROJECT_NOT_CONFIGURED");
+      t.organization = { verified: false };
+      this.save(t);
       try {
         const b = await this.page(t);
         this.safeCompleted(t, await this.observe(t, b));
@@ -561,7 +614,23 @@ export class Conversation {
             this.guard(t);
             if (!["eval", "network"].includes(args[0]))
               this.safeCompleted(t, await this.observe(t, b));
-            return b.run(...args);
+            const result = await b.run(...args);
+            if (args[0] === "reload") {
+              // Metadata responses can arrive before the same saved answer finishes rendering.
+              for (let n = 0; ; n++) {
+                const page = await this.observe(t, b);
+                if (page.draft?.trim() || page.generating || page.attachments)
+                  throw new Error("PAGE_NOT_IDLE");
+                try {
+                  this.safeCompleted(t, page);
+                  break;
+                } catch (e) {
+                  if (n >= 20) throw e;
+                  await Bun.sleep(250);
+                }
+              }
+            }
+            return result;
           },
         };
         t.organization = await organizeConversation(
@@ -570,14 +639,23 @@ export class Conversation {
           {
             projectUrl: t.config.projectUrl,
             projectName: t.config.projectName,
-            timezone: t.config.timezone || "UTC",
-            language: t.config.language || "en",
+            timezone: "Asia/Shanghai",
+            language,
           },
           type,
           topic,
+          (progress) => {
+            this.guard(t);
+            t.organization = { ...structuredClone(progress), verified: false };
+            this.save(t);
+          },
         );
       } catch (e) {
-        t.organization = { error: String(e) };
+        t.organization = {
+          ...t.organization,
+          verified: false,
+          error: String(e),
+        };
       }
       this.guard(t);
       this.save(t);

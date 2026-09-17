@@ -9,7 +9,7 @@ if (major < 1 || (major === 1 && minor < 3))
   throw new Error("Bun >= 1.3 required");
 if (process.argv.includes("--help")) {
   console.log(
-    "bun --no-env-file setup.ts --workspace PATH --cdp PORT [init options]\nInstalls locked local dependencies, initializes private state and checks CDP/MCP.",
+    "bun --no-env-file setup.ts --workspace PATH --cdp PORT [--agent codex|claude-code|codex,claude-code]\nInstalls locked local dependencies, initializes private state, optionally installs the bundled skill, and checks CDP/MCP. Model/project preferences use CONVOREL_* environment variables.",
   );
 } else {
   const install = Bun.spawn(

@@ -18,6 +18,7 @@
     "bun.lock",
     "src",
     "docs",
+    "skills/chatgpt-review",
     "README.md",
     "LICENSE",
     "NOTICE",

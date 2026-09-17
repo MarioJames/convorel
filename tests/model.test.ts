@@ -15,6 +15,12 @@ function fixture(
     ignoreKeys?: boolean;
     closeFallback?: boolean;
     driftAfterOpen?: boolean;
+    maxPower?: number;
+    maxLabel?: string;
+    latestDisabled?: boolean;
+    ignoreLatest?: boolean;
+    controlDelay?: number;
+    minPower?: number | null;
   } = {},
 ) {
   let version = initial.version ?? "5.6";
@@ -24,9 +30,11 @@ function fixture(
     focused = false;
   let url = initial.url ?? opts.url;
   const mutations: string[][] = [];
+  let reads = 0;
+  const max = initial.maxPower ?? 4;
   const label = () =>
-    effort === 4
-      ? `${version} Pro`
+    effort === max
+      ? `${version} ${initial.maxLabel ?? "Pro"}`
       : `${version} ${["Light", "Standard", "High", "Extra High"][effort]}`;
   const state = (): ModelState => ({
     url,
@@ -44,13 +52,15 @@ function fixture(
       expanded && !models
         ? {
             value: effort,
-            min: 0,
-            max: 4,
+            min: (initial.minPower === undefined
+              ? 0
+              : initial.minPower) as number,
+            max,
             disabled: initial.disabled ?? false,
             focused,
             description:
-              effort === 4
-                ? "Pro, 5 of 5. Use Left and Right arrow keys to adjust power."
+              effort === max
+                ? `${initial.maxLabel ?? "Pro"}, ${max + 1} of ${max + 1}. Use Left and Right arrow keys to adjust power.`
                 : "Intermediate power.",
           }
         : null,
@@ -58,7 +68,7 @@ function fixture(
       expanded && models
         ? {
             checked: version === (initial.latestVersion ?? "6"),
-            disabled: false,
+            disabled: initial.latestDisabled ?? false,
           }
         : null,
   });
@@ -67,7 +77,11 @@ function fixture(
     state,
     session: "test-session",
     run: async (...args: string[]) => {
-      if (args[0] === "eval") return { result: state() };
+      if (args[0] === "eval") {
+        const observed = state();
+        if (++reads <= (initial.controlDelay ?? 0)) observed.control = null;
+        return { result: observed };
+      }
       mutations.push(args);
       if (args[0] === "click" && args[1] === "#model") {
         expanded = true;
@@ -76,13 +90,13 @@ function fixture(
       } else if (args[0] === "click" && args[1].includes("Select model"))
         models = true;
       else if (args[0] === "find" && args.includes("Latest")) {
-        version = initial.latestVersion ?? "6";
+        if (!initial.ignoreLatest) version = initial.latestVersion ?? "6";
         models = false;
       } else if (args[0] === "focus" && args[1].includes("Power"))
         focused = true;
       else if (args[0] === "press" && args[1] === "ArrowRight") {
         if (!focused) throw new Error("Keyboard action escaped Power");
-        if (!initial.ignoreKeys) effort = Math.min(4, effort + 1);
+        if (!initial.ignoreKeys) effort = Math.min(max, effort + 1);
       } else if (args[0] === "press" && args[1] === "Escape") {
         expanded = false;
         models = false;
@@ -95,6 +109,29 @@ function fixture(
 }
 
 describe("pre-send Pro selection", () => {
+  test("read-only pre-send confirmation rejects a changed model without selecting a fallback", async () => {
+    const b = fixture({ version: "7", effort: 4 });
+    await expect(
+      ensureModel(b, { ...opts, model: "6 Pro", "verify-only": "true" }),
+    ).rejects.toThrow("MODEL_UNVERIFIED");
+    expect(b.mutations).toHaveLength(0);
+  });
+  test("missing slider attributes fail while a valid nonzero minimum is supported", async () => {
+    await expect(
+      ensureModel(fixture({ minPower: null }), opts),
+    ).rejects.toThrow("unavailable");
+    expect(
+      await ensureModel(fixture({ minPower: 2, effort: 2 }), opts),
+    ).toMatchObject({ observedModel: "6 Pro" });
+  });
+  test("waits for the model control to hydrate before interacting with a new page", async () => {
+    expect(await ensureModel(fixture({ controlDelay: 2 }), opts)).toMatchObject(
+      {
+        verified: true,
+        observedModel: "6 Pro",
+      },
+    );
+  });
   test("switches an older model and low power, then confirms the closed control", async () => {
     const b = fixture();
     const result = await ensureModel(b, opts);
@@ -114,7 +151,7 @@ describe("pre-send Pro selection", () => {
   });
   test("verifies an already correct model without changing its model or power", async () => {
     const b = fixture({ version: "6", effort: 4 });
-    expect(await ensureModel(b, opts)).toMatchObject({
+    expect(await ensureModel(b, { ...opts, model: "6 Pro" })).toMatchObject({
       verified: true,
       changed: false,
       observedModel: "6 Pro",
@@ -144,9 +181,34 @@ describe("pre-send Pro selection", () => {
     await expect(ensureModel(b, opts)).rejects.toThrow("URL changed");
     expect(b.mutations).toEqual([["click", "#model"]]);
   });
+  test("default selects the actual Latest Pro even after its version and slider range change", async () => {
+    const b = fixture({
+      version: "6",
+      effort: 4,
+      latestVersion: "7",
+      maxPower: 6,
+    });
+    expect(await ensureModel(b, opts)).toMatchObject({
+      verified: true,
+      observedModel: "7 Pro",
+      expectedModel: "latest-pro",
+      evidence: { power: 6, latest: true },
+    });
+  });
+  test("maximum effort without a Pro label is not a valid default", async () => {
+    await expect(
+      ensureModel(fixture({ maxLabel: "Ultra" }), opts),
+    ).rejects.toThrow("Pro");
+  });
+  test("a disabled or ignored Latest selection cannot fall back to an older Pro", async () => {
+    for (const initial of [{ latestDisabled: true }, { ignoreLatest: true }])
+      await expect(
+        ensureModel(fixture({ version: "5.6", effort: 4, ...initial }), opts),
+      ).rejects.toThrow("Latest");
+  });
   test("does not equate Latest and maximum effort with the requested version", async () => {
     await expect(
-      ensureModel(fixture({ latestVersion: "7" }), opts),
+      ensureModel(fixture({ latestVersion: "7" }), { ...opts, model: "6 Pro" }),
     ).rejects.toThrow("expected model 6 Pro");
   });
   test("bounds retries when keyboard selection has no effect", async () => {
@@ -159,11 +221,11 @@ describe("pre-send Pro selection", () => {
       ensureModel(fixture({ closeFallback: true }), opts),
     ).rejects.toThrow("did not confirm");
   });
-  test("rejects unsupported requests before browser interaction", async () => {
+  test("an explicit different model requires selection instead of silent fallback", async () => {
     const b = fixture();
-    await expect(ensureModel(b, { ...opts, model: "5.6 Pro" })).rejects.toThrow(
-      "supports only",
-    );
+    await expect(
+      ensureModel(b, { ...opts, model: "Custom visible model" }),
+    ).rejects.toThrow("MODEL_UNVERIFIED");
     await expect(
       ensureModel(b, { ...opts, url: "https://example.com/" }),
     ).rejects.toThrow("ChatGPT URL");
