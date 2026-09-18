@@ -56,7 +56,7 @@ class FakeBrowser {
     }
     return {};
   }
-  async page(target: string) {
+  async page(target: string): Promise<any> {
     if (!this.pages.has(target)) throw new Error("tab_gone");
     const self = this,
       p = this.pages.get(target);
@@ -1577,3 +1577,213 @@ for (const historicalState of [
     expect(result.runs[2].state).toBe("waiting");
   });
 }
+
+test("initial naming runs after delivery while the first reply is still generating and never repeats on followup", async () => {
+  const { state, browser } = setup();
+  const calls: any[] = [];
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+    async (b, url, preferences, type, topic) => {
+      const page = await b.read();
+      calls.push({
+        url,
+        type,
+        topic,
+        generating: page.generating,
+        messages: page.messages,
+      });
+      return { verified: true, title: "0918｜OPT｜创建路径" } as any;
+    },
+  );
+  const first = await conversation.start(
+    "named",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "OPT", topic: "创建路径" },
+  );
+  expect(first.organization.verified).toBe(true);
+  expect(first.runs[0].state).toBe("waiting");
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({
+    type: "OPT",
+    topic: "创建路径",
+    generating: true,
+    messages: [{ id: "u1", role: "user" }],
+  });
+  await conversation.start("named", "Review", "initial", false, undefined, {
+    type: "OPT",
+    topic: "创建路径",
+  });
+  browser.complete();
+  await conversation.resume(first.id, first.currentRun);
+  await conversation.start("named", "Next", "next", true);
+  expect(calls).toHaveLength(1);
+  expect(browser.sends).toBe(2);
+});
+
+test("naming waits for the persisted URL and failures never undo delivery or resend", async () => {
+  const { state, browser } = setup();
+  let calls = 0;
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+    async () => {
+      calls++;
+      throw new Error("Title save rejected (HTTP 403)");
+    },
+  );
+  browser.delayedUrl = true;
+  const first = await conversation.start(
+    "delayed-name",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "OPT", topic: "创建路径" },
+  );
+  expect(calls).toBe(0);
+  const p = [...browser.pages.values()][0];
+  p.url = "https://chatgpt.com/c/test-conversation";
+  browser.targets[0].url = p.url;
+  const named = await conversation.resume(first.id, first.currentRun);
+  expect(calls).toBe(1);
+  expect(named.organization).toMatchObject({
+    verified: false,
+    error: "Error: Title save rejected (HTTP 403)",
+  });
+  expect(named.runs[0]).toMatchObject({
+    state: "waiting",
+    userMessageId: "u1",
+  });
+  await conversation.resume(first.id, first.currentRun);
+  expect(calls).toBe(1);
+  expect(browser.sends).toBe(1);
+  await expect(conversation.retry(first.id, first.currentRun)).rejects.toThrow(
+    "RUN_NOT_PREPARED",
+  );
+  browser.complete();
+  await conversation.resume(first.id, first.currentRun);
+  expect(conversation.result(first.id, first.currentRun).reply.text).toBe(
+    "Answer",
+  );
+});
+
+test("invalid initial naming stops before creating a browser page", async () => {
+  const { browser, conversation } = setup();
+  await expect(
+    conversation.start("bad-name", "Review", "initial", false, undefined, {
+      type: "BAD",
+      topic: "Topic",
+    }),
+  ).rejects.toThrow("title type");
+  expect(browser.targets).toHaveLength(0);
+});
+
+test("project starts use only the configured project composer and reject a generic or changed page before send", async () => {
+  const oldUrl = process.env.CONVOREL_PROJECT_URL,
+    oldName = process.env.CONVOREL_PROJECT_NAME;
+  const projectUrl = "https://chatgpt.com/g/g-p-example-reviews/project";
+  process.env.CONVOREL_PROJECT_URL = projectUrl;
+  process.env.CONVOREL_PROJECT_NAME = "Agent reviews";
+  try {
+    for (const scenario of ["project", "generic", "drift"]) {
+      const { state: base, browser } = setup();
+      const state = new State(join(home, scenario));
+      state.write("config", base.read("config"));
+      const originalPage = browser.page.bind(browser);
+      browser.page = async (target: string) => {
+        const page = await originalPage(target);
+        return {
+          ...page,
+          run: async (...args: string[]) => {
+            if (
+              args[0] === "eval" &&
+              args[1].includes("getAttribute('aria-label')")
+            )
+              return {
+                result: {
+                  label:
+                    scenario === "generic"
+                      ? "Message ChatGPT"
+                      : "New chat in Agent reviews",
+                },
+              };
+            return page.run(...args);
+          },
+        };
+      };
+      const conversation = new Conversation(state, browser as any, async () => {
+        if (scenario === "drift")
+          [...browser.pages.values()][0].url = "https://chatgpt.com/";
+        return { observedModel: "6 Pro" };
+      });
+      const task = await conversation.start("project-" + scenario, "Review");
+      expect(browser.targets).toHaveLength(1);
+      expect(task.config.projectUrl).toBe(projectUrl);
+      if (scenario === "project") expect(browser.sends).toBe(1);
+      else {
+        expect(browser.sends).toBe(0);
+        expect(task.runs[0].state).toBe("prepared");
+        expect(task.runs[0].error).toContain(
+          scenario === "generic"
+            ? "PROJECT_COMPOSER_UNVERIFIED"
+            : "NEW_CONVERSATION_LOCATION_CHANGED",
+        );
+      }
+    }
+  } finally {
+    if (oldUrl === undefined) delete process.env.CONVOREL_PROJECT_URL;
+    else process.env.CONVOREL_PROJECT_URL = oldUrl;
+    if (oldName === undefined) delete process.env.CONVOREL_PROJECT_NAME;
+    else process.env.CONVOREL_PROJECT_NAME = oldName;
+  }
+});
+
+test.each([false, true])(
+  "metadata observation failure releases only its owned page and preserves a changed observer (%s)",
+  async (changed) => {
+    const { state, browser } = setup();
+    let sourceTarget = "";
+    const conversation = new Conversation(
+      state,
+      browser as any,
+      async () => ({ observedModel: "6 Pro" }),
+      async (b, url, prefs, type, topic, onProgress, metadata) => {
+        expect((await b.read()).generating).toBe(true);
+        expect(metadata).toBeDefined();
+        await metadata!.read();
+        sourceTarget = browser.targets.at(-1).targetId;
+        if (changed)
+          browser.pages.get(sourceTarget).draft = "User took over this page";
+        throw new Error("Metadata unavailable");
+      },
+    );
+    const t = await conversation.start(
+      "observer-failure",
+      "Review",
+      "initial",
+      false,
+      undefined,
+      { type: "OPT", topic: "创建路径" },
+    );
+    expect(t.runs[0]).toMatchObject({ state: "waiting", userMessageId: "u1" });
+    expect(t.organization.error).toContain("Metadata unavailable");
+    expect(browser.targets.some((x) => x.targetId === t.binding!.target)).toBe(
+      true,
+    );
+    expect(browser.targets.some((x) => x.targetId === sourceTarget)).toBe(
+      changed,
+    );
+    if (changed)
+      expect(t.organizationObservation?.error).toContain(
+        "METADATA_PAGE_CHANGED",
+      );
+    else expect(t.organizationObservation?.closed).toBe(true);
+    expect(browser.sends).toBe(1);
+  },
+);

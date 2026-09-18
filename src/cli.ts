@@ -40,7 +40,7 @@ init --workspace PATH --cdp PORT_OR_HTTP
 skills install --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH]
 doctor
 conversation list
-conversation start --id ID --prompt-file FILE [--request-id KEY] [--workspace PATH]
+conversation start --id ID --prompt-file FILE [--type DES --topic TOPIC] [--language en|zh] [--request-id KEY] [--workspace PATH]
 conversation followup --id ID --prompt-file FILE --request-id KEY [--workspace PATH]
 conversation status|resume|wait|result --id ID [--run UUID]
 conversation retry --id ID --run UUID [--workspace PATH]
@@ -257,6 +257,14 @@ export async function main(args = process.argv.slice(2)) {
   const o = opts(rest),
     id = required(o, "id");
   if (sub === "start" || sub === "followup") {
+    const naming =
+      o.type || o.topic || o.language
+        ? {
+            type: required(o, "type"),
+            topic: required(o, "topic"),
+            language: (o.language || "en") as "en" | "zh",
+          }
+        : undefined;
     const input = readFileSync(
       realpathSync(required(o, "prompt-file")),
       "utf8",
@@ -269,6 +277,7 @@ export async function main(args = process.argv.slice(2)) {
         : o["request-id"] || "initial",
       sub === "followup",
       o.workspace,
+      naming,
     );
     print({ ...t, summary: conversationStatus(t) });
     return conversationExitCode(t, "start");

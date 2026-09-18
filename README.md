@@ -88,7 +88,7 @@ export CONVOREL_BIN=/absolute/path/to/convorel/src/cli.ts
 
 此时可以讨论由 Agent 提供的上下文。要让 ChatGPT **直接读取本地代码**，还需按[代码连接指南](docs/usage.md#让-chatgpt-读取本地代码)配置官方隧道与 ChatGPT developer app；仅连接浏览器不会开放代码访问。
 
-模型与目标项目通过 `CONVOREL_MODEL`、`CONVOREL_PROJECT_URL`、`CONVOREL_PROJECT_NAME` 配置。不设置项目时，只整理会话标题、不移动会话。完整命令、配置和首次讨论示例见[使用指南](docs/usage.md)。
+模型与目标项目通过 `CONVOREL_MODEL`、`CONVOREL_PROJECT_URL`、`CONVOREL_PROJECT_NAME` 配置。配置项目时直接在该项目中创建会话；首条消息发送成功后按调用方提供的主题命名，不等待回复完成、不移动会话。完整命令、配置和首次讨论示例见[使用指南](docs/usage.md)。
 
 ## 使用边界
 

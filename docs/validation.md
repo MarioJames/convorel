@@ -1,5 +1,13 @@
 # Validation
 
+## 2026-09-18：项目内创建与首条消息后命名
+
+`bun run check` 通过 TypeScript 和 187 个测试。回归覆盖项目专属输入框与 URL 校验、普通入口拒绝、首条消息发送后命名、URL 延迟、命名失败不重发、生成中通过独立观察页核验元数据，以及观察页被用户接管时保留页面。`test:browser` 在隔离的自带 Chromium 中通过，测试浏览器及 CDP 端口已释放；格式检查通过。
+
+真实已登录 Chrome 的项目首页确认了项目专属 `New chat in <project>` 输入框。首个验收页遭遇 Cloudflare 验证，由用户手动完成后继续；两条合成验收会话均直接创建在指定项目，远端元数据证实项目 ID。第二条在首轮 `waiting` 时完成标题保存与远端核验，临时元数据观察页已关闭；回复完成后再次核验 `changed: false`，标题没有被后续自动命名覆盖。该会话未记录页面异常或 HTTP 4xx/5xx。验收会话和私有状态保留，任务自有标签页已释放；共享浏览器及其他会话不属于清理范围。
+
+browser-harness 的独立 APP_URL 为 `file:///tmp/convorel-creation-validation/project.html`。真实 DOM 验证项目入口、拒绝普通输入框、只发送一次且未点击侧栏普通 New chat，截图、控制台和网络采证通过，无 artifact_errors。浏览器已关闭，无 dev server 或隧道；证据保留在本任务私有验收目录。合成页面证明定位与交互契约，真实站点兼容性以此次登录浏览器验收为限。
+
 ## 2026-09-18：已恢复草稿的发送前恢复
 
 `bun run check` 通过 TypeScript 和 112 个测试；`test:browser` 在隔离的自带 Chromium 中验证 textarea、ProseMirror 多段落、原生删除输入事件、过期授权及聚焦时改稿保护，并通过文本节点读取回归。浏览器 fixture 无页面错误，精确关闭测试标签页及 Chromium，原有标签页保持不变。`test:package` 和 `format:check` 均通过。

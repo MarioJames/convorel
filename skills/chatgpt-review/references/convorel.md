@@ -40,8 +40,10 @@ Convorel 从进程环境、其次从**安装根** `.env` 读取 `CONVOREL_MODEL`
 将完整请求写到私有 UTF-8 文件，按 [review-prompt.md](review-prompt.md) 补齐实际决策、约束、项目路径/revision、MCP 可读取路径、验证摘要和未决问题。代码审查补相关文件的 `路径:起始行-结束行` 引用和审查问题，默认通过 MCP 读取，不内嵌仓库源码；结果校验采用 [result-review.md](result-review.md) 的目标与实际结果对照。检查最终文件。Convorel 只附加关联 marker，不添加角色、项目路径、源码包或审查规则。
 
 ```bash
-convorel_cli conversation start --id ID --prompt-file /private/request.md --workspace /absolute/project
+convorel_cli conversation start --id ID --prompt-file /private/request.md --workspace /absolute/project --type DES --topic '具体主题'
 ```
+
+创建时提供明确的 TYPE 和 Topic；主题无法确定时省略命名参数并保留原标题。配置项目后，Convorel 进入该项目的专属“新建对话”输入框并核验入口，不在普通对话中创建后移动。首条消息与持久化 URL 确认后立即重命名，不等待回复完成；生成期间用临时只读观察页核验远端创建时间和保存结果，不刷新发送页。
 
 保存返回的 `currentRun`、观察到的会话 URL 和状态根。传输层每次发送前核验模型/页面。重复同一请求不会重发，冲突的请求 key/内容失败。
 
@@ -68,24 +70,29 @@ convorel_cli conversation result --id ID --run RUN_ID
 
 Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何种通知，都须用同一 `--id`、`--run` 取得当前完整 `result`，不能以通知、退出码或最后可见的网页答案代替。
 
-`resume` 仅观察和核对，不发送。只有状态为 `prepared` 且已解决发送前错误时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。它重新核验模型、页面和草稿；不得重试 `submitting`/`delivery_unknown`，不得覆盖变更后的草稿强行推进。未知发送或等待超时不能用新 ID 再发。
+`resume` 观察和核对，不发送消息；首轮 URL 延迟时会补做已请求但尚未开始的命名。只有状态为 `prepared` 且已解决发送前错误时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。它重新核验模型、页面和草稿；不得重试 `submitting`/`delivery_unknown`，不得覆盖变更后的草稿强行推进。未知发送或等待超时不能用新 ID 再发。
 
 新建页恢复了旧草稿时，先读取并备份完整原文。仅用户明确授权删除该页草稿副本后，才使用 `conversation clear-draft --id ID --run RUN_ID --expected-draft-file /private/approved-draft.txt`。该命令只处理任务自有、无历史消息的新建页和未发送首轮；逐字核对草稿，持久保存备份，删除后实际读回确认。草稿已变、附件存在、页面身份不同或投递未知都会停止，不扩大到其他标签页。成功后再显式 retry 同一 run；命令成功回执不能代替空草稿、模型、页面和投递状态核验。
 
 `status` 的 `summary` 区分已确认投递、发送结果未知和未尝试发送，并返回当前阶段、最近观察时间、观察错误和下一步动作。`status` 退出 0 只表示本地状态读取成功；`start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅完成时退出 0，未完成或需处理时退出 2，参数/基础设施等异常可退出 1。不要仅凭退出码取代精确轮次的 `result`。`wait` 仅对观察失败做最多三次连续尝试，不自动重发；登录、页面身份或草稿等需处理的问题不会被当作临时读取失败反复尝试。
 
-## 消费、命名与清理
+## 命名恢复、消费与清理
 
-读取完整回复后，本地核对意见、记录取舍与证据限制，再自动整理：
+命名在首条消息发送后完成。若返回的 `organization` 未核验成功，检查原因后在原任务显式重试命名；该操作也支持回复生成期间执行，不重发消息：
 
 ```bash
 convorel_cli conversation organize --id ID --run RUN_ID --type DES --topic '具体主题'
+```
+
+读取完整回复后，本地核对意见、记录取舍与证据限制，再释放页面：
+
+```bash
 convorel_cli conversation finish --id ID --run RUN_ID
 ```
 
-TYPE 默认英文代码；仅用户明确要求中文时为 `organize` 增加 `--language zh`，仍传英文 `--type` 代码。命名日期使用实际会话 `createdAt` 转 `Asia/Shanghai`，不能使用 `updatedAt`、本机当前日期或猜测日期。由 Convorel 按该固定命名时区处理，不自行改写 task snapshot。Topic 不重复项目名称；主题无法确定时保留原标题。无项目仍命名并保留原项目归属；有成对配置才按授权目标整理项目；移动前必须从可见目标核对项目 ID，无法证明身份时停止移动并报告。核验标题及适用的项目结果为 `verified: true`，发现不规范立即用相同规则纠正。
+TYPE 默认英文代码；仅用户明确要求中文时为 `start` 或 `organize` 增加 `--language zh`，仍传英文 `--type` 代码。命名日期使用实际会话 `createdAt` 转 `Asia/Shanghai`，不能使用 `updatedAt`、本机当前日期或猜测日期。由 Convorel 按该固定命名时区处理，不自行改写 task snapshot。Topic 不重复项目名称；主题无法确定时保留原标题。只改会话标题并保留原项目归属；有成对配置时核验项目 ID，归属不符即报告错误，不移动会话。核验标题及适用的项目结果为 `verified: true`，发现不规范立即用相同规则纠正。
 
-组织必须返回 `verified: true`；失败返回 `error` 和非零退出码，并保留已核验的 rename/project 步骤状态，表示整体未完成；记录错误，仍对已核验完成的轮次尝试 `finish`。`organizationPending` 保留失败信息，不要求保留可释放的自有标签页。finish 只释放经过核验的自有页面，保留会话历史、配置、借用页面和登录态；不授权关闭其他页或共享浏览器。
+命名必须返回 `verified: true`；失败返回独立的 `organization.error`，不撤销已确认的消息投递、不自动重发；`organize` 失败返回非零退出码，并保留已核验的 rename/project 步骤状态，表示整体未完成；记录错误，仍对已核验完成的轮次尝试 `finish`。`organizationPending` 保留失败信息，不要求保留可释放的自有标签页。finish 只释放经过核验的自有页面，保留会话历史、配置、借用页面和登录态；不授权关闭其他页或共享浏览器。
 
 单独释放任务自有等待进程/lane，记录保留对象和原因。提示词、run 映射、意见和回复留在 Convorel 私有状态或已有任务交付记录，不进入技能源码，不新增平行注册表。
 

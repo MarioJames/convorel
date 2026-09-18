@@ -14,7 +14,11 @@ import {
   type PageState,
 } from "./chatgpt/page.ts";
 import { ensureModel } from "./chatgpt/model.ts";
-import { organizeConversation } from "./chatgpt/organize.ts";
+import {
+  assertNewConversationPage,
+  verifyProjectComposer,
+} from "./chatgpt/project.ts";
+import { conversationTitle, organizeConversation } from "./chatgpt/organize.ts";
 import { conversationConfig, type Config } from "./config.ts";
 export type { Config } from "./config.ts";
 export interface RejectedSendRecovery {
@@ -76,6 +80,11 @@ interface Binding {
   closed?: boolean;
   opening?: boolean;
 }
+export interface Naming {
+  type: string;
+  topic: string;
+  language?: "en" | "zh";
+}
 export interface Task {
   version: 1;
   id: string;
@@ -87,7 +96,15 @@ export interface Task {
   currentRun: string;
   attemptId: string;
   runs: Run[];
+  naming?: Naming;
   organization?: any;
+  organizationObservation?: {
+    epoch: string;
+    target?: string;
+    opening?: boolean;
+    closed?: boolean;
+    error?: string;
+  };
   cleanup?: any;
   workspaceBindingChange?: { from: string; to: string; at: string };
 }
@@ -106,6 +123,7 @@ export class Conversation {
       b: any,
       opts: Record<string, string>,
     ) => Promise<{ observedModel: string }> = ensureModel,
+    private organizer: typeof organizeConversation = organizeConversation,
   ) {}
   get(id: string): Task {
     return this.store.read<Task>("task-" + id);
@@ -339,6 +357,12 @@ export class Conversation {
         .map((m) => m.id);
     }
     this.save(t);
+    if (
+      t.naming &&
+      !t.organization &&
+      ["waiting", "complete"].includes(r.state)
+    )
+      await this.applyOrganization(t, b, t.naming);
     return t;
   }
   async start(
@@ -347,7 +371,22 @@ export class Conversation {
     requestId = "initial",
     followup = false,
     workspace?: string,
+    naming?: Naming,
   ) {
+    if (naming) {
+      if (followup) throw new Error("NAMING_REQUIRES_START_OR_ORGANIZE");
+      conversationTitle("2000-01-01T00:00:00Z", naming.type, naming.topic, {
+        timezone: "Asia/Shanghai",
+        language: naming.language ?? "en",
+      });
+      if (naming.language && !["en", "zh"].includes(naming.language))
+        throw new Error("Title language must be en or zh");
+      naming = {
+        type: naming.type,
+        topic: naming.topic.trim(),
+        language: naming.language ?? "en",
+      };
+    }
     if (
       !/^[a-z0-9][a-z0-9-]{0,79}$/.test(id) ||
       !requestId ||
@@ -364,6 +403,8 @@ export class Conversation {
         this.checkWorkspace(t, workspace);
         const previous = t.runs.find((r) => r.requestId === requestId);
         if (previous) {
+          if (naming && JSON.stringify(t.naming) !== JSON.stringify(naming))
+            throw new Error("NAMING_CONFLICT");
           if (previous.inputHash !== inputHash)
             throw new Error("REQUEST_CONFLICT");
           return t;
@@ -381,6 +422,7 @@ export class Conversation {
           id,
           config,
           workspaceId: new Workspace(config.workspace).id,
+          naming,
           currentRun: "",
           attemptId: "",
           runs: [],
@@ -680,10 +722,18 @@ export class Conversation {
           throw new Error("DRAFT_CHANGED");
         const previous = t.runs.at(-2);
         if (previous) this.safeCompleted(t, { ...page, draft: "" }, previous);
+        else if (!recovery)
+          assertNewConversationPage(page, t.config.projectUrl);
         else if (page.messages.length)
           throw new Error("UNEXPECTED_CONVERSATION_HISTORY");
       };
       checkDraft(p);
+      if (!t.url && t.config.projectUrl)
+        await verifyProjectComposer(
+          b,
+          t.config.projectUrl,
+          t.config.projectName!,
+        );
       // Retries retain this run's verified model (including rejected sends).
       // Otherwise honor the task's explicit preference before inheriting the
       // latest completed observation. New tasks still resolve Latest Pro.
@@ -739,6 +789,12 @@ export class Conversation {
       if (draftText(p.draft || "") !== draftText(prompt))
         throw new Error("DRAFT_CHANGED");
       if (!p.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
+      if (!t.url && t.config.projectUrl)
+        await verifyProjectComposer(
+          b,
+          t.config.projectUrl,
+          t.config.projectName!,
+        );
       await recovery?.beforeSend();
       r.error = undefined;
       // Durable write precedes the first action capable of submitting a message.
@@ -750,7 +806,7 @@ export class Conversation {
       this.guard(t);
       for (let n = 0; n < 12; n++) {
         await this.reconcile(t, b);
-        if (r.userMessageId) return t;
+        if (r.userMessageId && (!t.naming || t.url)) return t;
         await Bun.sleep(250);
       }
       return t;
@@ -768,7 +824,11 @@ export class Conversation {
   async poll(id: string, run?: string) {
     return this.store.locked(async () => {
       const t = this.get(id);
-      if (this.current(t, run).state === "complete") return t;
+      if (
+        this.current(t, run).state === "complete" &&
+        (!t.naming || t.organization)
+      )
+        return t;
       this.begin(t);
       try {
         // Recover a previously saved initial URL without guessing another tab or resending.
@@ -942,6 +1002,133 @@ export class Conversation {
       return this.reconcile(t, await this.page(t));
     });
   }
+  private async applyOrganization(t: Task, b: any, naming: Naming) {
+    const check = async () => {
+      const p = await this.observe(t, b),
+        r = this.current(t);
+      if (!t.url || !r.userMessageId) throw new Error("DELIVERY_NOT_CONFIRMED");
+      if (p.draft?.trim() || p.attachments) throw new Error("PAGE_NOT_IDLE");
+      const out = classify(p, t.url, r.userMessageId);
+      if (!["waiting", "complete"].includes(out.state))
+        throw new Error(out.reason || "CONVERSATION_CHANGED");
+      if (r.state === "complete") this.safeCompleted(t, p);
+      return p;
+    };
+    // A second, task-owned page observes persisted metadata while the original
+    // page keeps streaming. It never sends or mutates conversation content.
+    let observer: Awaited<ReturnType<Browser["page"]>> | undefined;
+    const metadataPage = async () => {
+      await check();
+      if (observer) return observer;
+      const epoch = await this.browser.epoch();
+      const prior = t.organizationObservation;
+      if (prior && !prior.closed)
+        throw new Error(
+          "ORGANIZATION_OBSERVER_PENDING: inspect the recorded target",
+        );
+      t.organizationObservation = { epoch, opening: true };
+      this.save(t);
+      const created = await this.browser.tabs("new", t.url!);
+      this.guard(t);
+      if (!created.targetId) throw new Error("ORGANIZATION_OBSERVER_UNKNOWN");
+      t.organizationObservation = { epoch, target: created.targetId };
+      this.save(t);
+      observer = await this.browser.page(created.targetId);
+      for (let n = 0; n < 20; n++) {
+        const p = await observer.read();
+        if (same(p.url, t.url!)) return observer;
+        if (p.url !== "about:blank") throw new Error("METADATA_PAGE_CHANGED");
+        await Bun.sleep(250);
+      }
+      throw new Error("METADATA_PAGE_UNAVAILABLE");
+    };
+    t.organization = { verified: false };
+    this.save(t);
+    try {
+      await check();
+      const guarded = {
+        session: b.session,
+        read: check,
+        run: async (...args: string[]) => {
+          await check();
+          const result = await b.run(...args);
+          if (args[0] === "reload") {
+            for (let n = 0; ; n++) {
+              try {
+                await check();
+                break;
+              } catch (e) {
+                if (n >= 20) throw e;
+                await Bun.sleep(250);
+              }
+            }
+          }
+          return result;
+        },
+      };
+      const metadata =
+        this.current(t).state !== "complete"
+          ? {
+              session: b.session,
+              read: async () => (await metadataPage()).read(),
+              run: async (...args: string[]) => {
+                const page = await metadataPage();
+                const p = await page.read();
+                if (!same(p.url, t.url!))
+                  throw new Error("METADATA_PAGE_CHANGED");
+                if (p.blocked) throw new Error(p.blocked);
+                return page.run(...args);
+              },
+            }
+          : undefined;
+      t.organization = await this.organizer(
+        guarded,
+        t.url!,
+        {
+          projectUrl: t.config.projectUrl,
+          projectName: t.config.projectName,
+          timezone: "Asia/Shanghai",
+          language: naming.language ?? "en",
+        },
+        naming.type,
+        naming.topic,
+        (progress) => {
+          this.guard(t);
+          t.organization = { ...structuredClone(progress), verified: false };
+          this.save(t);
+        },
+        metadata,
+      );
+    } catch (e) {
+      t.organization = { ...t.organization, verified: false, error: String(e) };
+    } finally {
+      const owned = t.organizationObservation;
+      if (owned?.target && !owned.closed) {
+        try {
+          if (owned.epoch !== (await this.browser.epoch()))
+            throw new Error("BROWSER_RESTARTED");
+          this.guard(t);
+          const page = await this.browser.page(owned.target);
+          const p = await page.read();
+          if (!same(p.url, t.url!) || p.draft?.trim() || p.attachments)
+            throw new Error("METADATA_PAGE_CHANGED");
+          await this.browser.tabs("close", owned.target);
+          if (
+            (await this.browser.tabs("list")).tabs.some(
+              (x: any) => x.targetId === owned.target,
+            )
+          )
+            throw new Error("CLOSE_UNVERIFIED");
+          owned.closed = true;
+        } catch (e) {
+          owned.error = String(e);
+        }
+      }
+    }
+    this.guard(t);
+    this.save(t);
+    return t.organization;
+  }
   async organize(
     id: string,
     run: string,
@@ -953,67 +1140,14 @@ export class Conversation {
       throw new Error("Title language must be en or zh");
     return this.store.locked(async () => {
       const t = this.get(id);
-      this.current(t, run);
-      this.result(id, run);
+      const r = this.current(t, run);
+      if (!t.url || !r.userMessageId) throw new Error("DELIVERY_NOT_CONFIRMED");
       this.begin(t);
-      t.organization = { verified: false };
-      this.save(t);
-      try {
-        const b = await this.page(t);
-        this.safeCompleted(t, await this.observe(t, b));
-        const guarded = {
-          session: b.session,
-          read: () => this.observe(t, b),
-          run: async (...args: string[]) => {
-            this.guard(t);
-            if (!["eval", "network"].includes(args[0]))
-              this.safeCompleted(t, await this.observe(t, b));
-            const result = await b.run(...args);
-            if (args[0] === "reload") {
-              // Metadata responses can arrive before the same saved answer finishes rendering.
-              for (let n = 0; ; n++) {
-                const page = await this.observe(t, b);
-                if (page.draft?.trim() || page.generating || page.attachments)
-                  throw new Error("PAGE_NOT_IDLE");
-                try {
-                  this.safeCompleted(t, page);
-                  break;
-                } catch (e) {
-                  if (n >= 20) throw e;
-                  await Bun.sleep(250);
-                }
-              }
-            }
-            return result;
-          },
-        };
-        t.organization = await organizeConversation(
-          guarded,
-          t.url!,
-          {
-            projectUrl: t.config.projectUrl,
-            projectName: t.config.projectName,
-            timezone: "Asia/Shanghai",
-            language,
-          },
-          type,
-          topic,
-          (progress) => {
-            this.guard(t);
-            t.organization = { ...structuredClone(progress), verified: false };
-            this.save(t);
-          },
-        );
-      } catch (e) {
-        t.organization = {
-          ...t.organization,
-          verified: false,
-          error: String(e),
-        };
-      }
-      this.guard(t);
-      this.save(t);
-      return t.organization;
+      return this.applyOrganization(t, await this.page(t), {
+        type,
+        topic,
+        language,
+      });
     });
   }
 }

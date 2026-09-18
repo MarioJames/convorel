@@ -36,16 +36,15 @@ Configuration and task state live outside the shared repository under the user d
 The caller writes the complete UTF-8 request file. Convorel sends `[CONVOREL:<runId>]`, two newlines and the file contents unchanged. The marker is a transport correlation key used to reconcile uncertain delivery; it is not a role or review instruction. Convorel does not load source files into the prompt, add workspace context, or select a review strategy. Include any desired code paths and context in the caller's message. Review policy and prompt preparation belong to the bundled, independently installable `chatgpt-review` skill.
 
 ```bash
-bun --no-env-file src/cli.ts conversation start --id auth-design --prompt-file /path/to/request.md
+bun --no-env-file src/cli.ts conversation start --id auth-design --prompt-file /path/to/request.md --type DES --topic 'Auth boundary'
 bun --no-env-file src/cli.ts conversation wait --id auth-design --run RUN_ID
 bun --no-env-file src/cli.ts conversation result --id auth-design --run RUN_ID
-bun --no-env-file src/cli.ts conversation organize --id auth-design --run RUN_ID --type DES --topic 'Auth boundary'
 bun --no-env-file src/cli.ts conversation finish --id auth-design --run RUN_ID
 ```
 
 Replace RUN_ID with the returned currentRun. `--run` pins status, result, wait and finish to that exact round. `resume` reconciles an interrupted submission with its visible request marker; it does not press Send again. `followup` explicitly starts a new round after the prior reply is complete. A repeated `start` on the same task does not send again.
 
-`finish` closes only a verified, completed task-owned tab. Borrowed tabs remain open. It retains conversation links, earlier runs and results. Later `followup` calls reopen the saved URL when necessary and verify the previous completed turn before sending a successor; a new CLI process uses the same private state. A completed `resume` returns stored state without reopening the tab. Skills request these operations; Convorel owns their persistence, identity checks, recovery and cleanup mechanics.
+`finish` closes only a verified, completed task-owned tab. Borrowed tabs remain open. It retains conversation links, earlier runs and results. Later `followup` calls reopen the saved URL when necessary and verify the previous completed turn before sending a successor; a new CLI process uses the same private state. A completed `resume` returns stored state without reopening the tab unless initial naming is still pending. Skills request these operations; Convorel owns their persistence, identity checks, recovery and cleanup mechanics.
 
 The prompt file is persisted unchanged. During pre-send draft verification, ordinary spaces and nonbreaking spaces are compared as equivalent because Chromium contenteditable may substitute them when rendering indentation. Other text changes still stop the send. Restoring a saved URL includes a bounded wait for the newly opened page/history; failures preserve the binding for inspection rather than create replacement tabs.
 
@@ -112,7 +111,7 @@ bunx skills add ./skills --skill chatgpt-review -a codex -g
 
 在 Convorel 安装根 `.env` 或进程环境中设置成对的 `CONVOREL_PROJECT_URL`、`CONVOREL_PROJECT_NAME`，可选设置 `CONVOREL_MODEL`。同名进程环境变量包括空值优先于安装根 `.env`；不加载代码工作区或调用目录的环境文件。新 task 保存 snapshot，续谈保持原配置。未指定模型默认 Latest + Power 末端 Pro，不锁版本。
 
-审查技能自动整理 `MMDD｜TYPE｜Topic`：日期取会话 `createdAt` 转 `Asia/Shanghai`，默认英文 TYPE；用户明确要求中文时给 `organize` 加 `--language zh`。无项目只命名、不移动；配置成对目标项目时按已有授权核验归属。主题不明保留原标题，不改置顶、归档等状态。组织失败仍保留错误并尝试安全 finish。
+创建时通过 `start --type DES --topic '具体主题'` 提供命名信息，首条消息与持久化 URL 确认后立即命名，无需等回复完成。URL 延迟时由 `resume`/`wait` 补做；命名失败记录在 `organization.error`，检查后用 `organize` 显式重试，不重发消息。审查技能使用 `MMDD｜TYPE｜Topic`：日期取会话 `createdAt` 转 `Asia/Shanghai`，默认英文 TYPE；用户明确要求中文时给 `start` 或 `organize` 加 `--language zh`。配置项目时直接使用该项目的“新建对话”入口；命名只改标题，归属不符即报错，不移动会话。主题不明保留原标题，不改置顶、归档等状态。组织失败仍保留错误并尝试安全 finish。
 
 Herdr 可选。技能优先复用现有 Herdr 技能或 `herdr --skill`，只有当前 pane 可解析时创建服务 lane；否则用宿主后台进程或分段 `conversation wait --timeout-seconds 60`。一个 run 只保留一个等待者，通知后仍需读取精确 run 的完整结果；未知发送不得重发。
 

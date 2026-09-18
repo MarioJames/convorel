@@ -132,15 +132,8 @@ export function organizationUiScript(id: string) {
     const chats = Array.from(document.querySelectorAll('button')).find(e => visible(e) && /^(Chats|聊天)$/.test(e.innerText.trim()));
     const input = Array.from(document.querySelectorAll('input[aria-label="Chat title"],input[aria-label="聊天标题"]')).find(visible);
     const items = Array.from(document.querySelectorAll('[role="menuitem"]')).filter(visible).map(e => {
-      const href = e.getAttribute('href') || e.querySelector('a[href]')?.getAttribute('href');
-      let projectId = e.getAttribute('data-project-id');
-      if (href) {
-        const target = new URL(href, location.href);
-        if (target.origin === 'https://chatgpt.com')
-          projectId = target.pathname.match(/^\\/g\\/(g-p-[a-z0-9]+)(?:-[^/]+)?\\/project$/i)?.[1] || projectId;
-      }
       return { label: e.getAttribute('aria-label') || e.innerText.trim(), text: e.innerText.trim(),
-        disabled: e.getAttribute('aria-disabled') === 'true', projectId };
+        disabled: e.getAttribute('aria-disabled') === 'true' };
     });
     return { options: button ? 'a[data-sidebar-item][href$="/c/' + ${JSON.stringify(id)} + '"] button[aria-haspopup="menu"]' : null,
       chats: chats ? { label: chats.innerText.trim(), expanded: chats.getAttribute('aria-expanded') === 'true' } : null,
@@ -155,6 +148,7 @@ export async function organizeConversation(
   type: string,
   topic: string,
   onProgress: (progress: OrganizationProgress) => void = () => {},
+  metadataBrowser?: Browser,
 ) {
   validatePreferences(preferences);
   const id = conversationId(url);
@@ -168,7 +162,7 @@ export async function organizeConversation(
     if (conversationId(page.url) !== id)
       throw new Error("Conversation changed; refusing organization");
     if (page.blocked) throw new Error(page.blocked);
-    if (page.generating)
+    if (page.generating && !metadataBrowser)
       throw new Error(
         "Response is generating; finish monitoring before organizing",
       );
@@ -190,9 +184,9 @@ export async function organizeConversation(
     }
     throw new Error(reason);
   };
-  const requests = async () => {
+  const requests = async (source = b) => {
     // agent-browser returns headers and bodies internally. Never log or persist this response.
-    const data = await b.run("network", "requests");
+    const data = await source.run("network", "requests");
     if (!Array.isArray(data.requests))
       throw new Error("Network observation unavailable");
     return data.requests;
@@ -246,18 +240,25 @@ export async function organizeConversation(
         return false;
       }
     };
-    const observed = await requests();
+    const source = metadataBrowser ?? b;
+    if (conversationId((await source.read()).url) !== id)
+      throw new Error("Metadata page changed; refusing organization");
+    const observed = await requests(source);
     // A newly attached browser session may not have captured the initial page load.
     reload ||= !observed.some((r: any) => isMetadata(r) && r.status === 200);
     const previous = new Set(
       reload ? observed.map((r: any) => r.requestId) : [],
     );
-    if (reload) await act("reload");
+    if (reload) {
+      await guard();
+      if (metadataBrowser) await metadataBrowser.run("reload");
+      else await act("reload");
+    }
     let rejection: number | undefined;
     for (let attempt = 0; attempt < 40; attempt++) {
       // Metadata can arrive before hydration creates the composer and sidebar.
       await guard();
-      const observed = (await requests()).filter(
+      const observed = (await requests(source)).filter(
         (r: any) => !previous.has(r.requestId) && isMetadata(r),
       );
       const latest = observed.at(-1);
@@ -268,7 +269,7 @@ export async function organizeConversation(
         await Bun.sleep(250);
         await guard();
         return metadataFromResponse(
-          await b.run("network", "request", latest.requestId),
+          await source.run("network", "request", latest.requestId),
           id,
         );
       }
@@ -329,6 +330,10 @@ export async function organizeConversation(
   const before = await freshMetadata(false);
   // An absent destination preserves placement, including an existing user project.
   const expectedProject = configuredProject ?? before.projectId;
+  if (before.projectId !== expectedProject)
+    throw new Error(
+      "Project membership does not match; create the conversation inside the configured project",
+    );
   if (before.archived)
     throw new Error(
       "Conversation is archived; refusing to change its archive status",
@@ -377,39 +382,6 @@ export async function organizeConversation(
   checkPreserved();
   progress.rename.verified = true;
   onProgress(progress);
-  if (current.projectId !== expectedProject) {
-    await openOptions();
-    await menuItem(["Move to project", "移至项目", "移动到项目"]);
-    // Text is the project name; its accessible label can also contain icon/color descriptions.
-    const state = await waitUi(
-      (s) => s.items.some((i: any) => i.text === preferences.projectName),
-      "Requested project is not available in the menu",
-    );
-    const matches = state.items.filter(
-      (i: any) => i.text === preferences.projectName,
-    );
-    if (matches.length !== 1 || matches[0].disabled)
-      throw new Error("Requested project is unavailable or ambiguous");
-    if (matches[0].projectId !== expectedProject)
-      throw new Error(
-        "Project identity unavailable or mismatched before move; select no destination",
-      );
-    const previous = new Set<string>(
-      (await requests()).map((r: any) => r.requestId),
-    );
-    await act(
-      "find",
-      "role",
-      "menuitem",
-      "click",
-      "--name",
-      matches[0].label,
-      "--exact",
-    );
-    await waitUi((s) => !s.items.length, "Project selection did not finish");
-    await waitForSave(previous, "Project");
-    current = await freshMetadata();
-  }
   if (before.title === title && before.projectId === expectedProject)
     current = await freshMetadata();
   if (current.title !== title || current.projectId !== expectedProject)

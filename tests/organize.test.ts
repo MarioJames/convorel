@@ -31,11 +31,9 @@ function fixture(
     generating?: boolean;
     ignoreRename?: boolean;
     rejectRename?: boolean;
-    wrongProject?: boolean;
     changePinned?: boolean;
     metadataFallback?: boolean;
     initialProject?: string;
-    menuProjectId?: string | null;
   } = {},
 ) {
   let saved = { ...body(), gizmo_id: options.initialProject ?? null },
@@ -103,20 +101,7 @@ function fixture(
             options: "#options",
             chats: null,
             titleInput: editing ? "#title" : null,
-            items:
-              menu === "options"
-                ? [item("Rename"), item("Move to project")]
-                : menu === "projects"
-                  ? [
-                      {
-                        ...item("Agent reviews"),
-                        projectId:
-                          options.menuProjectId === undefined
-                            ? "g-p-example"
-                            : options.menuProjectId,
-                      },
-                    ]
-                  : [],
+            items: menu === "options" ? [item("Rename")] : [],
           },
         };
       if (args[0] === "reload") {
@@ -149,11 +134,6 @@ function fixture(
         if (name === "Rename") {
           editing = true;
           menu = "";
-        } else if (name === "Move to project") menu = "projects";
-        else if (name === "Agent reviews") {
-          saved.gizmo_id = options.wrongProject ? "g-p-other" : "g-p-example";
-          menu = "";
-          savedRequest("move");
         } else throw new Error("Unexpected menu action");
       } else if (args[0] === "fill") {
         pending = args[2];
@@ -171,24 +151,12 @@ function fixture(
 }
 
 describe("conversation organization", () => {
-  test("project identity is checked before moving and verified rename progress survives that failure", async () => {
-    for (const menuProjectId of [null, "g-p-other"]) {
-      const b = fixture({ menuProjectId });
-      const progress: any[] = [];
-      await expect(
-        organizeConversation(b, url, preferences, "FEA", "Topic", (p) =>
-          progress.push(structuredClone(p)),
-        ),
-      ).rejects.toThrow("identity");
-      expect(b.saved().gizmo_id).toBeNull();
-      expect(b.mutations.some((args) => args.includes("Agent reviews"))).toBe(
-        false,
-      );
-      expect(progress.at(-1)).toMatchObject({
-        rename: { verified: true },
-        project: { state: "pending" },
-      });
-    }
+  test("rejects a project mismatch before changing the title", async () => {
+    const b = fixture();
+    await expect(
+      organizeConversation(b, url, preferences, "FEA", "Topic"),
+    ).rejects.toThrow("Project membership does not match");
+    expect(b.mutations).toHaveLength(0);
   });
   test("without a configured project only renames and preserves existing placement", async () => {
     for (const initialProject of [undefined, "g-p-user-project"]) {
@@ -254,8 +222,8 @@ describe("conversation organization", () => {
       ).toThrow("metadata");
     }
   });
-  test("renames and moves the exact conversation, verifies persisted metadata, then reruns without mutations", async () => {
-    const b = fixture();
+  test("renames the exact project conversation, verifies persisted metadata, then reruns without mutations", async () => {
+    const b = fixture({ initialProject: "g-p-example" });
     expect(
       await organizeConversation(b, url, preferences, "FIX", "迁移衔接"),
     ).toMatchObject({
@@ -279,7 +247,7 @@ describe("conversation organization", () => {
   test("waits for the UI metadata fallback after a rejected endpoint without reloading again", async () => {
     expect(
       await organizeConversation(
-        fixture({ metadataFallback: true }),
+        fixture({ metadataFallback: true, initialProject: "g-p-example" }),
         url,
         preferences,
         "FIX",
@@ -296,10 +264,37 @@ describe("conversation organization", () => {
       expect(b.mutations).toHaveLength(0);
     }
   });
+  test("renames during generation using a separate metadata observer", async () => {
+    const b = fixture({ generating: true, initialProject: "g-p-example" });
+    const observer = {
+      ...b,
+      read: async () => ({ ...(await b.read()), generating: false }),
+    };
+    const active = {
+      ...b,
+      run: async (...args: string[]) => {
+        if (args[0] === "reload")
+          throw new Error("Generation must not be reloaded");
+        return b.run(...args);
+      },
+    };
+    expect(
+      await organizeConversation(
+        active,
+        url,
+        preferences,
+        "OPT",
+        "创建路径",
+        undefined,
+        observer,
+      ),
+    ).toMatchObject({ verified: true, title: "0916｜OPT｜创建路径" });
+    expect((await b.read()).generating).toBe(true);
+  });
   test("fails when a clicked rename was not persisted", async () => {
     await expect(
       organizeConversation(
-        fixture({ ignoreRename: true }),
+        fixture({ ignoreRename: true, initialProject: "g-p-example" }),
         url,
         preferences,
         "FIX",
@@ -308,28 +303,17 @@ describe("conversation organization", () => {
     ).rejects.toThrow("title did not persist");
   });
   test("reports a rejected save and does not attempt to move the conversation", async () => {
-    const b = fixture({ rejectRename: true });
+    const b = fixture({ rejectRename: true, initialProject: "g-p-example" });
     await expect(
       organizeConversation(b, url, preferences, "FIX", "Topic"),
     ).rejects.toThrow("Title save rejected (HTTP 403)");
-    expect(b.saved().gizmo_id).toBeNull();
+    expect(b.saved().gizmo_id).toBe("g-p-example");
     expect(b.saved().title).toBe("Automatic title");
-  });
-  test("checks project identity rather than trusting menu closure or display name", async () => {
-    await expect(
-      organizeConversation(
-        fixture({ wrongProject: true }),
-        url,
-        preferences,
-        "FIX",
-        "Topic",
-      ),
-    ).rejects.toThrow("Title/project did not persist");
   });
   test("detects unrelated archive or pin changes", async () => {
     await expect(
       organizeConversation(
-        fixture({ changePinned: true }),
+        fixture({ changePinned: true, initialProject: "g-p-example" }),
         url,
         preferences,
         "FIX",

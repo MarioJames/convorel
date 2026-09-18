@@ -39,15 +39,17 @@ The two channels are independent. A browser-only conversation works without the 
 | Continue the same conversation after tab closure or process restart                                               | Convorel                                                        |
 | Track request/run/message identity, delivery uncertainty, generation and completed replies                        | Convorel                                                        |
 | Wait/reconcile, expose current status/results and preserve history                                                | Convorel                                                        |
-| Apply requested title/project organization and safely release owned tabs                                          | Convorel                                                        |
+| Create in the requested project, rename after first delivery and safely release owned tabs                        | Convorel                                                        |
 | Interpret the answer, accept/reject findings and decide business completion                                       | Skill / calling Agent                                           |
 | Keep the CLI wait process alive or deliver its notification                                                       | Calling runtime / Herdr; conversation state remains in Convorel |
 
-A skill requests lifecycle operations; it does not implement a second conversation registry, browser ownership tracker or recovery state machine. Closing a task's tab is resource release, not deletion of the remote conversation or local history. `followup` restores the saved URL and verifies the preceding completed turn before creating its successor. `resume` reconciles a pending run; for an already completed run it returns the saved result without reopening a tab.
+A skill requests lifecycle operations; it does not implement a second conversation registry, browser ownership tracker or recovery state machine. Closing a task's tab is resource release, not deletion of the remote conversation or local history. `followup` restores the saved URL and verifies the preceding completed turn before creating its successor. `resume` reconciles a pending run; for an already completed run it returns the saved result without reopening a tab unless initial naming is still pending.
 
 Lifecycle ownership does not promise that ChatGPT keeps a remote conversation forever or remains reachable. Login failures, remote deletion, changed branches and uncertain UI actions must produce explicit failure/pending states rather than silently creating a replacement conversation. This release uses explicit CLI calls and a foreground `wait` process; it does not claim a resident daemon, durable job scheduling or automatic business retries.
 
-自动命名使用 `MMDD｜TYPE｜Topic`，从远端 `createdAt` 转 `Asia/Shanghai` 得到日期，默认英文 TYPE，明确要求中文时使用 `organize --language zh`。无项目配置仍命名且不移动会话；有目标项目才核验授权归属。标题、项目整理和自有标签页释放分别记录结果，不能用 cleanup 成功掩盖组织失败。
+创建时指定 `--type`/`--topic`（可选 `--language`），主题不明则保留原标题。配置项目时只从该项目专属输入框创建，并在填写和发送前核验项目 URL 与入口；没有先在外部创建再移动的路径。首条消息与持久化 URL 确认后立即命名；URL 延迟由后续观察补做。生成中命名使用任务记录中的临时只读观察页获取远端元数据并核验保存，原发送页继续生成，观察页核验身份后关闭。命名失败单独保存，不改变投递状态、不自动重发，显式 `organize` 可在生成期间恢复命名。
+
+自动命名使用 `MMDD｜TYPE｜Topic`，从远端 `createdAt` 转 `Asia/Shanghai` 得到日期，默认英文 TYPE，明确要求中文时使用 `organize --language zh`。无项目配置仍命名且不移动会话；有目标项目时核验既有归属，不移动会话。标题、项目整理和自有标签页释放分别记录结果，不能用 cleanup 成功掩盖组织失败。
 
 ## Durable identities
 
@@ -64,7 +66,7 @@ A single atomic private task document stores its runs and binding, avoiding cros
 1. Persist the initial task, attempt and first prepared run together; never publish an empty task before its run. Record intent and unique request marker before submitting a browser action.
 2. Check task identity, exact browser target, no active response and no unsent draft; verify configured model.
 3. Fill and submit only once; record the observed message ID when visible.
-4. Failures before Send remain `prepared` with their error; an explicit run-bound `retry` can continue only that unsent run after rechecking page/model/draft/prior history. `resume` only observes. If submission outcome is uncertain, retain that state. Reconcile by marker on the same conversation/owned draft. Never retry Send just because a command or wait timed out.
+4. Failures before Send remain `prepared` with their error; an explicit run-bound `retry` can continue only that unsent run after rechecking page/model/draft/prior history. `resume` observes delivery and can apply pending initial naming; it never sends a message. If submission outcome is uncertain, retain that state. Reconcile by marker on the same conversation/owned draft. Never retry Send just because a command or wait timed out.
 5. Match completion to the exact submitted user message, refuse a later user message and keep each run's reply.
 6. On restart, use conversation identity to recover. An existing user tab is borrowed, never retroactively marked owned.
 

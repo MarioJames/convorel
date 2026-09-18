@@ -73,7 +73,8 @@ cat > "$CONVOREL_PROMPT_FILE" <<'PROMPT'
 PROMPT
 
 bun --no-env-file src/cli.ts conversation start \
-  --id first-question --prompt-file "$CONVOREL_PROMPT_FILE"
+  --id first-question --prompt-file "$CONVOREL_PROMPT_FILE" \
+  --type EXP --topic '内容哈希'
 ```
 
 从输出中复制 `currentRun`，将下面的 `RUN_ID` 替换为该值：
@@ -81,7 +82,6 @@ bun --no-env-file src/cli.ts conversation start \
 ```bash
 bun --no-env-file src/cli.ts conversation wait --id first-question --run RUN_ID
 bun --no-env-file src/cli.ts conversation result --id first-question --run RUN_ID
-bun --no-env-file src/cli.ts conversation organize --id first-question --run RUN_ID --type EXP --topic '内容哈希'
 bun --no-env-file src/cli.ts conversation finish --id first-question --run RUN_ID
 ```
 
@@ -115,7 +115,7 @@ CONVOREL_PROJECT_NAME=实际项目名称
 # 可选：CONVOREL_MODEL=用户明确选择的模型
 ```
 
-URL 必须来自实际项目页面，URL/name 成对配置；不配置项目时，技能仍自动命名会话但不移动它。标题使用 `MMDD｜TYPE｜Topic`，日期来自会话 `createdAt` 转 `Asia/Shanghai`；默认英文 TYPE，明确要求中文时用 `organize --language zh`。同名进程环境变量包括空值都优先于安装根 `.env`。新 task 保存配置 snapshot，续谈保留原模型/项目，修改环境不会改写旧 task。
+URL 必须来自实际项目页面，URL/name 成对配置。配置项目后直接在该项目的“新建对话”输入框创建；项目入口不匹配则在发送前停止，不在普通会话中创建后移动。标题使用 `MMDD｜TYPE｜Topic`，日期来自会话 `createdAt` 转 `Asia/Shanghai`；默认英文 TYPE，明确要求中文时用 `start --language zh`。创建时通过 `--type`/`--topic` 提供命名信息，首条消息与持久化 URL 确认后立即改名，不等待回复完成；主题不明时省略命名参数，保留原标题。URL 延迟时 `resume`/`wait` 会补做尚未开始的命名。命名失败独立记录在 `organization.error`，检查后用 `organize --id ID --run RUN_ID --type EXP --topic '具体主题'` 显式恢复，不重发消息；命名只改标题，项目归属不符则报错。同名进程环境变量包括空值都优先于安装根 `.env`。新 task 保存配置 snapshot，续谈保留原模型/项目，修改环境不会改写旧 task。
 
 技能会整理证据、处理意见并清理已完成的自有标签页。等待可以使用宿主后台进程或分段 CLI wait；Herdr 可用时才增强为 service lane，无需安装 Herdr 或记忆服务。
 
