@@ -1209,3 +1209,65 @@ for (const mismatch of [
     expect(p.draft).toBe("");
   });
 }
+
+for (const mode of [
+  "observed",
+  "observed-over-config",
+  "config-fallback",
+  "default-fallback",
+]) {
+  test(`recovery retains its observed model and both verifications: ${mode}`, async () => {
+    const { state, browser, t, options } = await missingDelivery();
+    t.config.model = mode.includes("config") ? "5.6 Pro" : undefined;
+    t.runs[1].observedModel = mode.startsWith("observed") ? "6 Pro" : undefined;
+    state.write("task-" + t.id, t);
+    const checks: Record<string, string>[] = [];
+    const expected = t.runs[1].observedModel || t.config.model || "";
+    const selected = expected || "7 Pro";
+    const conversation = new Conversation(
+      state,
+      browser as any,
+      async (_b, opts) => {
+        checks.push(opts);
+        if (opts.model !== (checks.length === 1 ? expected : selected))
+          throw new Error(
+            "Unexpected model selection; original model must be retained",
+          );
+        return { observedModel: selected };
+      },
+    );
+    const result = await conversation.recoverSend(t.id, t.currentRun, options);
+    expect(result.runs[1].state).toBe("waiting");
+    expect(checks).toEqual([
+      { url: t.url!, target: t.binding!.target, model: expected },
+      {
+        url: t.url!,
+        target: t.binding!.target,
+        model: selected,
+        "verify-only": "true",
+      },
+    ]);
+    expect(result.runs[1].observedModel).toBe(selected);
+    expect(browser.sends).toBe(3);
+  });
+}
+
+test("recovery retaining a model still refuses a failed final verification", async () => {
+  const { state, browser, t, options } = await missingDelivery();
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async (_b, opts) => {
+      if (opts["verify-only"] === "true")
+        throw new Error("MODEL_UNVERIFIED: configured model did not persist");
+      return { observedModel: "6 Pro" };
+    },
+  );
+  const result = await conversation.recoverSend(t.id, t.currentRun, options);
+  expect(result.runs[1].state).toBe("blocked");
+  expect(result.runs[1].error).toContain(
+    "MODEL_UNVERIFIED: configured model did not persist",
+  );
+  expect(result.runs[1].sendRecoveries).toBeUndefined();
+  expect(browser.sends).toBe(2);
+});

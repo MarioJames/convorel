@@ -669,7 +669,7 @@ export class Conversation {
       const observed = await this.verify(b, {
         url: p.url,
         target: t.binding!.target,
-        model: t.config.model || "",
+        model: (recovery && r.observedModel) || t.config.model || "",
       });
       this.guard(t);
       r.observedModel = observed.observedModel;
