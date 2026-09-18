@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Browser, clearDraft, sendPrompt } from "../src/browser.ts";
 import { command } from "../src/command.ts";
+import { classify } from "../src/chatgpt/page.ts";
 
 const chromePath = process.argv[process.argv.indexOf("--chrome") + 1];
 if (!process.argv.includes("--chrome") || !chromePath)
@@ -183,6 +184,123 @@ try {
     [],
     "fixture must not produce browser page errors",
   );
+  // Reduced from the captured failure: ordinary paragraph + Retry, without role=alert
+  // or a guaranteed data-message-author-role wrapper on the failed response.
+  const failureHtml = readFileSync(
+    new URL("./fixtures/generation-error.html", import.meta.url),
+    "utf8",
+  );
+  const failureUrl = "data:text/html," + encodeURIComponent(failureHtml);
+  const failureTab = await tabs("new", failureUrl);
+  assert.equal((await list()).length, 3);
+  const failurePage = await controller.page(failureTab.targetId);
+  const registeredUrl = "https://chatgpt.com/c/fixture";
+  const outcome = async () => {
+    const observed = await failurePage.read();
+    return classify({ ...observed, url: registeredUrl }, registeredUrl, "u1");
+  };
+  assert.equal(
+    (await outcome()).state,
+    "blocked",
+    "current failed response stops waiting",
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('#failed-response').setAttribute('data-message-author-role', 'assistant'); document.querySelector('#failed-response').setAttribute('data-message-id', 'a1')`,
+  );
+  assert.equal(
+    (await outcome()).state,
+    "blocked",
+    "failure inside an assistant message is also recognized",
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('#failed-response').removeAttribute('data-message-author-role'); document.querySelector('#failed-response').removeAttribute('data-message-id'); document.querySelector('#failed-response').insertAdjacentHTML('beforebegin', '<article data-turn="assistant" id="failed-turn"><div data-message-author-role="assistant" data-message-id="a1">Partial response</div><button aria-label="Copy response">Copy</button></article>'); document.querySelector('#failed-turn').append(document.querySelector('#failed-response'))`,
+  );
+  assert.equal(
+    (await outcome()).state,
+    "blocked",
+    "error sibling overrides a copyable partial response",
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('#failed-response').setAttribute('role', 'alert')`,
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('main').insertAdjacentHTML('beforeend', '<button aria-label="Stop answering">Stop</button>')`,
+  );
+  assert.equal(
+    (await outcome()).state,
+    "waiting",
+    "Retry residue cannot override active generation",
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('[aria-label="Stop answering"]').remove(); document.querySelector('main').insertAdjacentHTML('beforeend', '<div data-turn="assistant"><div data-message-author-role="assistant" data-message-id="a2">Recovered</div><button aria-label="Copy response">Copy</button></div>')`,
+  );
+  assert.equal(
+    (await outcome()).state,
+    "complete",
+    "newer successful response supersedes the failed attempt",
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('[data-message-id="a2"]').parentElement.remove(); document.querySelector('[data-message-id="u1"]').before(document.querySelector('#failed-turn'))`,
+  );
+  assert.equal(
+    (await outcome()).state,
+    "waiting",
+    "historical failed response cannot block a later request",
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('[data-message-id="u1"]').after(document.querySelector('#failed-response')); document.querySelector('#failed-response').hidden = true`,
+  );
+  assert.equal(
+    (await outcome()).state,
+    "waiting",
+    "hidden failure is not a current UI error",
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('#failed-response').hidden = false; document.querySelector('#failed-response button').remove()`,
+  );
+  // Without an error alert or Retry control, matching prose alone is not failure evidence.
+  await failurePage.run(
+    "eval",
+    `document.querySelector('#failed-response').removeAttribute('role')`,
+  );
+  assert.equal(
+    (await outcome()).state,
+    "waiting",
+    "quoted error text alone is not a generation failure",
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('#failed-response').insertAdjacentHTML('beforeend', '<button>Retry</button>')`,
+  );
+  await failurePage.run(
+    "eval",
+    `document.querySelector('#failed-response').hidden = false; document.querySelector('main').insertAdjacentHTML('beforeend', '<div data-message-author-role="user" data-message-id="u2">Later request</div>')`,
+  );
+  assert.equal(
+    (await outcome()).state,
+    "superseded",
+    "later user turns retain precedence",
+  );
+  assert.equal(
+    (
+      await failurePage.run(
+        "eval",
+        "(window.retries || 0) + (window.sends || 0)",
+      )
+    ).result,
+    0,
+    "observation never retries or resends",
+  );
+  assert.deepEqual((await failurePage.run("errors")).errors, []);
+  await tabs("close", failureTab.targetId);
   await tabs("close", created.targetId);
   await assert.rejects(
     b.read(),
@@ -201,7 +319,7 @@ try {
     JSON.stringify({
       passed: true,
       initialTabs: 1,
-      peakTabs: 2,
+      peakTabs: 3,
       remainingTabs: 1,
       pageErrors: pageErrors.errors,
       checks: [
@@ -218,6 +336,8 @@ try {
         "localized structural submit",
         "stop button exclusion",
         "send obstruction",
+        "current and historical generation errors",
+        "generation recovery without resend",
       ],
       cdp,
     }),

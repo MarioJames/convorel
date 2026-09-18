@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <title>Generation failure fixture</title>
+  <main>
+    <div data-message-author-role="user" data-message-id="u1">Review</div>
+    <section id="failed-response">
+      <h4></h4>
+      <p>
+        Something went wrong while generating the response. If this issue
+        persists please contact us through our help center at
+        <a href="https://help.openai.com">help.openai.com</a>.
+      </p>
+      <button onclick="window.retries = (window.retries || 0) + 1">
+        Retry
+      </button>
+    </section>
+    <form
+      onsubmit="event.preventDefault(); window.sends = (window.sends || 0) + 1"
+    >
+      <textarea id="prompt-textarea"></textarea>
+      <button data-testid="send-button" type="submit">Send</button>
+    </form>
+  </main>
+</html>

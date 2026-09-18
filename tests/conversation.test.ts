@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { State } from "../src/state.ts";
 import { Conversation } from "../src/conversation.ts";
 import { ObservationError } from "../src/browser.ts";
+import { waitForConversation } from "../src/wait.ts";
 import {
   conversationStatus,
   conversationExitCode,
@@ -115,6 +116,55 @@ function setup() {
   }));
   return { state, browser, conversation };
 }
+test("generation failure stops wait with confirmed delivery and resumes only by observing the original turn", async () => {
+  const { state, browser, conversation } = setup();
+  const t = await conversation.start("generation-failed", "Review");
+  const p = [...browser.pages.values()][0];
+  p.generating = false;
+  p.messages.push({
+    id: "a-failed",
+    role: "assistant",
+    text: "Partial response",
+    final: true,
+    error:
+      "Response generation failed; inspect the original reply's Retry control",
+  });
+  const failed = await conversation.resume(t.id, t.currentRun);
+  expect(conversationStatus(failed)).toMatchObject({
+    state: "blocked",
+    delivery: "confirmed",
+    phase: "needs_attention",
+    nextAction: "inspect",
+    error: p.messages.at(-1).error,
+  });
+  const reports: any[] = [];
+  expect(
+    await waitForConversation(
+      state,
+      conversation,
+      t.id,
+      t.currentRun,
+      1,
+      new AbortController().signal,
+      (r) => reports.push(r),
+    ),
+  ).toBe(2);
+  expect(reports).toHaveLength(1);
+  expect(reports[0].phase).toBe("needs_attention");
+  await expect(conversation.retry(t.id, t.currentRun)).rejects.toThrow(
+    "RUN_NOT_PREPARED",
+  );
+  expect(browser.sends).toBe(1);
+  p.generating = true;
+  expect(
+    conversationStatus(await conversation.resume(t.id, t.currentRun)),
+  ).toMatchObject({ state: "waiting", phase: "awaiting_reply", error: null });
+  browser.complete();
+  expect(
+    conversationStatus(await conversation.resume(t.id, t.currentRun)).phase,
+  ).toBe("complete");
+  expect(browser.sends).toBe(1);
+});
 test("an error after recognizing the submitted message never restores permission to send", async () => {
   const { state, browser, conversation } = setup();
   const write = state.write.bind(state);
