@@ -162,7 +162,7 @@ export class Conversation {
     t.attemptId = randomUUID();
     this.save(t);
   }
-  private async open(t: Task) {
+  private async open(t: Task, completedFollowup = false) {
     const epoch = await this.browser.epoch();
     this.guard(t);
     const { tabs } = await this.browser.tabs("list");
@@ -180,7 +180,25 @@ export class Conversation {
       throw new Error(
         "OPEN_UNKNOWN: inspect the created page; no automatic replacement",
       );
-    const existing = t.url ? tabs.filter((x: any) => same(x.url, t.url!)) : [];
+    // A completed followup may restore its URL on a new target, but must never
+    // borrow a target claimed by another task, even if that target navigated here.
+    // The caller verifies the saved completed branch before creating a new run.
+    const claimed = new Set(
+      completedFollowup
+        ? (this.store.tasks() as Task[])
+            .filter(
+              (other) =>
+                other.id !== t.id &&
+                other.binding &&
+                !other.binding.closed &&
+                other.binding.epoch === epoch,
+            )
+            .map((other) => other.binding!.target)
+        : [],
+    );
+    const existing = t.url
+      ? tabs.filter((x: any) => same(x.url, t.url!) && !claimed.has(x.targetId))
+      : [];
     if (existing.length > 1) throw new Error("AMBIGUOUS_CONVERSATION_TABS");
     if (existing.length) {
       t.binding = { target: existing[0].targetId, epoch, owned: false };
@@ -205,8 +223,8 @@ export class Conversation {
     this.save(t);
     return { target: created.targetId, created: true };
   }
-  private async page(t: Task) {
-    const { target, created } = await this.open(t);
+  private async page(t: Task, completedFollowup = false) {
+    const { target, created } = await this.open(t, completedFollowup);
     this.guard(t);
     const b = await this.browser.page(target);
     // A newly opened saved URL can initially expose about:blank or partial history.
@@ -379,7 +397,7 @@ export class Conversation {
       // Check the previous completed turn before assigning a successor.
       if (t.currentRun) {
         this.begin(t);
-        const b = await this.page(t),
+        const b = await this.page(t, true),
           p = await this.observe(t, b);
         this.safeCompleted(t, p);
       }

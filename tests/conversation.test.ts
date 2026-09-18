@@ -622,6 +622,143 @@ test("followup restores a closed conversation after page loading and retains ear
   expect(next.runs[1].state).toBe("waiting");
   expect(browser.sends).toBe(2);
 });
+async function completedWithClaimedTab() {
+  const setupResult = setup();
+  const { state, browser, conversation } = setupResult;
+  const first = await conversation.start("continued", "Initial question");
+  browser.complete();
+  await conversation.poll(first.id, first.currentRun);
+  const savedPage = structuredClone(browser.pages.get(first.binding!.target));
+  await conversation.finish(first.id, first.currentRun);
+  browser.sendReady = false;
+  const other = await conversation.start("occupant", "Unsent question");
+  // Its registered URL differs, but its target has navigated to this conversation.
+  other.url = "https://chatgpt.com/c/other-conversation";
+  state.write("task-" + other.id, other);
+  const target = other.binding!.target;
+  browser.targets.find((t) => t.targetId === target).url = first.url;
+  browser.pages.get(target).url = first.url;
+  browser.pages.get(target).draft = "Other task's private draft";
+  browser.sendReady = true;
+  const tabs = browser.tabs.bind(browser);
+  browser.tabs = async (...args: string[]) => {
+    const result = await tabs(...args);
+    if (args[0] === "new" && args[1] === first.url)
+      Object.assign(
+        browser.pages.get(result.targetId!),
+        structuredClone(savedPage),
+      );
+    return result;
+  };
+  return { ...setupResult, first, other, savedPage };
+}
+
+test.each([true, false])(
+  "completed followup skips a claimed target (owned=%s) and sends once on its own restored page",
+  async (owned) => {
+    const { state, browser, conversation, first, other } =
+      await completedWithClaimedTab();
+    other.binding!.owned = owned;
+    state.write("task-" + other.id, other);
+    const otherPage = structuredClone(browser.pages.get(other.binding!.target));
+    const targets = structuredClone(browser.targets);
+    const page = browser.page.bind(browser);
+    browser.page = async (target) => {
+      expect(target).not.toBe(other.binding!.target);
+      return page(target);
+    };
+    const next = await conversation.start(first.id, "Follow-up", "next", true);
+    expect(next.binding).toMatchObject({ owned: true, epoch: "epoch1" });
+    expect(next.binding!.target).not.toBe(other.binding!.target);
+    expect(next.url).toBe(first.url);
+    expect(next.runs).toHaveLength(2);
+    expect(next.runs[0].id).toBe(first.currentRun);
+    expect(next.runs[0].reply?.text).toBe("Answer");
+    expect(next.runs[1].state).toBe("waiting");
+    expect(browser.sends).toBe(2);
+    expect(browser.targets).toEqual([
+      ...targets,
+      { targetId: next.binding!.target, url: first.url },
+    ]);
+    expect(conversation.get(other.id)).toEqual(other);
+    expect(browser.pages.get(other.binding!.target)).toEqual(otherPage);
+    expect(
+      await conversation.start(first.id, "Follow-up", "next", true),
+    ).toEqual(next);
+    expect(browser.sends).toBe(2);
+  },
+);
+
+test("restored followup verifies the entire completed branch before creating its run", async () => {
+  const { browser, conversation, first, other, savedPage } =
+    await completedWithClaimedTab();
+  savedPage.messages.push({
+    id: "foreign-user",
+    role: "user",
+    text: "Later message",
+    final: false,
+  });
+  const otherPage = structuredClone(browser.pages.get(other.binding!.target));
+  await expect(
+    conversation.start(first.id, "Follow-up", "next", true),
+  ).rejects.toThrow("COMPLETED_TURN_CHANGED");
+  const after = conversation.get(first.id);
+  expect(after.currentRun).toBe(first.currentRun);
+  expect(after.runs).toHaveLength(1);
+  expect(after.runs[0].state).toBe("complete");
+  expect(browser.sends).toBe(1);
+  expect(conversation.get(other.id)).toEqual(other);
+  expect(browser.pages.get(other.binding!.target)).toEqual(otherPage);
+});
+
+test("prepared retry still rejects a conflicting target instead of replacing it", async () => {
+  const { browser, conversation, other } = await completedWithClaimedTab();
+  const conflicting = conversation.get("continued");
+  conflicting.id = "conflicting";
+  conflicting.url = undefined;
+  conflicting.binding = { ...other.binding! };
+  conversation.store.write("task-conflicting", conflicting);
+  const targets = structuredClone(browser.targets);
+  await expect(conversation.retry(other.id, other.currentRun)).rejects.toThrow(
+    "TARGET_CONFLICT",
+  );
+  expect(browser.targets).toEqual(targets);
+  expect(browser.sends).toBe(1);
+});
+
+test.each([1, 2])(
+  "completed followup considers only unclaimed candidates and preserves ambiguity (%s available)",
+  async (count) => {
+    const { browser, conversation, first, other } =
+      await completedWithClaimedTab();
+    const candidates = [];
+    for (let n = 0; n < count; n++)
+      candidates.push(await browser.tabs("new", first.url!));
+    const targets = structuredClone(browser.targets);
+    if (count === 1) {
+      const next = await conversation.start(
+        first.id,
+        "Follow-up",
+        "next",
+        true,
+      );
+      expect(next.binding).toMatchObject({
+        target: candidates[0]!.targetId,
+        owned: false,
+      });
+      expect(browser.sends).toBe(2);
+    } else {
+      await expect(
+        conversation.start(first.id, "Follow-up", "next", true),
+      ).rejects.toThrow("AMBIGUOUS_CONVERSATION_TABS");
+      expect(conversation.get(first.id).runs).toHaveLength(1);
+      expect(browser.sends).toBe(1);
+    }
+    expect(browser.targets).toEqual(targets);
+    expect(conversation.get(other.id)).toEqual(other);
+  },
+);
+
 test("composer nonbreaking spaces preserve indentation without accepting changed words", async () => {
   const { browser, conversation } = setup();
   const original = browser.page.bind(browser);

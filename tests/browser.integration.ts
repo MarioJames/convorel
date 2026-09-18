@@ -7,12 +7,16 @@ import {
   existsSync,
   writeFileSync,
   rmSync,
+  mkdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Browser, clearDraft, sendPrompt } from "../src/browser.ts";
 import { command } from "../src/command.ts";
 import { classify } from "../src/chatgpt/page.ts";
+import { Conversation, type Task } from "../src/conversation.ts";
+import { State } from "../src/state.ts";
+import { sha } from "../src/workspace.ts";
 
 const chromePath = process.argv[process.argv.indexOf("--chrome") + 1];
 if (!process.argv.includes("--chrome") || !chromePath)
@@ -315,6 +319,116 @@ try {
     (await list()).map((p) => p.id),
     initial.map((p) => p.id),
   );
+  // Exercise followup restoration with real CDP targets and DOM interaction.
+  // Only the saved ChatGPT URL/model are substituted; fixtures stay offline.
+  const followupUrl = "https://chatgpt.com/c/restored-fixture";
+  const followupHtml = html.replace(
+    "window.sends=(window.sends||0)+1",
+    "window.sends=(window.sends||0)+1;const m=document.createElement('div');m.dataset.messageAuthorRole='user';m.dataset.messageId='u2';m.textContent=document.querySelector('textarea').value;document.querySelector('main').append(m);document.querySelector('textarea').value=''",
+  );
+  const fixtureUrl = "data:text/html," + encodeURIComponent(followupHtml);
+  const claimedTab = await tabs("new", fixtureUrl);
+  const claimedPage = await controller.page(claimedTab.targetId);
+  await claimedPage.run("fill", "#prompt-textarea", "Other task's draft");
+  const claimedBefore = await claimedPage.read();
+  const fixtureState = new State(join(root, "followup-state"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  const epoch = await controller.epoch();
+  const completed: Task = {
+    version: 1,
+    id: "continued",
+    config: { version: 1, workspace, cdp, model: "6 Pro" },
+    workspaceId: "fixture",
+    url: followupUrl,
+    binding: { target: "closed-target", epoch, owned: true, closed: true },
+    currentRun: "completed-run",
+    attemptId: "completed-attempt",
+    runs: [
+      {
+        id: "completed-run",
+        requestId: "initial",
+        inputHash: sha("Review"),
+        prompt: "Review",
+        promptHash: sha("Review"),
+        marker: "initial-marker",
+        state: "complete",
+        userMessageId: "u1",
+        reply: { id: "a1", role: "assistant", text: "Done", final: true },
+        replyHash: sha("Done"),
+        branch: ["u1", "a1"],
+        createdAt: new Date().toISOString(),
+      },
+    ],
+  };
+  const occupant: Task = {
+    ...structuredClone(completed),
+    id: "occupant",
+    url: "https://chatgpt.com/c/other-fixture",
+    binding: { target: claimedTab.targetId, epoch, owned: true },
+  };
+  fixtureState.write("task-continued", completed);
+  fixtureState.write("task-occupant", occupant);
+  const adapter = {
+    epoch: () => controller.epoch(),
+    tabs: async (...args: string[]) => {
+      if (args[0] === "new") {
+        assert.equal(args[1], followupUrl);
+        return tabs("new", fixtureUrl);
+      }
+      assert.equal(args[0], "list", "restoration must not close any target");
+      const result = await tabs(...args);
+      return {
+        ...result,
+        tabs: result.tabs.map((t: any) => ({
+          ...t,
+          url: t.url === fixtureUrl ? followupUrl : t.url,
+        })),
+      };
+    },
+    page: async (target: string) => {
+      assert.notEqual(
+        target,
+        claimedTab.targetId,
+        "never bind the occupied page",
+      );
+      const page = await controller.page(target);
+      return {
+        ...page,
+        read: async () => ({ ...(await page.read()), url: followupUrl }),
+      };
+    },
+  };
+  const conversation = new Conversation(
+    fixtureState,
+    adapter as unknown as Browser,
+    async () => ({ observedModel: "6 Pro" }),
+  );
+  const restoredTask = await conversation.start(
+    "continued",
+    "Follow-up",
+    "next",
+    true,
+  );
+  assert.equal(restoredTask.runs.length, 2);
+  assert.equal(restoredTask.runs[1]!.state, "waiting");
+  assert.equal(restoredTask.runs[0]!.id, "completed-run");
+  assert.equal(restoredTask.binding!.owned, true);
+  assert.equal((await list()).length, initial.length + 2);
+  const restoredTaskPage = await controller.page(restoredTask.binding!.target);
+  assert.equal((await restoredTaskPage.run("eval", "window.sends")).result, 1);
+  await conversation.start("continued", "Follow-up", "next", true);
+  assert.equal((await restoredTaskPage.run("eval", "window.sends")).result, 1);
+  assert.deepEqual(await claimedPage.read(), claimedBefore);
+  assert.deepEqual(fixtureState.read("task-occupant"), occupant);
+  assert.deepEqual((await restoredTaskPage.run("errors")).errors, []);
+  assert.deepEqual((await claimedPage.run("errors")).errors, []);
+  await tabs("close", restoredTask.binding!.target);
+  await tabs("close", claimedTab.targetId);
+  assert.deepEqual(
+    (await list()).map((p) => p.id),
+    initial.map((p) => p.id),
+  );
   console.log(
     JSON.stringify({
       passed: true,
@@ -338,6 +452,7 @@ try {
         "send obstruction",
         "current and historical generation errors",
         "generation recovery without resend",
+        "completed followup restores without touching another task's target",
       ],
       cdp,
     }),
