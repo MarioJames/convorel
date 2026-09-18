@@ -89,3 +89,9 @@ bun run format:check
 bun run test:package
 bun run test:browser --chrome /path/to/installed/chrome
 ```
+
+## 2026-09-18 — rejected-send recovery
+
+Added offline fixtures reproducing optimistic user insertion followed by disappearance, then an explicit, run-bound recovery using operator-confirmed Cloudflare rejection metadata. Coverage checks unchanged task/run/prompt and previous result, durable old-user/attempt audit before one click, stale identity/evidence, missing or changed anchors, ownership/epoch/target drift, late marker/draft changes, legacy records, and transport failure without retry permission. CLI fixtures check required confirmation and reject waiting delivery before browser access.
+
+`bun run check` passed TypeScript and all 151 tests; two additional focused regression tests passed afterward (legacy records/allowlisted audit and final composer recheck). No shared Chrome/CDP, task state, watcher, tunnel or service was accessed or modified. Fixtures use temporary state and release their resources. Live recovery and business-review completion remain with the parent operator. Automatic POST-response observation is outside this change; DOM-confirmed delivery still needs subsequent result verification.

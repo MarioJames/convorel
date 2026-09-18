@@ -908,3 +908,262 @@ test("explicit prepared workspace correction retains prompt/run and rejects stal
   ).rejects.toThrow("RUN_NOT_PREPARED");
   expect(browser.sends).toBe(0);
 });
+
+async function missingDelivery() {
+  const ctx = setup();
+  const { conversation, browser } = ctx;
+  const first = await conversation.start("missing-send", "Architecture review");
+  browser.complete();
+  await conversation.poll(first.id, first.currentRun);
+  const sent = await conversation.start(
+    first.id,
+    "Result review\n",
+    "result",
+    true,
+  );
+  const p = browser.pages.get(sent.binding!.target);
+  p.messages = p.messages.slice(0, 2);
+  p.generating = false;
+  const blocked = await conversation.resume(sent.id, sent.currentRun);
+  const r = blocked.runs.at(-1)!;
+  const evidence = [
+    {
+      method: "POST",
+      url: "https://chatgpt.com/backend-api/f/conversation",
+      status: 403,
+      timestamp: Date.parse(r.submittedAt || r.createdAt),
+    },
+  ];
+  const options = {
+    expectedUserMessageId: r.userMessageId!,
+    expectedUrl: blocked.url!,
+    input: "Result review\n",
+    reason:
+      "Operator verified Cloudflare rejection and refreshed original page",
+    evidence,
+    rejectedAt: evidence[0].timestamp,
+    confirmCloudflareChallenge: true,
+  };
+  return { ...ctx, t: blocked, p, options };
+}
+
+test("explicit rejected-send recovery keeps task/run/prompt and durably audits the old user before sending once", async () => {
+  const { conversation, browser, t, options } = await missingDelivery();
+  const prior = structuredClone(t.runs[0]);
+  const original = browser.page.bind(browser);
+  browser.page = async (target) => {
+    const b = await original(target);
+    return {
+      ...b,
+      run: async (...args: string[]) => {
+        if (args[0] === "click") {
+          const saved = conversation.get(t.id).runs.at(-1)!;
+          expect(saved.state).toBe("submitting");
+          expect(saved.sendRecoveries?.at(-1)).toMatchObject({
+            priorUserMessageId: options.expectedUserMessageId,
+            priorAttemptId: t.attemptId,
+            reason: options.reason,
+            evidence: options.evidence[0],
+          });
+        }
+        return b.run(...args);
+      },
+    };
+  };
+  const recovered = await conversation.recoverSend(t.id, t.currentRun, options);
+  expect(recovered.currentRun).toBe(t.currentRun);
+  expect(recovered.url).toBe(t.url);
+  expect(recovered.runs).toHaveLength(2);
+  expect(recovered.runs[0]).toEqual(prior);
+  expect(recovered.runs[1].prompt).toBe(t.runs[1].prompt);
+  expect(recovered.runs[1].userMessageId).toBe("u3");
+  expect(recovered.runs[1].state).toBe("waiting");
+  expect(browser.sends).toBe(3);
+  await expect(
+    conversation.recoverSend(t.id, t.currentRun, options),
+  ).rejects.toThrow("RECOVERY_REQUIRES_BLOCKED_DELIVERY");
+  await expect(conversation.retry(t.id, t.currentRun)).rejects.toThrow(
+    "RUN_NOT_PREPARED",
+  );
+  await conversation.resume(t.id, t.currentRun);
+  expect(browser.sends).toBe(3);
+});
+
+for (const scenario of [
+  "stale-run",
+  "old-user",
+  "url",
+  "prompt",
+  "reason",
+  "unconfirmed",
+  "missing-evidence",
+  "wrong-status",
+  "wrong-endpoint",
+  "wrong-time",
+  "ambiguous-evidence",
+  "waiting",
+  "delivery_unknown",
+  "prepared",
+  "complete",
+  "borrowed",
+  "closed",
+  "epoch",
+  "target-gone",
+  "target-navigated",
+  "user-present",
+  "marker-present",
+  "draft",
+  "attachments",
+  "generating",
+  "no-composer",
+  "blocked-page",
+  "changed-reply",
+  "changed-branch",
+  "changed-prior-user",
+]) {
+  test(`rejected-send recovery refuses ${scenario} without filling, sending, or changing saved delivery`, async () => {
+    const { state, conversation, browser, t, p, options } =
+      await missingDelivery();
+    let run = t.currentRun;
+    if (scenario === "stale-run") run = "stale";
+    if (scenario === "old-user") options.expectedUserMessageId = "other";
+    if (scenario === "url") options.expectedUrl = "https://chatgpt.com/c/other";
+    if (scenario === "prompt") options.input += "changed";
+    if (scenario === "reason") options.reason = " ";
+    if (scenario === "unconfirmed") options.confirmCloudflareChallenge = false;
+    if (scenario === "missing-evidence") options.evidence = [];
+    if (scenario === "wrong-status") options.evidence[0].status = 200;
+    if (scenario === "wrong-endpoint") options.evidence[0].url += "/prepare";
+    if (scenario === "wrong-time") options.rejectedAt -= 60000;
+    if (scenario === "ambiguous-evidence")
+      options.evidence.push({ ...options.evidence[0] });
+    if (
+      ["waiting", "delivery_unknown", "prepared", "complete"].includes(scenario)
+    )
+      t.runs[1].state = scenario;
+    if (scenario === "borrowed") t.binding!.owned = false;
+    if (scenario === "closed") t.binding!.closed = true;
+    if (scenario === "epoch") browser.epochValue = "restarted";
+    if (scenario === "target-gone") browser.targets = [];
+    if (scenario === "target-navigated") browser.targets[0].url += "-other";
+    if (scenario === "user-present")
+      p.messages.push({
+        id: options.expectedUserMessageId,
+        role: "user",
+        text: "changed",
+      });
+    if (scenario === "marker-present")
+      p.messages.push({
+        id: "different",
+        role: "user",
+        text: t.runs[1].prompt,
+      });
+    if (scenario === "draft") p.draft = "User edit";
+    if (scenario === "attachments") p.attachments = true;
+    if (scenario === "generating") p.generating = true;
+    if (scenario === "no-composer") p.hasComposer = false;
+    if (scenario === "blocked-page") p.blocked = "Cloudflare";
+    if (scenario === "changed-reply") p.messages[1].text = "changed";
+    if (scenario === "changed-branch")
+      p.messages.splice(1, 0, {
+        id: "new-branch",
+        role: "assistant",
+        text: "new",
+      });
+    if (scenario === "changed-prior-user")
+      p.messages[0].text = "edited prior user";
+    state.write("task-" + t.id, t);
+    const before = conversation.get(t.id);
+    await expect(
+      conversation.recoverSend(t.id, run, options),
+    ).rejects.toThrow();
+    expect(conversation.get(t.id)).toEqual(before);
+    expect(browser.sends).toBe(2);
+    expect(p.draft).toBe(scenario === "draft" ? "User edit" : "");
+    expect(browser.nextTarget).toBe(1);
+  });
+}
+
+for (const drift of ["marker", "history", "target", "epoch"]) {
+  test(`rejected-send recovery rechecks ${drift} after model selection without granting ordinary retry`, async () => {
+    const { state, browser, t, p, options } = await missingDelivery();
+    const conversation = new Conversation(state, browser as any, async () => {
+      if (drift === "marker")
+        p.messages.push({ id: "late", role: "user", text: t.runs[1].prompt });
+      if (drift === "history") p.messages[1].text = "changed reply";
+      if (drift === "target") browser.targets = [];
+      if (drift === "epoch") browser.epochValue = "new epoch";
+      return { observedModel: "6 Pro" };
+    });
+    const result = await conversation.recoverSend(t.id, t.currentRun, options);
+    expect(result.runs[1].state).toBe("blocked");
+    expect(result.runs[1].userMessageId).toBe(options.expectedUserMessageId);
+    expect(result.runs[1].sendRecoveries).toBeUndefined();
+    expect(result.runs[1].error).toBeTruthy();
+    await expect(conversation.retry(t.id, t.currentRun)).rejects.toThrow(
+      "RUN_NOT_PREPARED",
+    );
+    expect(browser.sends).toBe(2);
+    expect(browser.nextTarget).toBe(1);
+  });
+}
+
+test("a recovery send transport failure stays uncertain, retains audit, and cannot reuse rejection evidence", async () => {
+  const { conversation, browser, t, options, p } = await missingDelivery();
+  browser.failSend = true;
+  const result = await conversation.recoverSend(t.id, t.currentRun, options);
+  expect(result.runs[1].state).toBe("delivery_unknown");
+  expect(result.runs[1].sendRecoveries).toHaveLength(1);
+  expect(result.runs[1].userMessageId).toBeUndefined();
+  await expect(conversation.retry(t.id, t.currentRun)).rejects.toThrow(
+    "RUN_NOT_PREPARED",
+  );
+  await expect(
+    conversation.recoverSend(t.id, t.currentRun, options),
+  ).rejects.toThrow("RECOVERY_REQUIRES_BLOCKED_DELIVERY");
+  const observed = await conversation.resume(t.id, t.currentRun);
+  const newId = observed.runs[1].userMessageId!;
+  p.messages = p.messages.slice(0, 2);
+  p.generating = false;
+  await conversation.resume(t.id, t.currentRun);
+  await expect(
+    conversation.recoverSend(t.id, t.currentRun, {
+      ...options,
+      expectedUserMessageId: newId,
+    }),
+  ).rejects.toThrow("REJECTED_SEND_EVIDENCE_REQUIRED");
+  expect(browser.sends).toBe(3);
+});
+
+test("legacy confirmed records without a send timestamp recover using creation time and persist only allowlisted evidence", async () => {
+  const { state, conversation, t, options } = await missingDelivery();
+  delete t.runs[1].submittedAt;
+  state.write("task-" + t.id, t);
+  const result = await conversation.recoverSend(t.id, t.currentRun, {
+    ...options,
+    evidence: [
+      { ...options.evidence[0], unrelatedMetadata: "must not be persisted" },
+    ],
+  });
+  expect(result.runs[1].state).toBe("waiting");
+  expect(result.runs[1].sendRecoveries![0].evidence).toEqual(
+    options.evidence[0],
+  );
+});
+
+test("recovery rechecks the composer after the final target check", async () => {
+  const { browser, conversation, t, p, options } = await missingDelivery();
+  const original = browser.tabs.bind(browser);
+  let lists = 0;
+  browser.tabs = async (...args) => {
+    if (args[0] === "list" && ++lists === 2)
+      p.draft = "User changed the composer";
+    return original(...args);
+  };
+  const result = await conversation.recoverSend(t.id, t.currentRun, options);
+  expect(result.runs[1].state).toBe("blocked");
+  expect(result.runs[1].error).toContain("RECOVERY_DRAFT_OR_SEND_CHANGED");
+  expect(result.runs[1].sendRecoveries).toBeUndefined();
+  expect(p.draft).toBe("User changed the composer");
+  expect(browser.sends).toBe(2);
+});

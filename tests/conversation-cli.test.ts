@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { State } from "../src/state.ts";
@@ -85,6 +85,35 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
       state: "waiting",
       nextAction: "wait",
     });
+    const promptFile = join(root, "prompt.md");
+    const evidenceFile = join(root, "rejection.json");
+    writeFileSync(promptFile, "Review");
+    writeFileSync(evidenceFile, "[]");
+    const recoveryArgs = [
+      "--expected-user-message",
+      "u1",
+      "--expected-url",
+      task.url,
+      "--prompt-file",
+      promptFile,
+      "--evidence-file",
+      evidenceFile,
+      "--rejected-at",
+      "1789714178071",
+      "--reason",
+      "Verified challenge rejection",
+    ];
+    const incompleteRecovery = await run("recover-send", "r1", recoveryArgs);
+    expect(incompleteRecovery.code).toBe(1);
+    expect(incompleteRecovery.err).toContain("confirm-cloudflare-challenge");
+    const unsafeRecovery = await run("recover-send", "r1", [
+      ...recoveryArgs,
+      "--confirm-cloudflare-challenge",
+      "true",
+    ]);
+    expect(unsafeRecovery.code).toBe(1);
+    expect(unsafeRecovery.err).toContain("RECOVERY_REQUIRES_BLOCKED_DELIVERY");
+    expect(store.read<any>("task-task")).toEqual(task);
     const otherWorkspace = join(root, "other-code");
     mkdirSync(otherWorkspace);
     const mismatch = await run("status", "r1", ["--workspace", otherWorkspace]);

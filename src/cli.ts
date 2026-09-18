@@ -44,6 +44,7 @@ conversation start --id ID --prompt-file FILE [--request-id KEY] [--workspace PA
 conversation followup --id ID --prompt-file FILE --request-id KEY [--workspace PATH]
 conversation status|resume|wait|result --id ID [--run UUID]
 conversation retry --id ID --run UUID [--workspace PATH]
+conversation recover-send --id ID --run UUID --expected-user-message ID --expected-url URL --prompt-file FILE --evidence-file FILE --rejected-at UNIX_MS --confirm-cloudflare-challenge true --reason TEXT [--workspace PATH]
 conversation clear-draft --id ID --run UUID --expected-draft-file FILE
 conversation rebind-workspace --id ID --run UUID --from-workspace PATH --workspace PATH
 conversation status --id ID [--run UUID] [--workspace EXPECTED_PATH]
@@ -274,6 +275,27 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (sub === "retry") {
     const t = await conversation.retry(id, required(o, "run"), o.workspace);
+    print({ ...t, summary: conversationStatus(t) });
+    return conversationExitCode(t, "start");
+  }
+  if (sub === "recover-send") {
+    const t = await conversation.recoverSend(
+      id,
+      required(o, "run"),
+      {
+        expectedUserMessageId: required(o, "expected-user-message"),
+        expectedUrl: required(o, "expected-url"),
+        input: readFileSync(realpathSync(required(o, "prompt-file")), "utf8"),
+        evidence: JSON.parse(
+          readFileSync(realpathSync(required(o, "evidence-file")), "utf8"),
+        ),
+        rejectedAt: Number(required(o, "rejected-at")),
+        confirmCloudflareChallenge:
+          required(o, "confirm-cloudflare-challenge") === "true",
+        reason: required(o, "reason"),
+      },
+      o.workspace,
+    );
     print({ ...t, summary: conversationStatus(t) });
     return conversationExitCode(t, "start");
   }

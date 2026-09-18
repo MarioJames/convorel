@@ -17,6 +17,15 @@ import { ensureModel } from "./chatgpt/model.ts";
 import { organizeConversation } from "./chatgpt/organize.ts";
 import { conversationConfig, type Config } from "./config.ts";
 export type { Config } from "./config.ts";
+export interface RejectedSendRecovery {
+  expectedUserMessageId: string;
+  expectedUrl: string;
+  input: string;
+  reason: string;
+  evidence: unknown;
+  rejectedAt: number;
+  confirmCloudflareChallenge: boolean;
+}
 interface Run {
   id: string;
   requestId: string;
@@ -34,6 +43,24 @@ interface Run {
   observedModel?: string;
   lastObservedAt?: string;
   observationError?: { at: string; message: string; retryable: boolean };
+  submittedAt?: string;
+  sendRecoveries?: {
+    at: string;
+    priorUserMessageId: string;
+    priorAttemptId: string;
+    attemptId: string;
+    reason: string;
+    target: string;
+    url: string;
+    priorError?: string;
+    evidence: {
+      method: string;
+      url: string;
+      status: number;
+      timestamp: number;
+    };
+    confirmedCloudflareChallenge: true;
+  }[];
   draftRecovery?: {
     draft: string;
     hash: string;
@@ -388,6 +415,148 @@ export class Conversation {
       return this.submitPrepared(t);
     });
   }
+  /** Operator-authorized recovery of a verified Cloudflare-rejected followup.
+   * DOM absence alone never grants permission to send again. */
+  async recoverSend(
+    id: string,
+    run: string,
+    options: RejectedSendRecovery,
+    workspace?: string,
+  ) {
+    return this.store.locked(async () => {
+      const t = this.get(id),
+        r = this.current(t, run);
+      this.checkWorkspace(t, workspace);
+      if (r.state !== "blocked" || !r.userMessageId || r.reply || r.branch)
+        throw new Error("RECOVERY_REQUIRES_BLOCKED_DELIVERY");
+      if (
+        !options.expectedUserMessageId ||
+        r.userMessageId !== options.expectedUserMessageId
+      )
+        throw new Error("EXPECTED_USER_MESSAGE_MISMATCH");
+      if (!t.url || options.expectedUrl !== t.url)
+        throw new Error("EXPECTED_URL_MISMATCH");
+      conversationId(t.url);
+      if (
+        sha(options.input) !== r.inputHash ||
+        sha(r.prompt) !== r.promptHash ||
+        r.marker !== `[CONVOREL:${r.id}]` ||
+        r.prompt !== `${r.marker}\n\n${options.input}`
+      )
+        throw new Error("RECOVERY_PROMPT_MISMATCH");
+      const evidence = Array.isArray(options.evidence)
+        ? options.evidence.filter(
+            (e: any) =>
+              e?.method === "POST" &&
+              e?.url === "https://chatgpt.com/backend-api/f/conversation",
+          )
+        : [];
+      const rejected = evidence[0];
+      if (
+        !options.reason?.trim() ||
+        options.reason.length > 2000 ||
+        options.confirmCloudflareChallenge !== true ||
+        evidence.length !== 1 ||
+        rejected.status !== 403 ||
+        rejected.timestamp !== options.rejectedAt ||
+        !Number.isSafeInteger(options.rejectedAt) ||
+        !Number.isFinite(Date.parse(r.submittedAt || r.createdAt)) ||
+        options.rejectedAt < Date.parse(r.submittedAt || r.createdAt) ||
+        options.rejectedAt > Date.now() ||
+        r.sendRecoveries?.some(
+          (a) => a.evidence.timestamp === options.rejectedAt,
+        )
+      )
+        throw new Error("REJECTED_SEND_EVIDENCE_REQUIRED");
+      const binding = t.binding;
+      if (!binding?.owned || binding.closed || binding.opening || t.opening)
+        throw new Error("RECOVERY_REQUIRES_OWNED_TARGET");
+      const checkTarget = async () => {
+        if (binding.epoch !== (await this.browser.epoch()))
+          throw new Error("BROWSER_RESTARTED");
+        this.guard(t);
+        const { tabs } = await this.browser.tabs("list");
+        this.guard(t);
+        if (
+          !tabs.some(
+            (x: any) => x.targetId === binding.target && x.url === t.url,
+          )
+        )
+          throw new Error("RECOVERY_TARGET_CHANGED");
+      };
+      const previous = t.runs.at(-2);
+      if (!previous || t.runs.at(-1) !== r)
+        throw new Error("RECOVERY_REQUIRES_COMPLETED_ANCHOR");
+      const checkPage = (p: PageState) => {
+        if (
+          p.url !== t.url ||
+          p.messages.some(
+            (m) =>
+              m.id === options.expectedUserMessageId ||
+              m.text.includes(r.marker),
+          )
+        )
+          throw new Error("RECOVERY_MESSAGE_OR_URL_CHANGED");
+        this.safeCompleted(t, { ...p, draft: "" }, previous);
+        const user = p.messages.find(
+          (m) => m.id === previous.userMessageId && m.role === "user",
+        );
+        const normalize = (s: string) => s.replace(/\u00a0/g, " ").trim();
+        if (
+          !user ||
+          !previous.promptHash ||
+          sha(previous.prompt) !== previous.promptHash ||
+          normalize(user.text) !== normalize(previous.prompt)
+        )
+          throw new Error("COMPLETED_USER_CHANGED");
+      };
+      await checkTarget();
+      // Never use page(t): recovery must not reopen, rebind or create a target.
+      const b = await this.browser.page(binding.target);
+      const p: PageState = await b.read();
+      this.guard(t);
+      checkPage(p);
+      if (p.draft === undefined || p.draft.trim())
+        throw new Error("RECOVERY_REQUIRES_EMPTY_COMPOSER");
+      const priorAttemptId = t.attemptId;
+      this.begin(t);
+      return this.submitPrepared(t, {
+        b,
+        checkPage,
+        beforeSend: async () => {
+          await checkTarget();
+          const latest: PageState = await b.read();
+          this.guard(t);
+          checkPage(latest);
+          if (
+            !latest.sendReady ||
+            latest.draft?.replace(/\u00a0/g, " ").trim() !==
+              r.prompt.replace(/\u00a0/g, " ").trim()
+          )
+            throw new Error("RECOVERY_DRAFT_OR_SEND_CHANGED");
+          (r.sendRecoveries ??= []).push({
+            at: new Date().toISOString(),
+            priorUserMessageId: options.expectedUserMessageId,
+            priorAttemptId,
+            attemptId: t.attemptId,
+            reason: options.reason,
+            target: binding.target,
+            url: t.url!,
+            priorError: r.error,
+            evidence: {
+              method: rejected.method,
+              url: rejected.url,
+              status: rejected.status,
+              timestamp: rejected.timestamp,
+            },
+            confirmedCloudflareChallenge: true,
+          });
+          r.userMessageId = undefined;
+          r.observationError = undefined;
+        },
+      });
+    });
+  }
   async rebindWorkspace(id: string, run: string, from: string, path: string) {
     return this.store.locked(async () => {
       const t = this.get(id),
@@ -454,13 +623,23 @@ export class Conversation {
       }
     });
   }
-  private async submitPrepared(t: Task) {
+  private async submitPrepared(
+    t: Task,
+    recovery?: {
+      b: any;
+      checkPage: (p: PageState) => void;
+      beforeSend: () => Promise<void>;
+    },
+  ) {
     const r = this.current(t),
       prompt = r.prompt;
     const draftText = (text: string) => text.replace(/\u00a0/g, " ").trim();
     try {
-      const b = await this.page(t);
+      const b = recovery?.b ?? (await this.page(t));
       let p = await this.observe(t, b);
+      recovery?.checkPage(p);
+      if (recovery && (p.draft === undefined || p.draft.trim()))
+        throw new Error("RECOVERY_REQUIRES_EMPTY_COMPOSER");
       // A new page may still be loading. No side effects during this bounded readiness wait.
       for (let n = 0; !p.hasComposer && !p.blocked && n < 20; n++) {
         await Bun.sleep(250);
@@ -471,6 +650,7 @@ export class Conversation {
       )
         return await this.reconcile(t, b);
       const checkDraft = (page: PageState) => {
+        recovery?.checkPage(page);
         if (page.generating || !page.hasComposer || page.attachments)
           throw new Error("PAGE_NOT_IDLE");
         if (page.draft?.trim() && draftText(page.draft) !== draftText(prompt))
@@ -523,9 +703,11 @@ export class Conversation {
       if (draftText(p.draft || "") !== draftText(prompt))
         throw new Error("DRAFT_CHANGED");
       if (!p.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
+      await recovery?.beforeSend();
       r.error = undefined;
       // Durable write precedes the first action capable of submitting a message.
       r.state = "submitting";
+      r.submittedAt = new Date().toISOString();
       this.save(t);
       this.guard(t);
       await sendPrompt(b, p);
