@@ -1,5 +1,15 @@
 # Validation
 
+## 2026-09-18 — live web batch acceptance of twelve tools
+
+One existing ChatGPT web conversation, using the configured 6 Pro model, invoked all twelve Convorel tools against a task-owned synthetic repository. The completed report records 33 MCP calls: 29 normal results and four expected errors. The remote interface reported evidence-v1; no tool was missing. Tree, glob discovery, text, literal search, Git status, log, commit details and version comparison were paginated to their terminal cursors. Both staged and unstaged patches were returned, and an already-deleted file was read from its historical commit. Native image inspection correctly identified the fixture's red left half and blue right half.
+
+Independent local evidence matched the web reply's two commit SHAs, random file contents, whole-file/image hashes, staged/unstaged patch hashes, historical patch hash, historical blob ID and blob hash. Sensitive and ignored synthetic files returned ACCESS_DENIED, a missing file returned FILE_NOT_FOUND, and an unknown revision returned GIT_FAILED. The persisted final reply's SHA-256 was verified. This establishes real web invocation, beyond local SDK discovery or service readiness.
+
+The fixture was small: this web run did not exercise large patch/message fragments, scan budgets, shallow clones or merge histories. It also exposed an identity distinction: read_file/read_image report the permitted root's workspaceId, while project-scoped tools report the project's workspaceId. Returned paths stayed inside the requested repository; callers must not assume those IDs are interchangeable. This acceptance records that semantic limitation without changing the interface.
+
+The completed conversation's title and existing project were verified, and its owned page was closed. Synthetic fixture data and local verification processes were released after evidence capture; private request/result/oracle records, the shared signed-in Chrome and the existing Convorel tunnel remain. No user repository contents or browser drafts were changed. The web URL is https://chatgpt.com/g/g-p-6aa94760a174819191d12fd6fef4aee6-lobe-agent/c/6aabedca-ae40-83ea-b381-9871bd417973.
+
 ## 2026-09-18 — complete read-only evidence interface
 
 The MCP interface now exposes twelve tools for project identity/capabilities, directory orientation, glob file discovery, scoped literal search, current text and image evidence, working-tree changes, commit history, commit details, version comparison and historical blobs. Structured directory entries and rendered text share tree. Strict output schemas are exercised by the real SDK client; images have native MCP content plus schema-validated metadata. Text/structured JSON is bounded to 64 KiB, image bytes to 1 MiB. Scan/depth limits, skipped files, clipped excerpts and line/file/patch/message continuations remain explicit.
