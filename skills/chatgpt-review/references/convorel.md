@@ -37,7 +37,7 @@ Convorel 从进程环境、其次从**安装根** `.env` 读取 `CONVOREL_MODEL`
 
 先用 `conversation list`，再用 `conversation status --id ID` 匹配需求和工作区；已有 active run 继续观察，已有适用结果直接复用。
 
-将完整请求写到私有 UTF-8 文件，按 [review-prompt.md](review-prompt.md) 补齐实际决策、约束、项目路径/revision、MCP 可读取路径、验证摘要和未决问题。代码审查补相关文件的 `路径:起始行:结束行` 引用和审查问题，默认通过 MCP 读取，不内嵌仓库源码；结果校验采用 [result-review.md](result-review.md) 的目标与实际结果对照。检查最终文件。Convorel 只附加关联 marker，不添加角色、项目路径、源码包或审查规则。
+将完整请求写到私有 UTF-8 文件，按 [review-prompt.md](review-prompt.md) 补齐实际决策、约束、项目路径/revision、MCP 可读取路径、验证摘要和未决问题。代码审查补相关文件的 `路径:起始行-结束行` 引用和审查问题，默认通过 MCP 读取，不内嵌仓库源码；结果校验采用 [result-review.md](result-review.md) 的目标与实际结果对照。检查最终文件。Convorel 只附加关联 marker，不添加角色、项目路径、源码包或审查规则。
 
 ```bash
 convorel_cli conversation start --id ID --prompt-file /private/request.md --workspace /absolute/project
