@@ -7,3 +7,7 @@ Tests must use disposable profiles and synthetic repositories. Never use a devel
 Changes to sending, recovery, ownership or file access need behavioral regression coverage. UI fixture tests do not establish compatibility with the live ChatGPT website. Record the tested browser, agent-browser version and limits in `docs/validation.md`.
 
 Retain upstream license notices when adapting code. Do not commit task state, conversation URLs containing private context, API keys, environment files or browser profiles.
+
+## Skill metadata
+
+Follow the same metadata convention as skill-foundry: keep the directory and `SKILL.md` frontmatter `name` as the lowercase, hyphenated installation/invocation identifier (`chatgpt-review`), and use an English title with spaces in `agents/openai.yaml` → `interface.display_name` (`ChatGPT Review`). Write frontmatter `description`, `interface.short_description`, and `interface.default_prompt` in Chinese, preserving technical names, the `$chatgpt-review` reference, and existing invocation policy. Ship `agents/openai.yaml` with the skill so consumers receive its display metadata.

@@ -86,6 +86,7 @@ try {
   );
   const skillFiles = [
     "SKILL.md",
+    "agents/openai.yaml",
     "references/convorel.md",
     "references/herdr.md",
     "references/proactive-review.md",

@@ -1,0 +1,4 @@
+interface:
+  display_name: "ChatGPT Review"
+  short_description: "通过 Convorel 调用 ChatGPT Pro 审查重要方案、疑难问题和开发结果"
+  default_prompt: "使用 $chatgpt-review 通过 Convorel 调用 ChatGPT Pro，结合目标、约束和代码证据审查当前方案或开发结果，并核验审查意见。"
