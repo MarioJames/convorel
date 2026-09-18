@@ -8,6 +8,19 @@ const gitHead = z
   .regex(/^[a-f0-9]{40,64}$/)
   .nullable();
 const workspaceId = z.string().regex(/^[a-f0-9]{20}$/);
+const identity = {
+  rootId: workspaceId.describe(
+    "Configured allowed-root identity; not authentication.",
+  ),
+  workspaceId: workspaceId.describe(
+    "Nearest Git checkout within the allowed root, or the root itself without Git.",
+  ),
+  workspacePath: z
+    .string()
+    .describe(
+      "Canonical path corresponding to workspaceId; path remains the requested scope.",
+    ),
+};
 const observedAt = z.iso.datetime();
 const mode = z.literal("live-read-only");
 const entry = z.strictObject({
@@ -43,14 +56,14 @@ export const outputSchemas = {
   // SDK 1.x requires a top-level object, so the two info results share an envelope.
   workspace_info: z.strictObject({
     roots: z
-      .array(z.strictObject({ path: z.string(), workspaceId }))
+      .array(z.strictObject({ path: z.string(), rootId: identity.rootId }))
       .min(1)
       .max(16),
     mode,
     server: z.strictObject({
       name: z.literal("convorel"),
       version: z.string(),
-      capabilityVersion: z.literal("evidence-v1"),
+      capabilityVersion: z.literal("evidence-v2"),
       tools: z.array(z.string()),
       maxStructuredResponseBytes: count,
       maxImageBytes: count,
@@ -58,7 +71,7 @@ export const outputSchemas = {
     workspace: z
       .strictObject({
         path: z.string(),
-        workspaceId,
+        ...identity,
         name: z.string(),
         gitHead,
         gitBranch: z.string().nullable(),
@@ -76,7 +89,7 @@ export const outputSchemas = {
       ),
   }),
   tree: listing.extend({
-    workspaceId,
+    ...identity,
     observedAt,
     entries: z
       .array(
@@ -112,7 +125,7 @@ export const outputSchemas = {
     hashScope: z.literal("whole-file"),
     sizeBytes: count,
     observedAt,
-    workspaceId,
+    ...identity,
   }),
   read_image: z.strictObject({
     path: z.string(),
@@ -121,7 +134,7 @@ export const outputSchemas = {
     sha256,
     hashScope: z.literal("whole-file"),
     observedAt,
-    workspaceId,
+    ...identity,
     note: z.string(),
   }),
   find_files: z.strictObject({
@@ -136,7 +149,7 @@ export const outputSchemas = {
     scanTruncated: z.boolean(),
     depthLimited: z.boolean(),
     scannedEntries: count,
-    workspaceId,
+    ...identity,
     observedAt,
     note: z.string(),
   }),
@@ -167,7 +180,7 @@ export const outputSchemas = {
     depthLimited: z.boolean(),
     skippedFiles: count,
     scannedBytes: count,
-    workspaceId,
+    ...identity,
     observedAt,
     note: z.string(),
   }),
@@ -183,7 +196,7 @@ export const outputSchemas = {
     offset: count,
     limit: count,
     nextOffset: count.nullable(),
-    workspaceId,
+    ...identity,
     observedAt,
   }),
   git_diff: z.strictObject({
@@ -212,12 +225,21 @@ export const outputSchemas = {
     sha256,
     hashScope: z.literal("returned-diff"),
     head: gitHead,
-    workspaceId,
+    ...identity,
     observedAt,
     note: z.string(),
   }),
-  git_log: gitHistoryOutputs.git_log.extend({ path: z.string() }),
-  git_show: gitHistoryOutputs.git_show.extend({ path: z.string() }),
-  git_compare: gitHistoryOutputs.git_compare.extend({ path: z.string() }),
-  git_read_file: gitHistoryOutputs.git_read_file.extend({ path: z.string() }),
+  git_log: gitHistoryOutputs.git_log.extend({ path: z.string(), ...identity }),
+  git_show: gitHistoryOutputs.git_show.extend({
+    path: z.string(),
+    ...identity,
+  }),
+  git_compare: gitHistoryOutputs.git_compare.extend({
+    path: z.string(),
+    ...identity,
+  }),
+  git_read_file: gitHistoryOutputs.git_read_file.extend({
+    path: z.string(),
+    ...identity,
+  }),
 };

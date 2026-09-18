@@ -43,7 +43,7 @@ export function tunnelInstructions(id: string, root: string, roots = [root]) {
     tunnelId: id,
     roots: new WorkspaceAccess(roots).roots.map((ws) => ({
       path: ws.root,
-      workspaceId: ws.id,
+      rootId: ws.id,
     })),
     requires: [
       "official tunnel-client on PATH",

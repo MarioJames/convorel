@@ -87,6 +87,8 @@ Set `CONVOREL_MCP_ROOTS` to a JSON array in the installation `.env` or process e
 
 All MCP tools use full `path` arguments (absolute paths or `~/` paths). `workspace_info` without a path lists the roots; with a path it identifies that directory. The CLI can also serve explicitly with `mcp serve --roots '["/absolute/root-a","/absolute/root-b"]'`. Root selection cannot bypass nested `.convorelignore` or `.gitignore` rules. `.env`, `.env.*` and credential files remain denied. Git worktrees require their gitdir/common-dir/object storage to remain in permitted roots; alternate object stores are unsupported.
 
+In `evidence-v2`, allowed roots are identified by `rootId`. Every tool also reports `workspaceId` and `workspacePath`: the nearest `.git` marker's directory within the allowed root, or the allowed root itself when no marker exists. Files, subdirectory queries and Git tools therefore agree on project identity. `path` remains the requested scope; discovery results stay relative to that scope. `workspace_info` places these identity fields inside `workspace`, or returns `workspace: null` for a roots-only request. Identity discovery neither follows Git storage links nor changes access policy. Refresh cached connector definitions when moving from the previous contract.
+
 ## 安装 chatgpt-review
 
 包装入口接受 `--agent codex|claude-code|codex,claude-code`、可选 `--scope user|project`（默认 `user`）和 `--cwd PATH`。安装命令在读取任务配置前处理，无需先 `init`：

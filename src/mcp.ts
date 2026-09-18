@@ -19,7 +19,10 @@ export function createServer(roots: string[]) {
     name: keyof typeof outputSchemas,
     description: string,
     inputSchema: any,
-    fn: (a: any) => Promise<any>,
+    fn: (
+      a: any,
+      identity: ReturnType<WorkspaceAccess["identity"]> | null,
+    ) => Promise<any>,
   ) => {
     server.registerTool(
       name,
@@ -36,7 +39,10 @@ export function createServer(roots: string[]) {
       },
       async (a: any) => {
         try {
-          const { imageData, ...data } = await fn(a);
+          const identity =
+            name === "workspace_info" ? null : access.identity(a.path);
+          const { imageData, ...result } = await fn(a, identity);
+          const data = { ...result, ...identity };
           const serialized = JSON.stringify(data);
           if (Buffer.byteLength(serialized) > MAX_OUT)
             throw new Error("RESPONSE_TOO_LARGE");
@@ -65,7 +71,7 @@ export function createServer(roots: string[]) {
   };
   add(
     "workspace_info",
-    "List allowed roots with workspace=null, or identify the full project path in workspace before reading. Read-only; workspaceId is not authentication.",
+    "List allowed roots by rootId with workspace=null, or identify the selected directory's project. workspaceId/workspacePath identify the nearest Git checkout inside the allowed root, falling back to that root without Git. path remains the requested scope. IDs are not authentication.",
     { path: z.string().optional() },
     async (a) => {
       const info = await access.info(a.path);
@@ -77,7 +83,7 @@ export function createServer(roots: string[]) {
         server: {
           name: "convorel",
           version: packageInfo.version,
-          capabilityVersion: "evidence-v1",
+          capabilityVersion: "evidence-v2",
           tools: Object.keys(outputSchemas),
           maxStructuredResponseBytes: MAX_OUT,
           maxImageBytes: 1024 * 1024,
@@ -95,7 +101,7 @@ export function createServer(roots: string[]) {
     "tree",
     "Show a bounded page of directory hierarchy for structural review, not proof of code dependencies. Returns both structured entries and rendered tree, sorted by relative path. Check depthLimited, scanTruncated, truncated and nextOffset; pages are live observations, not a snapshot.",
     directoryInput,
-    async (a) => {
+    async (a, identity) => {
       const workspace = access.directory(a.path);
       const listing = await workspace.list(".", a.depth, a.offset, a.limit);
       const entries = listing.entries.map((entry) => {
@@ -114,7 +120,7 @@ export function createServer(roots: string[]) {
         offset: a.offset as number,
         limit: a.limit as number,
         tree: "",
-        workspaceId: workspace.id,
+        ...identity!,
         observedAt: new Date().toISOString(),
         note: "Directory layout only, not dependency analysis. This page may omit parents returned on earlier pages. Depth-limited directories are not necessarily empty. Live pages may shift when files change; scanTruncated means unscanned entries cannot be recovered by nextOffset.",
       };

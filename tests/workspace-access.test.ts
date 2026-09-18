@@ -163,6 +163,15 @@ test("Git worktrees require allowed metadata and refuse alternate object stores"
     git("worktree", "add", "-qb", "fixture", checkout);
     writeFileSync(join(checkout, "code.ts"), "after\n");
     const allowed = new WorkspaceAccess([sources, work]);
+    const checkoutIdentity = allowed.identity(checkout);
+    expect(allowed.identity(join(checkout, "code.ts"))).toEqual(
+      checkoutIdentity,
+    );
+    expect(checkoutIdentity.workspacePath).toBe(checkout);
+    expect(checkoutIdentity.rootId).toBe(allowed.roots[1]!.id);
+    expect(checkoutIdentity.workspaceId).not.toBe(
+      allowed.identity(repo).workspaceId,
+    );
     expect((await allowed.directory(checkout).diff()).diff).toContain("+after");
     const restricted = new WorkspaceAccess([work]);
     await expect(restricted.directory(checkout).status()).rejects.toThrow(
@@ -181,6 +190,45 @@ test("Git worktrees require allowed metadata and refuse alternate object stores"
     await expect(allowed.directory(repo).status()).rejects.toThrow(
       "GIT_ALTERNATES_UNSUPPORTED",
     );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("project identity follows the closest checkout without escaping allowed roots or parent policy", async () => {
+  const base = mkdtempSync(join(tmpdir(), "convorel-identity-"));
+  try {
+    const root = join(base, "allowed");
+    const repo = join(root, "repo");
+    const nested = join(repo, "nested");
+    mkdirSync(join(base, ".git")); // An outside marker must never define identity.
+    mkdirSync(join(root, "plain/deep"), { recursive: true });
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    mkdirSync(join(nested, ".git"), { recursive: true });
+    mkdirSync(join(nested, "src"));
+    writeFileSync(join(nested, "src/file.txt"), "fixture");
+    const access = new WorkspaceAccess([root]);
+    const rootIdentity = access.identity(root);
+    expect(access.identity(join(root, "plain/deep"))).toEqual(rootIdentity);
+    expect(rootIdentity.workspacePath).toBe(root);
+    expect(rootIdentity.workspaceId).toBe(rootIdentity.rootId);
+    const identity = access.identity(join(nested, "src/file.txt"));
+    expect(identity).toEqual(access.identity(join(nested, "src")));
+    expect(identity).toEqual(access.identity(nested));
+    expect(identity.workspacePath).toBe(nested);
+    expect(identity.workspaceId).not.toBe(access.identity(repo).workspaceId);
+    expect(identity.rootId).toBe(rootIdentity.rootId);
+    symlinkSync(nested, join(root, "alias"));
+    expect(() => access.identity(join(root, "alias/src/file.txt"))).toThrow(
+      "POLICY_UNREADABLE",
+    );
+    writeFileSync(join(root, ".convorelignore"), "repo/nested/\n");
+    expect(() => access.identity(join(nested, "src/file.txt"))).toThrow(
+      "ACCESS_DENIED",
+    );
+    expect(() => access.identity(join(nested, "src"))).toThrow("ACCESS_DENIED");
+    await expect(access.info(nested)).rejects.toThrow("ACCESS_DENIED");
+    expect(() => access.identity(base)).toThrow("ACCESS_DENIED");
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

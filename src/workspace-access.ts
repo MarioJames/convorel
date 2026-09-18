@@ -1,6 +1,13 @@
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve, dirname, basename } from "node:path";
-import { realpathSync } from "node:fs";
+import {
+  isAbsolute,
+  relative,
+  resolve,
+  dirname,
+  basename,
+  join,
+} from "node:path";
+import { realpathSync, lstatSync } from "node:fs";
 import { Workspace } from "./workspace.ts";
 
 export function fullPath(path: string) {
@@ -69,6 +76,33 @@ export class WorkspaceAccess {
     const selected = this.file(path);
     return selected.workspace.subdirectory(selected.path);
   }
+  identity(path: string) {
+    const absolute = fullPath(path);
+    const { workspace: root, path: rel } = this.file(absolute);
+    // Keep identity discovery inside the same permission boundary as content.
+    if (!root.allowed(rel)) throw new Error("ACCESS_DENIED");
+    const isDirectory = lstatSync(absolute).isDirectory();
+    if (!root.allowed(rel, isDirectory)) throw new Error("ACCESS_DENIED");
+    let candidate = isDirectory ? absolute : dirname(absolute);
+    let workspacePath = root.root;
+    while (true) {
+      try {
+        // Inspect only the marker, never its contents or a linked Git store.
+        // A worktree .git file identifies the checkout, not its common repo.
+        lstatSync(join(candidate, ".git"));
+        workspacePath = candidate;
+        break;
+      } catch (e: any) {
+        if (e.code !== "ENOENT") throw e;
+      }
+      if (candidate === root.root) break;
+      candidate = dirname(candidate);
+    }
+    const project = root.subdirectory(
+      relative(root.root, workspacePath) || ".",
+    );
+    return { rootId: root.id, workspaceId: project.id, workspacePath };
+  }
   private storageAllowed(path: string) {
     try {
       const absolute = fullPath(path);
@@ -111,10 +145,16 @@ export class WorkspaceAccess {
     for (const root of this.roots) root.checkRoot();
     const roots = this.roots.map((ws) => ({
       path: ws.root,
-      workspaceId: ws.id,
+      rootId: ws.id,
     }));
-    return path
-      ? { ...(await this.directory(path).info()), path: fullPath(path), roots }
-      : { roots, mode: "live-read-only" };
+    if (!path) return { roots, mode: "live-read-only" };
+    this.directory(path); // workspace_info still accepts directories only.
+    const identity = this.identity(path);
+    return {
+      ...(await this.directory(identity.workspacePath).info()),
+      ...identity,
+      path: fullPath(path),
+      roots,
+    };
   }
 }

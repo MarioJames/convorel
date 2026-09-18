@@ -118,6 +118,75 @@ async function fixture() {
   }
 }
 
+test("all MCP tools distinguish allowed roots from stable project identity", async () => {
+  const f = await fixture();
+  try {
+    const repo = join(f.first, "project");
+    const src = join(repo, "src");
+    mkdirSync(src, { recursive: true });
+    writeFileSync(join(src, "code.txt"), "identity fixture\n");
+    writeFileSync(
+      join(src, "image.png"),
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6XcAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    f.git("-C", repo, "init", "-q");
+    f.git("-C", repo, "config", "user.name", "Fixture");
+    f.git("-C", repo, "config", "user.email", "fixture@example.invalid");
+    f.git("-C", repo, "add", ".");
+    f.git("-C", repo, "commit", "-qm", "identity");
+    const roots = (await f.success("workspace_info")).roots;
+    const rootId = roots.find((r: any) => r.path === f.first).rootId;
+    expect(rootId).toMatch(/^[a-f0-9]{20}$/);
+    const project = (await f.success("workspace_info", { path: repo }))
+      .workspace;
+    expect(project.rootId).toBe(rootId);
+    expect(project.workspaceId).not.toBe(rootId);
+    expect(project.workspacePath).toBe(repo);
+    const nested = (await f.success("workspace_info", { path: src })).workspace;
+    expect(nested.workspaceId).toBe(project.workspaceId);
+    expect(nested.gitHead).toBe(project.gitHead);
+    expect(nested.path).toBe(src);
+    const requests: [string, Record<string, unknown>][] = [
+      ["tree", { path: src }],
+      ["find_files", { path: src }],
+      ["search_workspace", { path: src, query: "identity" }],
+      ["read_file", { path: join(src, "code.txt") }],
+      ["read_image", { path: join(src, "image.png") }],
+      ["git_status", { path: repo }],
+      ["git_diff", { path: repo }],
+      ["git_log", { path: repo }],
+      ["git_show", { path: repo }],
+      ["git_compare", { path: repo, base: "HEAD", head: "HEAD" }],
+      ["git_read_file", { path: repo, filePath: "src/code.txt" }],
+    ];
+    for (const [name, args] of requests) {
+      const result = await f.call(name, args);
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        rootId,
+        workspaceId: project.workspaceId,
+        workspacePath: repo,
+        path: args.path,
+      });
+    }
+    const plain = await f.success("read_file", {
+      path: join(f.first, "hello.ts"),
+    });
+    expect(plain.workspaceId).toBe(rootId);
+    expect(plain.workspacePath).toBe(f.first);
+    const second = await f.success("read_file", {
+      path: join(f.second, "second.ts"),
+    });
+    expect(second.rootId).not.toBe(rootId);
+    expect(second.workspaceId).toBe(second.rootId);
+  } finally {
+    await f.close();
+  }
+}, 20000);
+
 test("real stdio client validates both workspace results, reads, searches and errors", async () => {
   const f = await fixture();
   try {
@@ -215,7 +284,7 @@ test("evidence workflow discovers capabilities, locates code and reads committed
   const f = await fixture();
   try {
     const info = await f.success("workspace_info", { path: f.first });
-    expect(info.server.capabilityVersion).toBe("evidence-v1");
+    expect(info.server.capabilityVersion).toBe("evidence-v2");
     expect(info.server.tools.sort()).toEqual(f.tools.map((t) => t.name).sort());
     const found = await f.success("find_files", {
       path: f.first,
