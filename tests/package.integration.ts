@@ -90,6 +90,7 @@ try {
     "references/herdr.md",
     "references/proactive-review.md",
     "references/review-prompt.md",
+    "references/result-review.md",
   ];
   for (const file of skillFiles) {
     const relative = join("skills/chatgpt-review", file);
@@ -181,7 +182,9 @@ try {
   const client = new Client({ name: "package-acceptance", version: "1" });
   try {
     await client.connect(transport);
-    assert.equal((await client.listTools()).tools.length, 6);
+    const tools = (await client.listTools()).tools;
+    assert.equal(tools.length, 7);
+    assert.ok(tools.every((tool) => tool.outputSchema?.type === "object"));
     const result = await client.callTool({
       name: "read_file",
       arguments: { path: join(workspace, "proof.txt") },

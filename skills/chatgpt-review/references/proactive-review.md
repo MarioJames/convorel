@@ -17,11 +17,13 @@ Initiate when there is concrete evidence of a problem or uncertainty:
 - Implementation uncovers a constraint that materially changes the accepted design, boundaries or guarantees.
 - A consequential feature is ready for acceptance but independent scrutiny of coverage, failure paths or release evidence could change the go/no-go decision.
 
+For completed development with meaningful architecture constraints or module boundaries, apply [result review](result-review.md) once before delivery: compare the actual outcome against the goal and accepted architecture. This examines implementation drift; it does not default to line-by-line code review or require uploading full test logs.
+
 Do not automatically review routine copy/style changes, small features following an established pattern, or ordinary low-risk local reviews. Explicit requests still apply. Follow an explicit local-only/no-external instruction even at a high-risk gate. Missing product goals require user input; model review cannot decide those goals on the user's behalf.
 
 ## Send a reviewable decision
 
-Prepare a concrete draft before requesting review. Include the goal and constraints, exact project path and known revision, a small map of relevant files, alternatives and recommendation, verified result summaries, assumptions and unresolved questions. Include focused code blocks that carry the essence of the decision and explain their significance; the reviewer can retrieve surrounding implementation through the configured read-only MCP. Prefer a useful excerpt over a whole-file dump, without imposing a fixed line quota or requiring separate permission for relevant code already in scope. Use only authorized, task-relevant material and omit secrets. For acceptance, supply actual test evidence and its limits; the remote reviewer must not claim to have run the local tests.
+Prepare a concrete draft before requesting review. Include the goal and constraints, exact project path and known revision, a small map of relevant files, alternatives and recommendation, verified result summaries, assumptions and unresolved questions. For a mechanism/code review, include focused code blocks carrying the decision and explain their significance; the reviewer can retrieve surrounding implementation through read-only MCP. For result review, lead with the goal-to-outcome comparison and provide implementation detail only where needed. Use only authorized, task-relevant material and omit secrets. Supply local verification summaries and their limits, not full logs by default; the remote reviewer must not claim to have run the local tests.
 
 Ask for failure-causing assumptions, concrete counterexamples, simpler established alternatives, and a distinction between verified defects and hypotheses. Request decision-blocking issues separately from optional improvements and ask what experiment would resolve a disagreement. Avoid a generic request for approval.
 
@@ -29,7 +31,7 @@ Use the [Convorel conversation service](convorel.md) to create/reuse the session
 
 ## Close the gate without a review loop
 
-Record the decision under review and the input revision/evidence in the existing private requirement record. Before sending, reuse an applicable completed review or continue waiting for its active run. A later workflow stage alone is not a new review: normally send once per decision version, with follow-ups only for material changes or an unresolved blocker. Minor wording changes and optional suggestions do not start another mutual-review cycle.
+Record the decision under review and the input revision/evidence in the existing private requirement record. Before sending, reuse an applicable completed review or continue waiting for its active run. Normally send once per decision version, with follow-ups only for material changes or an unresolved blocker. Completed implementation supplies new evidence for the separate result-review question; an earlier proposal review does not establish that the actual result stayed on course. Minor wording changes and optional suggestions do not start another mutual-review cycle.
 
 When review is a prerequisite for final confirmation, implementation or release, wait for its complete response and resolve decision-blocking findings against local evidence before crossing that gate. The controlling Agent owns the conclusion; agreement between models is not proof. Record accepted/rejected findings with reasons and evidence limits. Once blockers are resolved, proceed without seeking repeated model approval.
 

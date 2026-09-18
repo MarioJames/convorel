@@ -4,6 +4,8 @@ import { z } from "zod";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { WorkspaceAccess, fullPath } from "./workspace-access.ts";
+import { MAX_OUT } from "./workspace.ts";
+import { outputSchemas } from "./mcp-schemas.ts";
 export function createServer(roots: string[]) {
   const access = new WorkspaceAccess(roots),
     server = new McpServer({ name: "convorel", version: "0.1.0" });
@@ -12,7 +14,7 @@ export function createServer(roots: string[]) {
   );
   access.assertPrivate(join(homedir(), ".local/share/convorel-tunnels"));
   const add = (
-    name: string,
+    name: keyof typeof outputSchemas,
     description: string,
     inputSchema: any,
     fn: (a: any) => Promise<any>,
@@ -22,6 +24,7 @@ export function createServer(roots: string[]) {
       {
         description,
         inputSchema,
+        outputSchema: outputSchemas[name],
         annotations: {
           readOnlyHint: true,
           destructiveHint: false,
@@ -53,23 +56,74 @@ export function createServer(roots: string[]) {
   };
   add(
     "workspace_info",
-    "List allowed roots, or identify the full project path before reading. Read-only; workspaceId is not authentication.",
+    "List allowed roots with workspace=null, or identify the full project path in workspace before reading. Read-only; workspaceId is not authentication.",
     { path: z.string().optional() },
-    (a) => access.info(a.path),
+    async (a) => {
+      const info = await access.info(a.path);
+      const { roots, mode, ...workspace } = info;
+      return { roots, mode, workspace: "path" in info ? workspace : null };
+    },
   );
+  const directoryInput = {
+    path: z.string(),
+    depth: z.number().int().min(1).max(4).default(1),
+    offset: z.number().int().min(0).max(10000).default(0),
+    limit: z.number().int().min(1).max(500).default(200),
+  };
   add(
     "list_directory",
     "List permitted files under a full directory path. Honor truncation and nextOffset.",
-    {
-      path: z.string(),
-      depth: z.number().int().min(1).max(4).default(1),
-      offset: z.number().int().min(0).max(10000).default(0),
-      limit: z.number().int().min(1).max(500).default(200),
-    },
+    directoryInput,
     async (a) => ({
       ...(await access.directory(a.path).list(".", a.depth, a.offset, a.limit)),
       path: fullPath(a.path),
     }),
+  );
+  add(
+    "tree",
+    "Show a bounded page of directory hierarchy for structural review, not proof of code dependencies. Uses list_directory policy and inventory order. Check depthLimited, scanTruncated, truncated and nextOffset; pages are live observations, not a snapshot.",
+    directoryInput,
+    async (a) => {
+      const listing = await access
+        .directory(a.path)
+        .list(".", a.depth, a.offset, a.limit);
+      const entries = listing.entries.map((entry) => {
+        const parts = entry.path.split("/");
+        return {
+          ...entry,
+          depth: parts.length,
+          parentPath: parts.slice(0, -1).join("/") || ".",
+        };
+      });
+      const data = {
+        ...listing,
+        path: fullPath(a.path),
+        entries,
+        depth: a.depth as number,
+        offset: a.offset as number,
+        limit: a.limit as number,
+        tree: "",
+        note: "Directory layout only, not dependency analysis. This page may omit parents returned on earlier pages. Depth-limited directories are not necessarily empty. Live pages may shift when files change; scanTruncated means unscanned entries cannot be recovered by nextOffset.",
+      };
+      const render = () =>
+        entries
+          .map(
+            (entry) =>
+              `${"  ".repeat(entry.depth - 1)}${JSON.stringify(entry.path)}${entry.type === "directory" ? "/" : ""}`,
+          )
+          .join("\n");
+      data.tree = render();
+      // Rendering adds bytes to list_directory's bounded page. Retain its order
+      // and advance only by entries actually returned, so none are skipped.
+      while (Buffer.byteLength(JSON.stringify(data)) > MAX_OUT) {
+        if (!entries.length) throw new Error("TREE_RESPONSE_TOO_LARGE");
+        entries.pop();
+        data.tree = render();
+        data.truncated = true;
+        data.nextOffset = a.offset + entries.length;
+      }
+      return data;
+    },
   );
   add(
     "read_file",

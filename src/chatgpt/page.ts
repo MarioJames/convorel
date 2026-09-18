@@ -62,6 +62,9 @@ export function classify(
   // Absence alone never proves completion or failure; the caller bounds waiting.
   return { state: "waiting" };
 }
+// Verified against the live composer. The submit ID alone also identifies other composer actions.
+export const SEND_SELECTOR =
+  'form:has(#prompt-textarea) button[data-testid="send-button"][type="submit"]';
 export const PAGE_SCRIPT = `(() => {
   const main = document.querySelector('main');
   const visible = e => !!e && e.getClientRects().length > 0;
@@ -81,7 +84,8 @@ export const PAGE_SCRIPT = `(() => {
   const alerts = Array.from(document.querySelectorAll('[role="alert"]')).filter(visible).map(e => e.innerText).join(' ');
   const error = /something went wrong|unable to load conversation|出了点问题|无法加载对话/i.test(alerts);
   const composer = document.querySelector('#prompt-textarea');
-  const send = buttons.find(e => /^(Send prompt|发送提示|发送消息|发送)$/.test(label(e)));
+  const sends = Array.from(document.querySelectorAll(${JSON.stringify(SEND_SELECTOR)})).filter(visible);
+  const send = sends.length === 1 ? sends[0] : undefined;
   const rect = send?.getBoundingClientRect();
   const hit = rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
   const sendReady = !!send && !send.disabled && send.getAttribute('aria-disabled') !== 'true'

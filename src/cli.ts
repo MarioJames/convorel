@@ -17,6 +17,10 @@ import { installationEnv } from "./env.ts";
 import { conversationConfig } from "./config.ts";
 import { installSkill } from "./skills.ts";
 import { waitForConversation, watcherLockName } from "./wait.ts";
+import {
+  conversationStatus,
+  conversationExitCode,
+} from "./conversation-status.ts";
 import { MODEL_SCRIPT } from "./chatgpt/model.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -241,6 +245,7 @@ export async function main(args = process.argv.slice(2)) {
         url: t.url,
         currentRun: t.currentRun,
         state: t.runs.at(-1)?.state,
+        summary: conversationStatus(t),
       })),
     );
     return 0;
@@ -260,13 +265,13 @@ export async function main(args = process.argv.slice(2)) {
         : o["request-id"] || "initial",
       sub === "followup",
     );
-    print(t);
-    return ["waiting", "complete"].includes(t.runs.at(-1)!.state) ? 0 : 2;
+    print({ ...t, summary: conversationStatus(t) });
+    return conversationExitCode(t, "start");
   }
   if (sub === "retry") {
     const t = await conversation.retry(id, required(o, "run"));
-    print(t);
-    return ["waiting", "complete"].includes(t.runs.at(-1)!.state) ? 0 : 2;
+    print({ ...t, summary: conversationStatus(t) });
+    return conversationExitCode(t, "start");
   }
   if (sub === "attach") {
     print(
@@ -281,12 +286,25 @@ export async function main(args = process.argv.slice(2)) {
   if (sub === "status") {
     const t = conversation.get(id);
     if (o.run && o.run !== t.currentRun) throw new Error("STALE_RUN");
-    print(t);
+    print({ ...t, summary: conversationStatus(t) });
     return 0;
   }
   if (sub === "resume") {
-    print(await conversation.resume(id, o.run));
-    return 0;
+    try {
+      const t = await conversation.resume(id, o.run);
+      print({ ...t, summary: conversationStatus(t) });
+      return conversationExitCode(t, "resume");
+    } catch (e) {
+      const t = conversation.get(id);
+      if (o.run && o.run !== t.currentRun) throw e;
+      if (
+        t.runs.find((r) => r.id === t.currentRun)?.observationError?.message !==
+        String(e)
+      )
+        throw e;
+      print({ ...t, summary: conversationStatus(t), error: String(e) });
+      return 2;
+    }
   }
   if (sub === "result") {
     print(conversation.result(id, o.run));

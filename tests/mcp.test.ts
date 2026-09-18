@@ -28,12 +28,18 @@ test("real stdio client discovers tools and reads only allowed files", async () 
   const client = new Client({ name: "acceptance", version: "1" });
   try {
     await client.connect(transport);
-    expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual([
+    const tools = (await client.listTools()).tools;
+    for (const tool of tools) {
+      expect(tool.outputSchema).toBeDefined();
+      expect(tool.outputSchema!.type).toBe("object");
+    }
+    expect(tools.map((t) => t.name).sort()).toEqual([
       "git_diff",
       "git_status",
       "list_directory",
       "read_file",
       "search_workspace",
+      "tree",
       "workspace_info",
     ]);
     const info = await client.callTool({
@@ -50,7 +56,7 @@ test("real stdio client discovers tools and reads only allowed files", async () 
       name: "workspace_info",
       arguments: { path: first },
     });
-    expect((project.structuredContent as any).path).toBe(first);
+    expect((project.structuredContent as any).workspace.path).toBe(first);
     const r = await client.callTool({
       name: "read_file",
       arguments: { path: join(first, "hello.ts") },

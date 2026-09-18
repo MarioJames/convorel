@@ -37,7 +37,7 @@ Convorel 从进程环境、其次从**安装根** `.env` 读取 `CONVOREL_MODEL`
 
 先用 `conversation list`，再用 `conversation status --id ID` 匹配需求和工作区；已有 active run 继续观察，已有适用结果直接复用。
 
-将完整请求写到私有 UTF-8 文件，按 [review-prompt.md](review-prompt.md) 补齐实际决策、约束、项目路径/revision、关键代码及解释、MCP 可读取路径、验证结果和未决问题。检查最终文件。Convorel 只附加关联 marker，不添加角色、项目路径、源码包或审查规则。
+将完整请求写到私有 UTF-8 文件，按 [review-prompt.md](review-prompt.md) 补齐实际决策、约束、项目路径/revision、MCP 可读取路径、验证摘要和未决问题。代码审查补关键代码及解释；结果校验采用 [result-review.md](result-review.md) 的目标与实际结果对照。检查最终文件。Convorel 只附加关联 marker，不添加角色、项目路径、源码包或审查规则。
 
 ```bash
 convorel_cli conversation start --id ID --prompt-file /private/request.md
@@ -69,6 +69,8 @@ convorel_cli conversation result --id ID --run RUN_ID
 Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何种通知，都须用同一 `--id`、`--run` 取得当前完整 `result`，不能以通知、退出码或最后可见的网页答案代替。
 
 `resume` 仅观察和核对，不发送。只有状态为 `prepared` 且已解决发送前错误时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。它重新核验模型、页面和草稿；不得重试 `submitting`/`delivery_unknown`，不得覆盖变更后的草稿强行推进。未知发送或等待超时不能用新 ID 再发。
+
+`status` 的 `summary` 区分已确认投递、发送结果未知和未尝试发送，并返回当前阶段、最近观察时间、观察错误和下一步动作。`status` 退出 0 只表示本地状态读取成功；`start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅完成时退出 0，未完成或需处理时退出 2，参数/基础设施等异常可退出 1。不要仅凭退出码取代精确轮次的 `result`。`wait` 仅对观察失败做最多三次连续尝试，不自动重发；登录、页面身份或草稿等需处理的问题不会被当作临时读取失败反复尝试。
 
 ## 消费、命名与清理
 

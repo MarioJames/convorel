@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Browser } from "../src/browser.ts";
+import { Browser, sendPrompt } from "../src/browser.ts";
 import { command } from "../src/command.ts";
 
 const chromePath = process.argv[process.argv.indexOf("--chrome") + 1];
@@ -62,8 +62,8 @@ try {
   const html =
     '<main><div data-message-author-role="user" data-message-id="u1">Review</div>' +
     '<div data-turn="assistant"><div data-message-author-role="assistant" data-message-id="a1">Done</div>' +
-    '<button aria-label="Copy response">Copy</button></div><textarea id="prompt-textarea"></textarea>' +
-    '<button aria-label="Send prompt">Send</button></main>';
+    '<button aria-label="Copy response">Copy</button></div><form onsubmit="event.preventDefault();window.sends=(window.sends||0)+1"><textarea id="prompt-textarea"></textarea>' +
+    '<button id="composer-submit-button" data-testid="send-button" type="submit" aria-label="发送消息">发送</button></form></main>';
   const url = "data:text/html," + encodeURIComponent(html);
   const created = await tabs("new", url);
   assert.equal(
@@ -77,6 +77,28 @@ try {
   assert.equal(page.messages.at(-1)?.text, "Done");
   assert.equal(page.messages.at(-1)?.final, true);
   assert.equal(page.sendReady, true);
+  await sendPrompt(b, page);
+  assert.equal(
+    (await b.run("eval", "window.sends")).result,
+    1,
+    "the real structural locator submits a localized composer",
+  );
+  await b.run(
+    "eval",
+    `document.querySelector('#composer-submit-button').setAttribute('data-testid','stop-button')`,
+  );
+  const stopped = await b.read();
+  assert.equal(
+    stopped.sendReady,
+    false,
+    "the shared composer ID must not identify Stop as Send",
+  );
+  await assert.rejects(sendPrompt(b, stopped), /SEND_CONTROL_UNAVAILABLE/);
+  assert.equal((await b.run("eval", "window.sends")).result, 1);
+  await b.run(
+    "eval",
+    `document.querySelector('#composer-submit-button').setAttribute('data-testid','send-button')`,
+  );
   await b.run(
     "eval",
     `(() => {const e=document.createElement('div');e.id='closing-overlay';e.style.cssText='position:fixed;inset:0;z-index:9999';document.body.append(e);})()`,
@@ -109,6 +131,12 @@ try {
   );
   await b.run("fill", "#prompt-textarea", "edited draft");
   assert.equal((await b.read()).draft, "edited draft");
+  const pageErrors = await b.run("errors");
+  assert.deepEqual(
+    pageErrors.errors,
+    [],
+    "fixture must not produce browser page errors",
+  );
   await tabs("close", created.targetId);
   await assert.rejects(
     b.read(),
@@ -129,6 +157,7 @@ try {
       initialTabs: 1,
       peakTabs: 2,
       remainingTabs: 1,
+      pageErrors: pageErrors.errors,
       checks: [
         "list",
         "create",
@@ -138,6 +167,9 @@ try {
         "pin protection",
         "missing target",
         "composer paragraph extraction",
+        "localized structural submit",
+        "stop button exclusion",
+        "send obstruction",
       ],
       cdp,
     }),

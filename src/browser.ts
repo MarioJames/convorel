@@ -1,7 +1,17 @@
 // Attachment pattern adapted from skill-foundry 19f0122 (Apache-2.0).
 import { createHash } from "node:crypto";
 import { command } from "./command.ts";
-import { PAGE_SCRIPT, type PageState } from "./chatgpt/page.ts";
+import { PAGE_SCRIPT, SEND_SELECTOR, type PageState } from "./chatgpt/page.ts";
+// Only observation failures may be retried automatically; never a browser action.
+export class ObservationError extends Error {}
+
+export async function sendPrompt(
+  page: { run: (...args: string[]) => Promise<any> },
+  observed: PageState,
+) {
+  if (!observed.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
+  return page.run("click", SEND_SELECTOR);
+}
 export function cdpEndpoint(value: string) {
   const u = new URL(/^\d+$/.test(value) ? `http://127.0.0.1:${value}` : value);
   if (
@@ -29,8 +39,10 @@ export class Browser {
     const r = await fetch(this.cdp + "/json/version", {
       signal: AbortSignal.timeout(5000),
       redirect: "error",
+    }).catch((e) => {
+      throw new ObservationError("CDP_UNAVAILABLE: " + String(e));
     });
-    if (!r.ok) throw new Error("CDP_UNAVAILABLE");
+    if (!r.ok) throw new ObservationError("CDP_UNAVAILABLE: HTTP " + r.status);
     const x = (await r.json()) as any;
     if (typeof x.webSocketDebuggerUrl !== "string")
       throw new Error("CDP_METADATA_INVALID");
@@ -74,7 +86,20 @@ export class Browser {
       session,
       run,
       read: async (): Promise<PageState> => {
-        const x = (await run("eval", PAGE_SCRIPT)).result;
+        let result;
+        try {
+          result = await run("eval", PAGE_SCRIPT);
+        } catch (e) {
+          // A missing/replaced target needs inspection, not a fallback tab.
+          if (
+            /tab_gone|target.*closed|page.*closed|no tab|not found/i.test(
+              String(e),
+            )
+          )
+            throw e;
+          throw new ObservationError("BROWSER_READ_FAILED: " + String(e));
+        }
+        const x = result.result;
         if (!x || !Array.isArray(x.messages) || typeof x.url !== "string")
           throw new Error("UI_UNRECOGNIZED");
         return x;

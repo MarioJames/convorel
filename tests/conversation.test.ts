@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { State } from "../src/state.ts";
 import { Conversation } from "../src/conversation.ts";
+import { ObservationError } from "../src/browser.ts";
+import {
+  conversationStatus,
+  conversationExitCode,
+} from "../src/conversation-status.ts";
 let home: string, ws: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "convorel-flow-"));
@@ -56,7 +61,7 @@ class FakeBrowser {
       read: async () => structuredClone(p),
       run: async (...args: string[]) => {
         if (args[0] === "fill") p.draft = args[2];
-        if (args[0] === "find" && args.includes("click")) {
+        if (args[0] === "click") {
           self.sends++;
           const text = p.draft;
           p.draft = "";
@@ -102,6 +107,28 @@ function setup() {
   }));
   return { state, browser, conversation };
 }
+test("an error after recognizing the submitted message never restores permission to send", async () => {
+  const { state, browser, conversation } = setup();
+  const write = state.write.bind(state);
+  let failed = false;
+  state.write = (key, value) => {
+    if (!failed && value.runs?.[0]?.state === "waiting") {
+      failed = true;
+      throw new Error("Temporary state write failure");
+    }
+    return write(key, value);
+  };
+  const t = await conversation.start("confirmed-send", "Review");
+  expect(t.runs[0].userMessageId).toBe("u1");
+  expect(t.runs[0].state).toBe("waiting");
+  await expect(conversation.retry(t.id, t.currentRun)).rejects.toThrow(
+    "RUN_NOT_PREPARED",
+  );
+  browser.complete();
+  await conversation.resume(t.id, t.currentRun);
+  expect(conversation.result(t.id, t.currentRun).reply.text).toBe("Answer");
+  expect(browser.sends).toBe(1);
+});
 test("model drift after filling the draft stops before sending", async () => {
   const { state, browser } = setup();
   const conversation = new Conversation(
@@ -234,6 +261,12 @@ test("uncertain send reconciles existing marker without a second click", async (
   browser.failSend = true;
   const first = await conversation.start("uncertain", "Conversation");
   expect(browser.sends).toBe(1);
+  expect(conversationStatus(first)).toMatchObject({
+    delivery: "unknown",
+    nextAction: "resume",
+    phase: "confirming_delivery",
+    observationError: null,
+  });
   await conversation.resume("uncertain", first.currentRun);
   expect(browser.sends).toBe(1);
   browser.complete();
@@ -241,6 +274,88 @@ test("uncertain send reconciles existing marker without a second click", async (
   expect(conversation.result("uncertain", first.currentRun).reply.text).toBe(
     "Answer",
   );
+});
+
+test("observation failures preserve delivery evidence and expose safe recovery actions", async () => {
+  const { state, browser, conversation } = setup();
+  const t = await conversation.start("read-interrupted", "Review");
+  expect(conversationExitCode(t, "start")).toBe(0);
+  expect(conversationExitCode(t, "resume")).toBe(2);
+  const page = browser.page.bind(browser);
+  browser.page = async (target) => ({
+    ...(await page(target)),
+    read: async () => {
+      throw new ObservationError("connection reset");
+    },
+  });
+  await expect(conversation.resume(t.id, t.currentRun)).rejects.toThrow(
+    "connection reset",
+  );
+  const saved = conversation.get(t.id);
+  expect(conversationStatus(saved)).toMatchObject({
+    state: "waiting",
+    delivery: "confirmed",
+    phase: "observation_interrupted",
+    nextAction: "resume",
+  });
+  expect(saved.runs[0].lastObservedAt).toBeTruthy();
+  expect(saved.runs[0].observationError?.retryable).toBe(true);
+  await expect(conversation.retry(t.id, t.currentRun)).rejects.toThrow(
+    "RUN_NOT_PREPARED",
+  );
+  browser.page = page;
+  const p = [...browser.pages.values()][0];
+  p.blocked = "Login required";
+  await expect(conversation.resume(t.id, t.currentRun)).rejects.toThrow(
+    "Login required",
+  );
+  expect(conversationStatus(conversation.get(t.id))).toMatchObject({
+    delivery: "confirmed",
+    nextAction: "inspect",
+  });
+  p.blocked = null;
+  browser.complete();
+  const recovered = await new Conversation(state, browser as any).resume(
+    t.id,
+    t.currentRun,
+  );
+  expect(conversationStatus(recovered)).toMatchObject({
+    phase: "complete",
+    nextAction: "result",
+    observationError: null,
+  });
+  expect(conversationExitCode(recovered, "resume")).toBe(0);
+  expect(browser.sends).toBe(1);
+});
+
+test("resuming a pre-send observation failure saves recovery without sending", async () => {
+  const { browser, conversation } = setup();
+  const page = browser.page.bind(browser);
+  browser.page = async (target) => ({
+    ...(await page(target)),
+    read: async () => {
+      throw new ObservationError("connection reset");
+    },
+  });
+  const t = await conversation.start("before-send-read", "Review");
+  expect(conversationStatus(t)).toMatchObject({
+    state: "prepared",
+    delivery: "not_attempted",
+    nextAction: "resume",
+  });
+  browser.page = page;
+  await conversation.resume(t.id, t.currentRun);
+  expect(conversationStatus(conversation.get(t.id))).toMatchObject({
+    state: "prepared",
+    delivery: "not_attempted",
+    nextAction: "retry",
+    observationError: null,
+    error: null,
+  });
+  expect(conversation.get(t.id).runs[0].lastObservedAt).toBeTruthy();
+  expect(browser.sends).toBe(0);
+  await conversation.retry(t.id, t.currentRun);
+  expect(browser.sends).toBe(1);
 });
 test("draft and newer messages protect a completed page from closure", async () => {
   const { browser, conversation } = setup();
@@ -393,6 +508,19 @@ test("followup restores a closed conversation after page loading and retains ear
         if (reads === 2) return { ...saved, messages: [] };
         if (reads === 3)
           return { ...saved, messages: saved.messages.slice(0, 1) };
+        if (reads === 4 || reads === 5)
+          return {
+            ...saved,
+            messages: saved.messages.map((m: any) =>
+              m.role === "assistant"
+                ? {
+                    ...m,
+                    text: reads === 4 ? "An" : m.text,
+                    final: reads === 4,
+                  }
+                : m,
+            ),
+          };
         const p = browser.pages.get(target);
         if (!p.messages.length) Object.assign(p, structuredClone(saved));
         return b.read();

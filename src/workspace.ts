@@ -15,8 +15,8 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import ignore from "ignore";
 import { childEnv } from "./command.ts";
-const MAX_FILE = 1024 * 1024,
-  MAX_OUT = 64 * 1024;
+const MAX_FILE = 1024 * 1024;
+export const MAX_OUT = 64 * 1024;
 export const sha = (s: string | Buffer) =>
   createHash("sha256").update(s).digest("hex");
 // Adapted from codex-with-chatgpt (MIT); exclusions apply to every tool, including Git.
@@ -294,6 +294,8 @@ export class Workspace {
           ? offset + entries.length
           : null,
       truncated: all.truncated || offset + entries.length < all.entries.length,
+      depthLimited: all.depthLimited,
+      scanTruncated: all.truncated,
     };
   }
   async search(query: string) {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { State } from "./state.ts";
-import { Browser } from "./browser.ts";
+import { Browser, ObservationError, sendPrompt } from "./browser.ts";
 import { Workspace, sha } from "./workspace.ts";
 import {
   classify,
@@ -27,6 +27,8 @@ interface Run {
   error?: string;
   createdAt: string;
   observedModel?: string;
+  lastObservedAt?: string;
+  observationError?: { at: string; message: string; retryable: boolean };
 }
 interface Binding {
   target: string;
@@ -160,14 +162,25 @@ export class Conversation {
       for (let n = 0; n < 20; n++) {
         const p: PageState = await b.read();
         this.guard(t);
+        const reply = replyId
+          ? p.messages.find((m) => m.id === replyId)
+          : undefined;
         const blank =
           p.url === "about:blank" && !p.hasComposer && !p.messages.length;
         const loading =
           same(p.url, t.url) &&
           (!p.hasComposer ||
             (userId && !p.messages.some((m) => m.id === userId)) ||
-            (replyId && !p.messages.some((m) => m.id === replyId)));
-        if (p.blocked || (!blank && !loading)) break;
+            (replyId &&
+              (!reply?.final ||
+                (anchor?.replyHash && sha(reply.text) !== anchor.replyHash))));
+        if (
+          p.blocked ||
+          p.draft?.trim() ||
+          p.generating ||
+          (!blank && !loading)
+        )
+          break;
         await Bun.sleep(250);
       }
     }
@@ -176,6 +189,8 @@ export class Conversation {
   private async observe(t: Task, b: any) {
     const p: PageState = await b.read();
     this.guard(t);
+    const r = this.current(t);
+    r.lastObservedAt = new Date().toISOString();
     const pageUrl = new URL(p.url);
     if (
       pageUrl.origin !== "https://chatgpt.com" &&
@@ -184,7 +199,24 @@ export class Conversation {
       throw new Error("PAGE_ORIGIN_CHANGED");
     if (t.url && !same(p.url, t.url)) throw new Error("CONVERSATION_CHANGED");
     if (p.blocked) throw new Error("NEEDS_ATTENTION: " + p.blocked);
+    if (r.observationError?.retryable && r.error === r.observationError.message)
+      r.error = undefined;
+    r.observationError = undefined;
     return p;
+  }
+  private recordFailure(t: Task, e: unknown, observing = false) {
+    this.guard(t);
+    const r = this.current(t);
+    r.error = String(e);
+    r.observationError =
+      observing || e instanceof ObservationError
+        ? {
+            at: new Date().toISOString(),
+            message: String(e),
+            retryable: e instanceof ObservationError,
+          }
+        : undefined;
+    this.save(t);
   }
   private async reconcile(t: Task, b: any) {
     const r = this.current(t),
@@ -193,8 +225,12 @@ export class Conversation {
       const found = p.messages.filter(
         (m) => m.role === "user" && m.text.includes(r.marker),
       );
-      if (!found.length && r.state === "prepared") return t;
+      if (!found.length && r.state === "prepared") {
+        this.save(t);
+        return t;
+      }
       if (found.length !== 1 || !found[0].id) {
+        if (r.userMessageId) throw new Error("SUBMITTED_MESSAGE_MISSING");
         r.state = "delivery_unknown";
         r.error = "No unique submitted user message matches the marker";
         this.save(t);
@@ -309,7 +345,10 @@ export class Conversation {
   async retry(id: string, run: string) {
     return this.store.locked(async () => {
       const t = this.get(id);
-      if (this.current(t, run).state !== "prepared")
+      if (
+        this.current(t, run).state !== "prepared" ||
+        this.current(t, run).userMessageId
+      )
         throw new Error("RUN_NOT_PREPARED");
       this.begin(t);
       return this.submitPrepared(t);
@@ -330,7 +369,7 @@ export class Conversation {
       if (
         p.messages.some((m) => m.role === "user" && m.text.includes(r.marker))
       )
-        return this.reconcile(t, b);
+        return await this.reconcile(t, b);
       const checkDraft = (page: PageState) => {
         if (page.generating || !page.hasComposer || page.attachments)
           throw new Error("PAGE_NOT_IDLE");
@@ -361,7 +400,7 @@ export class Conversation {
         await Bun.sleep(100);
         p = await this.observe(t, b);
       }
-      if (p.sendReady === false) throw new Error("SEND_CONTROL_UNAVAILABLE");
+      if (!p.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
       // Chromium contenteditable may render ordinary indentation as NBSP.
       // Normalize only this presentation difference, retaining exact persisted input.
       if (
@@ -383,21 +422,13 @@ export class Conversation {
       checkDraft(p);
       if (draftText(p.draft || "") !== draftText(prompt))
         throw new Error("DRAFT_CHANGED");
-      if (p.sendReady === false) throw new Error("SEND_CONTROL_UNAVAILABLE");
+      if (!p.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
       r.error = undefined;
       // Durable write precedes the first action capable of submitting a message.
       r.state = "submitting";
       this.save(t);
       this.guard(t);
-      await b.run(
-        "find",
-        "role",
-        "button",
-        "click",
-        "--name",
-        "Send prompt",
-        "--exact",
-      );
+      await sendPrompt(b, p);
       this.guard(t);
       for (let n = 0; n < 12; n++) {
         await this.reconcile(t, b);
@@ -406,13 +437,13 @@ export class Conversation {
       }
       return t;
     } catch (e) {
-      r.state =
-        r.state === "submitting" || r.state === "delivery_unknown"
-          ? "delivery_unknown"
-          : "prepared";
-      r.error = String(e);
-      this.guard(t);
-      this.save(t);
+      if (r.state === "submitting") r.state = "delivery_unknown";
+      if (
+        r.userMessageId &&
+        ["prepared", "submitting", "delivery_unknown"].includes(r.state)
+      )
+        r.state = "waiting";
+      this.recordFailure(t, e);
       return t;
     }
   }
@@ -421,39 +452,44 @@ export class Conversation {
       const t = this.get(id);
       if (this.current(t, run).state === "complete") return t;
       this.begin(t);
-      // Recover a previously saved initial URL without guessing another tab or resending.
-      if (t.url === (t.config.projectUrl || "https://chatgpt.com/")) {
-        const r = this.current(t);
-        if (
-          t.runs.length !== 1 ||
-          !r.marker ||
-          !r.userMessageId ||
-          !["delivery_unknown", "waiting", "submitting"].includes(r.state) ||
-          !t.binding ||
-          t.binding.closed ||
-          t.binding.epoch !== (await this.browser.epoch())
-        )
-          throw new Error("PENDING_URL_UNVERIFIED");
-        this.guard(t);
-        const b = await this.browser.page(t.binding.target);
-        const p: PageState = await b.read();
-        this.guard(t);
-        const matches = p.messages.filter(
-          (m) => m.role === "user" && m.text.includes(r.marker),
-        );
-        if (
-          p.blocked ||
-          matches.length !== 1 ||
-          matches[0].id !== r.userMessageId
-        )
-          throw new Error("PENDING_URL_UNVERIFIED");
-        conversationId(p.url);
-        t.url = p.url;
-        this.claim(t);
-        this.save(t);
-        return this.reconcile(t, b);
+      try {
+        // Recover a previously saved initial URL without guessing another tab or resending.
+        if (t.url === (t.config.projectUrl || "https://chatgpt.com/")) {
+          const r = this.current(t);
+          if (
+            t.runs.length !== 1 ||
+            !r.marker ||
+            !r.userMessageId ||
+            !["delivery_unknown", "waiting", "submitting"].includes(r.state) ||
+            !t.binding ||
+            t.binding.closed ||
+            t.binding.epoch !== (await this.browser.epoch())
+          )
+            throw new Error("PENDING_URL_UNVERIFIED");
+          this.guard(t);
+          const b = await this.browser.page(t.binding.target);
+          const p: PageState = await b.read();
+          this.guard(t);
+          const matches = p.messages.filter(
+            (m) => m.role === "user" && m.text.includes(r.marker),
+          );
+          if (
+            p.blocked ||
+            matches.length !== 1 ||
+            matches[0].id !== r.userMessageId
+          )
+            throw new Error("PENDING_URL_UNVERIFIED");
+          conversationId(p.url);
+          t.url = p.url;
+          this.claim(t);
+          this.save(t);
+          return await this.reconcile(t, b);
+        }
+        return await this.reconcile(t, await this.page(t));
+      } catch (e) {
+        this.recordFailure(t, e, true);
+        throw e;
       }
-      return this.reconcile(t, await this.page(t));
     });
   }
   resume(id: string, run?: string) {
