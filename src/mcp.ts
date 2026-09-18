@@ -6,9 +6,11 @@ import { join } from "node:path";
 import { WorkspaceAccess, fullPath } from "./workspace-access.ts";
 import { MAX_OUT } from "./workspace.ts";
 import { outputSchemas } from "./mcp-schemas.ts";
+import { gitHistoryInputs } from "./git-history-schemas.ts";
+import packageInfo from "../package.json";
 export function createServer(roots: string[]) {
   const access = new WorkspaceAccess(roots),
-    server = new McpServer({ name: "convorel", version: "0.1.0" });
+    server = new McpServer({ name: "convorel", version: packageInfo.version });
   access.assertPrivate(
     process.env.CONVOREL_HOME || join(homedir(), ".local/share/convorel"),
   );
@@ -34,11 +36,18 @@ export function createServer(roots: string[]) {
       },
       async (a: any) => {
         try {
-          const data = await fn(a);
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify(data) }],
-            structuredContent: data,
-          };
+          const { imageData, ...data } = await fn(a);
+          const serialized = JSON.stringify(data);
+          if (Buffer.byteLength(serialized) > MAX_OUT)
+            throw new Error("RESPONSE_TOO_LARGE");
+          const content: any[] = [{ type: "text", text: serialized }];
+          if (name === "read_image")
+            content.push({
+              type: "image",
+              mimeType: data.mimeType,
+              data: imageData,
+            });
+          return { content, structuredContent: data };
         } catch (e: any) {
           const code =
             e.code === "ENOENT"
@@ -61,7 +70,19 @@ export function createServer(roots: string[]) {
     async (a) => {
       const info = await access.info(a.path);
       const { roots, mode, ...workspace } = info;
-      return { roots, mode, workspace: "path" in info ? workspace : null };
+      return {
+        roots,
+        mode,
+        workspace: "path" in info ? workspace : null,
+        server: {
+          name: "convorel",
+          version: packageInfo.version,
+          capabilityVersion: "evidence-v1",
+          tools: Object.keys(outputSchemas),
+          maxStructuredResponseBytes: MAX_OUT,
+          maxImageBytes: 1024 * 1024,
+        },
+      };
     },
   );
   const directoryInput = {
@@ -71,22 +92,12 @@ export function createServer(roots: string[]) {
     limit: z.number().int().min(1).max(500).default(200),
   };
   add(
-    "list_directory",
-    "List permitted files under a full directory path. Honor truncation and nextOffset.",
-    directoryInput,
-    async (a) => ({
-      ...(await access.directory(a.path).list(".", a.depth, a.offset, a.limit)),
-      path: fullPath(a.path),
-    }),
-  );
-  add(
     "tree",
-    "Show a bounded page of directory hierarchy for structural review, not proof of code dependencies. Uses list_directory policy and inventory order. Check depthLimited, scanTruncated, truncated and nextOffset; pages are live observations, not a snapshot.",
+    "Show a bounded page of directory hierarchy for structural review, not proof of code dependencies. Returns both structured entries and rendered tree, sorted by relative path. Check depthLimited, scanTruncated, truncated and nextOffset; pages are live observations, not a snapshot.",
     directoryInput,
     async (a) => {
-      const listing = await access
-        .directory(a.path)
-        .list(".", a.depth, a.offset, a.limit);
+      const workspace = access.directory(a.path);
+      const listing = await workspace.list(".", a.depth, a.offset, a.limit);
       const entries = listing.entries.map((entry) => {
         const parts = entry.path.split("/");
         return {
@@ -103,6 +114,8 @@ export function createServer(roots: string[]) {
         offset: a.offset as number,
         limit: a.limit as number,
         tree: "",
+        workspaceId: workspace.id,
+        observedAt: new Date().toISOString(),
         note: "Directory layout only, not dependency analysis. This page may omit parents returned on earlier pages. Depth-limited directories are not necessarily empty. Live pages may shift when files change; scanTruncated means unscanned entries cannot be recovered by nextOffset.",
       };
       const render = () =>
@@ -113,7 +126,7 @@ export function createServer(roots: string[]) {
           )
           .join("\n");
       data.tree = render();
-      // Rendering adds bytes to list_directory's bounded page. Retain its order
+      // Rendering adds bytes to the bounded listing. Retain its order
       // and advance only by entries actually returned, so none are skipped.
       while (Buffer.byteLength(JSON.stringify(data)) > MAX_OUT) {
         if (!entries.length) throw new Error("TREE_RESPONSE_TOO_LARGE");
@@ -142,35 +155,118 @@ export function createServer(roots: string[]) {
     },
   );
   add(
-    "search_workspace",
-    "Search literal text, never regex. Scan and output are bounded; check truncation and skippedFiles.",
-    { path: z.string(), query: z.string().min(1).max(200) },
+    "read_image",
+    "Read an allowed PNG/JPEG/WebP screenshot or image as native image content, up to 1 MiB. Same file policy as read_file. A screenshot is evidence, not proof of execution time or tested revision; the caller must supply that context.",
+    { path: z.string() },
+    async (a) => {
+      const target = access.file(a.path);
+      return {
+        ...(await target.workspace.image(target.path)),
+        path: fullPath(a.path),
+      };
+    },
+  );
+  const discoveryInput = {
+    path: z.string(),
+    pattern: z.string().min(1).max(200).default("*"),
+    depth: z.number().int().min(1).max(32).default(12),
+    offset: z.number().int().min(0).max(10000).default(0),
+    limit: z.number().int().min(1).max(500).default(200),
+  };
+  add(
+    "find_files",
+    "Locate permitted files by glob, sorted by relative path. Patterns without '/' match basenames at any depth; e.g. '*.ts', '**/migrations/*.sql'. Check scanTruncated, depthLimited and nextOffset; narrowing path avoids scan limits.",
+    discoveryInput,
     async (a) => ({
-      ...(await access.directory(a.path).search(a.query)),
+      ...(await access
+        .directory(a.path)
+        .find(a.pattern, a.depth, a.offset, a.limit)),
+      path: fullPath(a.path),
+    }),
+  );
+  add(
+    "search_workspace",
+    "Search literal case-sensitive text within a full directory path and optional file glob. Returns matching lines, bounded context and file hashes. Follow nextOffset; scanTruncated/depthLimited/skippedFiles mean incomplete coverage, not absence. Use read_file for truncated excerpts.",
+    {
+      ...discoveryInput,
+      query: z.string().min(1).max(200),
+      offset: z.number().int().min(0).max(1000000).default(0),
+      limit: z.number().int().min(1).max(50).default(50),
+      contextLines: z.number().int().min(0).max(5).default(2),
+    },
+    async (a) => ({
+      ...(await access.directory(a.path).search(a.query, a)),
       path: fullPath(a.path),
     }),
   );
   add(
     "git_status",
-    "Filtered Git status for a full repository path. Requires the exact Git top level. Failures are not a clean tree.",
-    { path: z.string() },
+    "Filtered Git status for a full repository path. Requires the exact Git top level. Failures are not a clean tree. A clean worktree does not mean there are no recent commits; use git_log/git_show.",
+    {
+      path: z.string(),
+      offset: z.number().int().min(0).max(1000000).default(0),
+      limit: z.number().int().min(1).max(500).default(200),
+    },
     async (a) => ({
-      ...(await access.directory(a.path).status()),
+      ...(await access.directory(a.path).status(a.offset, a.limit)),
       path: fullPath(a.path),
     }),
   );
   add(
     "git_diff",
-    "Filtered live Git diff; excludes sensitive paths on either rename side, submodules, external drivers and filters. Untracked file contents are excluded.",
+    "Filtered live Git diff; excludes sensitive paths on either rename side, submodules, external drivers and filters. Untracked file contents are excluded. Paginated files plus one patch fragment; select patchFile and follow nextPatchOffset. Use git_show for a commit and git_compare for version differences.",
     {
       path: z.string(),
       mode: z.enum(["unstaged", "staged", "head"]).default("unstaged"),
+      offset: z.number().int().min(0).max(1000000).default(0),
+      limit: z.number().int().min(1).max(500).default(100),
+      patchFile: z.string().optional(),
+      patchOffset: z.number().int().min(0).max(10000000).default(0),
     },
     async (a) => ({
-      ...(await access.directory(a.path).diff(a.mode)),
+      ...(await access.directory(a.path).diff(a.mode, a)),
       path: fullPath(a.path),
     }),
   );
+  const historyTools = [
+    [
+      "git_log",
+      "log",
+      "Read paginated commit history. Resolve ref to an immutable SHA and reuse it on later pages. Empty worktree diff is unrelated to this history. Check shallow and truncation.",
+    ],
+    [
+      "git_show",
+      "show",
+      "Inspect a commit with metadata, parent comparison, filtered file statistics and a resumable patch. Root commits compare to empty; merge commits select parent explicitly. Follow top-level nextOffset for files and patch.nextOffset with patchFile.",
+    ],
+    [
+      "git_compare",
+      "compare",
+      "Compare immutable versions: direct endpoint difference or merge-base change. Returns resolved SHAs, filtered file statistics and a resumable single-file patch. Pin returned SHAs for continuation.",
+    ],
+    [
+      "git_read_file",
+      "read",
+      "Read UTF-8 filePath relative to the repository root at ref, including deleted historical files. Enforces current and historical ignore policies. Returns commit/blob identity, whole-file SHA-256 and line continuation.",
+    ],
+  ] as const;
+  for (const [name, method, description] of historyTools) {
+    add(
+      name,
+      description,
+      gitHistoryInputs[name].extend({ path: z.string() }),
+      async (a) => {
+        const { path, ...options } = a;
+        const history = access.directory(path).history();
+        return {
+          ...(await (history[method] as (options: any) => Promise<any>)(
+            options,
+          )),
+          path: fullPath(path),
+        };
+      },
+    );
+  }
   return server;
 }
 export async function serve(roots: string[]) {

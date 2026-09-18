@@ -34,10 +34,15 @@ test("real stdio client discovers tools and reads only allowed files", async () 
       expect(tool.outputSchema!.type).toBe("object");
     }
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "find_files",
+      "git_compare",
       "git_diff",
+      "git_log",
+      "git_read_file",
+      "git_show",
       "git_status",
-      "list_directory",
       "read_file",
+      "read_image",
       "search_workspace",
       "tree",
       "workspace_info",

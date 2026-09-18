@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { gitHistoryOutputs } from "./git-history-schemas.ts";
 
 const count = z.number().int().nonnegative();
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
@@ -46,12 +47,22 @@ export const outputSchemas = {
       .min(1)
       .max(16),
     mode,
+    server: z.strictObject({
+      name: z.literal("convorel"),
+      version: z.string(),
+      capabilityVersion: z.literal("evidence-v1"),
+      tools: z.array(z.string()),
+      maxStructuredResponseBytes: count,
+      maxImageBytes: count,
+    }),
     workspace: z
       .strictObject({
         path: z.string(),
         workspaceId,
         name: z.string(),
         gitHead,
+        gitBranch: z.string().nullable(),
+        gitError: z.string().nullable(),
         observedAt,
         limits: z.strictObject({
           maxFileBytes: count,
@@ -64,8 +75,9 @@ export const outputSchemas = {
         "Null when listing roots without a path; otherwise the selected project's complete metadata.",
       ),
   }),
-  list_directory: listing,
   tree: listing.extend({
+    workspaceId,
+    observedAt,
     entries: z
       .array(
         entry.extend({
@@ -102,8 +114,40 @@ export const outputSchemas = {
     observedAt,
     workspaceId,
   }),
+  read_image: z.strictObject({
+    path: z.string(),
+    mimeType: z.enum(["image/png", "image/jpeg", "image/webp"]),
+    sizeBytes: count,
+    sha256,
+    hashScope: z.literal("whole-file"),
+    observedAt,
+    workspaceId,
+    note: z.string(),
+  }),
+  find_files: z.strictObject({
+    path: z.string(),
+    pattern: z.string(),
+    entries: z.array(entry).max(500),
+    depth: count,
+    offset: count,
+    limit: count,
+    nextOffset: count.nullable(),
+    truncated: z.boolean(),
+    scanTruncated: z.boolean(),
+    depthLimited: z.boolean(),
+    scannedEntries: count,
+    workspaceId,
+    observedAt,
+    note: z.string(),
+  }),
   search_workspace: z.strictObject({
     path: z.string(),
+    query: z.string(),
+    pattern: z.string(),
+    depth: count,
+    offset: count,
+    limit: count,
+    contextLines: count,
     matches: z
       .array(
         z.strictObject({
@@ -111,13 +155,21 @@ export const outputSchemas = {
           line: z.number().int().positive(),
           text: z.string(),
           sha256,
+          contextBefore: z.array(z.string()),
+          contextAfter: z.array(z.string()),
+          textTruncated: z.boolean(),
         }),
       )
       .max(50),
+    nextOffset: count.nullable(),
     truncated: z.boolean(),
+    scanTruncated: z.boolean(),
+    depthLimited: z.boolean(),
     skippedFiles: count,
     scannedBytes: count,
     workspaceId,
+    observedAt,
+    note: z.string(),
   }),
   git_status: z.strictObject({
     path: z.string(),
@@ -128,6 +180,9 @@ export const outputSchemas = {
     hidden: count,
     truncated: z.boolean(),
     dirty: z.boolean(),
+    offset: count,
+    limit: count,
+    nextOffset: count.nullable(),
     workspaceId,
     observedAt,
   }),
@@ -135,6 +190,23 @@ export const outputSchemas = {
     path: z.string(),
     mode: z.enum(["unstaged", "staged", "head"]),
     diff: z.string(),
+    files: z
+      .array(
+        z.strictObject({
+          path: z.string(),
+          previousPath: z.string().nullable(),
+          change: z.string(),
+        }),
+      )
+      .max(500),
+    offset: count,
+    limit: count,
+    nextOffset: count.nullable(),
+    patchFile: z.string().nullable(),
+    patchOffset: count,
+    nextPatchOffset: count.nullable(),
+    totalPatchLength: count,
+    patchSha256: sha256,
     hidden: count,
     truncated: z.boolean(),
     sha256,
@@ -144,4 +216,8 @@ export const outputSchemas = {
     observedAt,
     note: z.string(),
   }),
+  git_log: gitHistoryOutputs.git_log.extend({ path: z.string() }),
+  git_show: gitHistoryOutputs.git_show.extend({ path: z.string() }),
+  git_compare: gitHistoryOutputs.git_compare.extend({ path: z.string() }),
+  git_read_file: gitHistoryOutputs.git_read_file.extend({ path: z.string() }),
 };

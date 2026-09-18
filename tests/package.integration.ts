@@ -183,7 +183,7 @@ try {
   try {
     await client.connect(transport);
     const tools = (await client.listTools()).tools;
-    assert.equal(tools.length, 7);
+    assert.equal(tools.length, 12);
     assert.ok(tools.every((tool) => tool.outputSchema?.type === "object"));
     const result = await client.callTool({
       name: "read_file",

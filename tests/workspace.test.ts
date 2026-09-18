@@ -47,9 +47,7 @@ test("shared policy blocks secrets, traversal, absolute paths, symlinks and igno
   const listing = await ws.list(".");
   expect(JSON.stringify(listing)).not.toContain(".env");
   expect(JSON.stringify(listing)).not.toContain("alias");
-  expect(JSON.stringify(await ws.search("SECRET_SENTINEL"))).not.toContain(
-    "SECRET_SENTINEL",
-  );
+  expect((await ws.search("SECRET_SENTINEL")).matches).toEqual([]);
   const r = await ws.read("code.ts", 2, 1);
   expect(r.content).toBe("world");
   expect(r.startLine).toBe(2);

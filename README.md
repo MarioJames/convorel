@@ -6,7 +6,7 @@
 
 Convorel 把 ChatGPT 接入本地开发流程。让 Codex 或 Claude Code 带着问题发起讨论，取得另一个视角，再回到工作区核对建议、修改代码和运行测试。从方案取舍到复杂排障，讨论可以跟着同一项工作持续推进。
 
-接通可选的只读代码服务后，ChatGPT 还能按需查看你允许访问的文件和 diff，让判断有代码依据，减少手动复制上下文。
+接通可选的只读代码服务后，ChatGPT 还能按需检索你允许访问的文件、查看提交历史与版本差异，并按需读取验证报告或截图，让判断有代码依据，减少手动复制上下文。
 
 [![检查](https://github.com/MarioJames/convorel/actions/workflows/check.yml/badge.svg)](https://github.com/MarioJames/convorel/actions/workflows/check.yml)
 [![许可证](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)

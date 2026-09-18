@@ -15,6 +15,13 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import ignore from "ignore";
 import { childEnv } from "./command.ts";
+import {
+  CONTENT_BUDGET,
+  textPage,
+  pathMatcher,
+  textChunk,
+} from "./evidence.ts";
+import { GitHistory, selectGitPatch } from "./git-history.ts";
 const MAX_FILE = 1024 * 1024;
 export const MAX_OUT = 64 * 1024;
 export const sha = (s: string | Buffer) =>
@@ -192,7 +199,11 @@ export class Workspace {
         abs = join(abs, part);
         try {
           const s = lstatSync(abs);
-          if (s.isSymbolicLink() || (!s.isDirectory() && !s.isFile()))
+          if (
+            s.isSymbolicLink() ||
+            (s.isFile() && s.nlink > 1) ||
+            (!s.isDirectory() && !s.isFile())
+          )
             return false;
         } catch (e: any) {
           if (e.code !== "ENOENT") throw e;
@@ -210,29 +221,9 @@ export class Workspace {
     integer(maxLines, 1, 1000);
     if (!this.allowed(p)) throw new Error("ACCESS_DENIED");
     const buf = this.raw(p);
-    if (buf.includes(0)) throw new Error("BINARY_FILE");
-    const lines = buf.toString("utf8").split("\n");
-    if (lines.at(-1) === "") lines.pop();
-    const out: string[] = [];
-    let bytes = 0;
-    for (const line of lines.slice(startLine - 1, startLine - 1 + maxLines)) {
-      if (bytes + Buffer.byteLength(line) + 1 > MAX_OUT) {
-        if (!out.length) throw new Error("LINE_TOO_LONG");
-        break;
-      }
-      out.push(line);
-      bytes += Buffer.byteLength(line) + 1;
-    }
-    const endLine = startLine + out.length - 1,
-      truncated = endLine < lines.length;
     return {
       path: this.normalize(p),
-      content: out.join("\n"),
-      startLine,
-      endLine,
-      totalLines: lines.length,
-      truncated,
-      nextStartLine: truncated ? endLine + 1 : null,
+      ...textPage(buf, startLine, maxLines),
       sha256: sha(buf),
       hashScope: "whole-file",
       sizeBytes: buf.length,
@@ -277,6 +268,7 @@ export class Workspace {
       }
     };
     walk(rel, 1);
+    entries.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     return { entries, scanned, truncated, depthLimited };
   }
   async list(p = ".", depth = 1, offset = 0, limit = 200) {
@@ -298,77 +290,203 @@ export class Workspace {
       scanTruncated: all.truncated,
     };
   }
-  async search(query: string) {
-    if (!query || query.length > 200) throw new Error("INVALID_QUERY");
-    const start = Date.now(),
-      inv = this.inventory(".", 12);
+  async find(pattern = "*", depth = 12, offset = 0, limit = 200) {
+    integer(depth, 1, 32);
+    integer(offset, 0, 10000);
+    integer(limit, 1, 500);
+    const match = pathMatcher(pattern),
+      inv = this.inventory(".", depth);
+    const files = inv.entries.filter((f) => f.type === "file" && match(f.path));
+    const entries = files.slice(offset, offset + limit);
+    while (Buffer.byteLength(JSON.stringify(entries)) > CONTENT_BUDGET)
+      entries.pop();
+    return {
+      pattern,
+      entries,
+      offset,
+      limit,
+      depth,
+      nextOffset:
+        offset + entries.length < files.length ? offset + entries.length : null,
+      truncated:
+        inv.truncated ||
+        inv.depthLimited ||
+        offset + entries.length < files.length,
+      scanTruncated: inv.truncated,
+      depthLimited: inv.depthLimited,
+      scannedEntries: inv.scanned,
+      workspaceId: this.id,
+      observedAt: new Date().toISOString(),
+      note: "Live, sorted relative paths. Pagination covers only the scanned inventory; narrow path or increase depth if scan/depth limited. Patterns without '/' match basenames.",
+    };
+  }
+  async image(p: string) {
+    if (!this.allowed(p)) throw new Error("ACCESS_DENIED");
+    const buf = this.raw(p);
+    const mimeType = buf
+      .subarray(0, 8)
+      .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      ? "image/png"
+      : buf[0] === 255 && buf[1] === 216 && buf[2] === 255
+        ? "image/jpeg"
+        : buf.toString("ascii", 0, 4) === "RIFF" &&
+            buf.toString("ascii", 8, 12) === "WEBP"
+          ? "image/webp"
+          : null;
+    if (!mimeType) throw new Error("UNSUPPORTED_IMAGE");
+    return {
+      path: this.normalize(p),
+      mimeType,
+      sizeBytes: buf.length,
+      sha256: sha(buf),
+      hashScope: "whole-file" as const,
+      workspaceId: this.id,
+      observedAt: new Date().toISOString(),
+      imageData: buf.toString("base64"),
+      note: "Image bytes observed at this path, not proof of when or against which revision the screenshot was produced. Maximum image size: 1 MiB.",
+    };
+  }
+  async search(
+    query: string,
+    options: {
+      pattern?: string;
+      depth?: number;
+      offset?: number;
+      limit?: number;
+      contextLines?: number;
+    } = {},
+  ) {
+    if (
+      !query ||
+      query.length > 200 ||
+      query.includes("\n") ||
+      query.includes("\0")
+    )
+      throw new Error("INVALID_QUERY");
+    const {
+      pattern = "*",
+      depth = 12,
+      offset = 0,
+      limit = 50,
+      contextLines = 2,
+    } = options;
+    integer(depth, 1, 32);
+    integer(offset, 0, 1_000_000);
+    integer(limit, 1, 50);
+    integer(contextLines, 0, 5);
+    const match = pathMatcher(pattern),
+      start = Date.now(),
+      inv = this.inventory(".", depth);
     const matches: {
       path: string;
       line: number;
       text: string;
       sha256: string;
+      contextBefore: string[];
+      contextAfter: string[];
+      textTruncated: boolean;
     }[] = [];
     let scannedBytes = 0,
       skippedFiles = 0,
-      truncated = inv.truncated || inv.depthLimited;
-    for (const f of inv.entries) {
-      if (f.type !== "file") continue;
-      if (
-        scannedBytes >= 16 * MAX_FILE ||
-        Date.now() - start > 5000 ||
-        matches.length >= 50
-      ) {
-        truncated = true;
+      skippedMatches = 0,
+      pageMore = false,
+      scanTruncated = inv.truncated,
+      outputBytes = 0;
+    scan: for (const f of inv.entries) {
+      if (f.type !== "file" || !match(f.path)) continue;
+      if (scannedBytes >= 16 * MAX_FILE || Date.now() - start > 5000) {
+        scanTruncated = true;
         break;
       }
-      let buf: Buffer;
+      let buf: Buffer, text: string;
       try {
         buf = this.raw(f.path);
+        scannedBytes += buf.length;
+        if (buf.includes(0)) throw new Error("BINARY_FILE");
+        text = new TextDecoder("utf-8", {
+          fatal: true,
+          ignoreBOM: true,
+        }).decode(buf);
       } catch {
         skippedFiles++;
         continue;
       }
-      scannedBytes += buf.length;
-      if (buf.includes(0)) {
-        skippedFiles++;
-        continue;
-      }
-      const hash = sha(buf);
-      let line = 0;
-      for (const text of buf.toString("utf8").split("\n")) {
-        line++;
-        if (text.includes(query)) {
-          matches.push({
-            path: f.path,
-            line,
-            text: text.slice(0, 1000),
-            sha256: hash,
-          });
-          if (matches.length >= 50) {
-            truncated = true;
-            break;
-          }
+      const hash = sha(buf),
+        lines = text.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]!,
+          at = line.indexOf(query);
+        if (at < 0) continue;
+        if (skippedMatches++ < offset) continue;
+        if (matches.length === limit) {
+          pageMore = true;
+          break scan;
         }
+        const begin = Math.max(0, at - 500),
+          snippet = line.slice(begin, begin + 2000);
+        const before = lines.slice(Math.max(0, i - contextLines), i),
+          after = lines.slice(i + 1, i + 1 + contextLines);
+        const entry = {
+          path: f.path,
+          line: i + 1,
+          text: snippet,
+          sha256: hash,
+          contextBefore: before.map((x) => x.slice(0, 1000)),
+          contextAfter: after.map((x) => x.slice(0, 1000)),
+          textTruncated:
+            begin > 0 ||
+            begin + snippet.length < line.length ||
+            [...before, ...after].some((x) => x.length > 1000),
+        };
+        const bytes = Buffer.byteLength(JSON.stringify(entry)) + 1;
+        if (outputBytes + bytes > CONTENT_BUDGET) {
+          if (!matches.length) throw new Error("SEARCH_ENTRY_TOO_LARGE");
+          pageMore = true;
+          break scan;
+        }
+        matches.push(entry);
+        outputBytes += bytes;
       }
-    }
-    while (Buffer.byteLength(JSON.stringify(matches)) > MAX_OUT) {
-      matches.pop();
-      truncated = true;
     }
     return {
+      query,
+      pattern,
+      depth,
+      offset,
+      limit,
+      contextLines,
       matches,
-      truncated,
+      nextOffset: pageMore ? offset + matches.length : null,
+      truncated: pageMore || scanTruncated || inv.depthLimited,
+      scanTruncated,
+      depthLimited: inv.depthLimited,
       skippedFiles,
       scannedBytes,
       workspaceId: this.id,
+      observedAt: new Date().toISOString(),
+      note: "Literal, case-sensitive search of live UTF-8 files, one result per matching line. nextOffset continues matches within the scanned range; scan/depth limits require a narrower path or greater depth. skippedFiles are not searched. textTruncated excerpts can be read with read_file; hashes detect changes between calls.",
     };
   }
+  history() {
+    return new GitHistory({
+      root: this.root,
+      id: this.id,
+      normalize: (path) => this.normalize(path),
+      allowed: (path, isDir) => this.allowed(path, isDir),
+      ready: () => this.gitReady(),
+      git: (args) => this.gitBytes(args),
+    });
+  }
   private git(args: string[], acceptMissing = false) {
+    return this.gitBytes(args, acceptMissing).toString("utf8");
+  }
+  private gitBytes(args: string[], acceptMissing = false) {
     this.checkRoot();
     const r = spawnSync(
       "git",
       [
         "--no-pager",
+        "--no-replace-objects",
         "--no-optional-locks",
         "--no-lazy-fetch",
         "--literal-pathspecs",
@@ -385,7 +503,6 @@ export class Workspace {
         ...args,
       ],
       {
-        encoding: "utf8",
         timeout: 8000,
         maxBuffer: 4 * MAX_FILE,
         env: {
@@ -400,7 +517,7 @@ export class Workspace {
     );
     if (r.error) throw new Error("GIT_LIMIT_OR_PROCESS_ERROR");
     if (r.status !== 0) {
-      if (acceptMissing && r.status === 1) return "";
+      if (acceptMissing && r.status === 1) return Buffer.alloc(0);
       throw new Error("GIT_FAILED");
     }
     return r.stdout;
@@ -448,15 +565,24 @@ export class Workspace {
     }
   }
   async info() {
-    let gitHead: string | null = null;
+    let gitHead: string | null = null,
+      gitBranch: string | null = null,
+      gitError: string | null = null;
     try {
       this.gitReady();
       gitHead = this.head();
-    } catch {}
+      gitBranch =
+        this.git(["symbolic-ref", "--quiet", "--short", "HEAD"], true).trim() ||
+        null;
+    } catch (e: any) {
+      gitError = /^[A-Z_]+$/.test(e.message) ? e.message : "GIT_UNAVAILABLE";
+    }
     return {
       workspaceId: this.id,
       name: basename(this.root),
       gitHead,
+      gitBranch,
+      gitError,
       mode: "live-read-only",
       observedAt: new Date().toISOString(),
       limits: { maxFileBytes: MAX_FILE, maxResponseContentBytes: MAX_OUT },
@@ -464,7 +590,9 @@ export class Workspace {
         "No symlinks, hardlinks, special files, credentials or ignored files. All authorized connector clients share this root.",
     };
   }
-  async status() {
+  async status(offset = 0, limit = 200) {
+    integer(offset, 0, 1000000);
+    integer(limit, 1, 500);
     this.gitReady();
     const raw = this.git([
       "status",
@@ -486,26 +614,48 @@ export class Workspace {
       }
       entries.push({ path, change: row.slice(0, 2) });
     }
-    const selected = entries.slice(0, 500);
-    while (Buffer.byteLength(JSON.stringify(selected)) > MAX_OUT)
+    const selected = entries.slice(offset, offset + limit);
+    while (Buffer.byteLength(JSON.stringify(selected)) > CONTENT_BUDGET)
       selected.pop();
     return {
       head: this.head(),
       entries: selected,
       hidden,
-      truncated: entries.length > selected.length,
+      truncated: offset + selected.length < entries.length,
+      offset,
+      limit,
+      nextOffset:
+        offset + selected.length < entries.length
+          ? offset + selected.length
+          : null,
       dirty: !!raw,
       workspaceId: this.id,
       observedAt: new Date().toISOString(),
     };
   }
-  async diff(mode: "unstaged" | "staged" | "head" = "unstaged") {
+  async diff(
+    mode: "unstaged" | "staged" | "head" = "unstaged",
+    options: {
+      offset?: number;
+      limit?: number;
+      patchFile?: string;
+      patchOffset?: number;
+    } = {},
+  ) {
+    const { offset = 0, limit = 100, patchFile, patchOffset = 0 } = options;
+    integer(offset, 0, 1000000);
+    integer(limit, 1, 500);
+    integer(patchOffset, 0, 10_000_000);
     if (!["unstaged", "staged", "head"].includes(mode))
       throw new Error("INVALID_DIFF_MODE");
     this.gitReady();
     const extra =
       mode === "staged" ? ["--cached"] : mode === "head" ? ["HEAD"] : [];
     const flags = [
+      "--no-relative",
+      "--output-indicator-new=+",
+      "--output-indicator-old=-",
+      "--output-indicator-context= ",
       "--no-ext-diff",
       "--no-textconv",
       "--ignore-submodules=all",
@@ -521,7 +671,12 @@ export class Workspace {
       "--",
       ".",
     ]).split("\0");
-    const groups: string[][] = [];
+    const groups: {
+      paths: string[];
+      change: string;
+      oldOid: string;
+      newOid: string;
+    }[] = [];
     let hidden = 0;
     for (let i = 0; i < tokens.length && tokens[i]; ) {
       const meta = tokens[i++].split(" "),
@@ -534,32 +689,65 @@ export class Workspace {
         hidden++;
         continue;
       }
-      groups.push(paths);
+      groups.push({
+        paths,
+        change: meta[4]!,
+        oldOid: meta[2]!,
+        newOid: meta[3]!,
+      });
     }
-    let diff = "",
-      truncated = false;
-    const start = Date.now();
-    for (const paths of groups) {
-      if (Date.now() - start > 8000) {
-        truncated = true;
-        break;
-      }
-      const patch = this.git([
-        "diff",
-        "--no-color",
-        ...flags,
-        ...extra,
-        "--",
-        ...paths,
-      ]);
-      if (Buffer.byteLength(diff) + Buffer.byteLength(patch) > MAX_OUT) {
-        truncated = true;
-        break;
-      }
-      diff += patch;
-    }
+    const files = groups.slice(offset, offset + limit).map((g) => ({
+      path: g.paths.at(-1)!,
+      previousPath: g.paths.length === 2 ? g.paths[0]! : null,
+      change: g.change,
+    }));
+    while (Buffer.byteLength(JSON.stringify(files)) > 16 * 1024) files.pop();
+    const requested =
+      patchFile === undefined ? files[0]?.path : this.normalize(patchFile);
+    const group = groups.find((g) => g.paths.at(-1) === requested);
+    if (patchFile !== undefined && !group)
+      throw new Error("DIFF_FILE_UNAVAILABLE");
+    const patch = group
+      ? selectGitPatch(
+          this.gitBytes([
+            "diff",
+            "--raw",
+            "-z",
+            "-p",
+            "--no-abbrev",
+            "--no-color",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            ...flags,
+            ...extra,
+            "--",
+            ...group.paths,
+          ]),
+          {
+            path: group.paths.at(-1)!,
+            oldPath: group.paths.length === 2 ? group.paths[0]! : null,
+            oldOid: group.oldOid,
+            newOid: group.newOid,
+            status: group.change[0]!,
+          },
+        ).toString("utf8")
+      : "";
+    const chunk = textChunk(patch, patchOffset, 32 * 1024),
+      diff = chunk.text;
+    const nextOffset =
+      offset + files.length < groups.length ? offset + files.length : null;
+    const truncated = nextOffset !== null || chunk.nextOffset !== null;
     return {
       mode,
+      files,
+      offset,
+      limit,
+      nextOffset,
+      patchFile: group?.paths.at(-1) || null,
+      patchOffset,
+      nextPatchOffset: chunk.nextOffset,
+      totalPatchLength: patch.length,
+      patchSha256: sha(patch),
       diff,
       hidden,
       truncated,
@@ -568,7 +756,7 @@ export class Workspace {
       head: this.head(),
       workspaceId: this.id,
       observedAt: new Date().toISOString(),
-      note: "Live Git observation; untracked file contents are not included. Not an immutable worktree snapshot.",
+      note: "Live Git observation; files are paginated and diff is a fragment for patchFile (defaults to the first file on this page). Follow nextOffset for files and nextPatchOffset for that patch; offsets are UTF-16 code units. Recheck patchSha256 on continuation. Untracked contents are excluded. A clean worktree says nothing about recent commits; use git_log/git_show. Not an immutable snapshot.",
     };
   }
 }

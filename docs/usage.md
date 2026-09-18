@@ -161,19 +161,40 @@ bun --no-env-file src/cli.ts tunnel run
 
 > 请审查 `/home/your-name/workspaces/my-project`。先调用 workspace_info 核对目录，再读取相关文件；引用文件路径和返回的 SHA-256。
 
-| MCP 工具           | 用途                                                                                        |
-| ------------------ | ------------------------------------------------------------------------------------------- |
-| `workspace_info`   | 返回 `roots`、`mode` 和 `workspace`；不传路径时 `workspace` 为 `null`，传路径时返回项目详情 |
-| `list_directory`   | 列出允许访问的目录和文件                                                                    |
-| `tree`             | 按目录层次浏览允许访问的路径，明确深度限制、扫描截断和分页                                  |
-| `read_file`        | 按行读取文本，返回整文件 SHA-256                                                            |
-| `search_workspace` | 有扫描及输出上限的字面量文本搜索                                                            |
-| `git_status`       | 返回经过路径过滤的 Git 状态                                                                 |
-| `git_diff`         | 读取工作区、暂存区或相对 HEAD 的 diff                                                       |
+| MCP 工具           | 用途                                                                             |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `workspace_info`   | 允许根、项目身份、HEAD/分支、Git 可用性，以及实际服务版本、能力版本和工具清单    |
+| `tree`             | 结构化目录条目和目录树文本，明确深度、扫描限制及分页；取代独立目录列表           |
+| `find_files`       | 按文件名或相对路径 glob 定位文件，支持深度及分页                                 |
+| `read_file`        | 按行读取当前 UTF-8 文件、文档或文本报告，返回整文件 SHA-256                      |
+| `search_workspace` | 在指定目录和文件 glob 内搜索字面量，返回匹配行、上下文、文件 hash 和续读位置     |
+| `read_image`       | 按需读取 PNG/JPEG/WebP 截图或图片，返回原生 MCP 图片内容及 hash，最大 1 MiB      |
+| `git_status`       | 分页读取经过路径过滤的工作区状态                                                 |
+| `git_diff`         | 工作区/暂存区/相对 HEAD 的文件清单和可续读的单文件 patch                         |
+| `git_log`          | 分页查看提交历史、提交身份、作者及父提交，标明浅克隆限制                         |
+| `git_show`         | 查看一次提交的元信息、完整提交说明、文件统计和可续读 patch；合并提交可选择父提交 |
+| `git_compare`      | 比较两个版本，区分端点差异与从共同祖先起的变化                                   |
+| `git_read_file`    | 按行读取指定提交中的文件，包括当前已经删除的文件                                 |
 
-工具使用完整 `path`，支持绝对路径和 `~/`；Git 工具需传真实 Git 根目录。远端不能添加允许根或扩大本地配置。
+工具使用完整 `path`，支持绝对路径和 `~/`；Git 工具的 `path` 必须是真实仓库根目录，`filePath`/`patchFile` 是仓库相对路径。远端不能增加允许根或扩大本地配置。所有工具声明严格 MCP `outputSchema` 并返回对应的 `structuredContent`；图片另附原生 image 内容。
 
-所有工具声明 MCP `outputSchema` 并返回对应的 `structuredContent`，方便客户端校验结构。连接器已缓存旧工具定义时，需要在插件管理页面刷新工具定义后才能看到新增工具及输出结构。`tree` 复用目录读取的权限和过滤规则；它提供文件层次，不推断模块依赖或架构正确性。
+`workspace_info` 不传路径时返回 `workspace: null` 和允许根；传路径时返回该项目详情。`server.capabilityVersion` 为 `evidence-v1`，`server.tools` 反映当前进程实现。连接器缓存旧定义时，在插件管理页面刷新工具定义；仅重启本地进程不能证明客户端缓存已经刷新。
+
+### 按问题取证
+
+- **找入口或配置**：`tree` 看布局，`find_files(path, pattern)` 找文件。无 `/` 的模式匹配任意深度的文件名，例如 `*.ts`；有 `/` 则匹配相对路径，例如 `src/**/*.ts`。`tree` 提供文件层次，不证明依赖关系或架构正确性。
+- **核实实现**：`search_workspace(path, query, pattern, contextLines)` 返回区分大小写的字面量匹配；按 `nextOffset` 续查，用 `read_file` 展开关键上下文。`textTruncated` 表示摘录不完整。`scanTruncated`、`depthLimited` 或 `skippedFiles` 非零时，不能断言“整个项目不存在”；缩小目录/文件范围或调整深度后再查。
+- **最近改了什么**：先 `git_log(path, limit)`，再 `git_show(path, ref)`；工作区干净和相对 HEAD 的 diff 为空，只代表当前未提交变更情况。首次提交比较空树，合并提交默认比较第一父提交，可指定 `parent`。
+- **交付相对基线改了什么**：`git_compare(path, base, head, mode)`，`mode=direct` 比较两个端点；`mode=merge-base` 比较共同祖先到 head。用返回的完整 SHA 固定后续调用，并通过 `git_read_file(path, ref, filePath)` 读取对应版本，避免混用当前文件。
+- **验证依据是什么**：本地 Agent 提供目标、约束、比较基线、实际结果和验证摘要，需要时再用 `read_file` 读取报告/日志，用 `read_image` 读取截图。产物路径必须已获准共享并通过相同忽略规则；不要为了报告开放整个私有任务目录。工具不执行测试，文件/截图 hash 也不证明它对应哪次运行；摘要应注明执行命令、版本、时间和结果。
+
+### 完整性与续读
+
+文本及结构化 JSON 每次最多 64 KiB；图片二进制单独限制为 1 MiB。当前文本文件最大 1 MiB，非 UTF-8、二进制和超长单行会显式失败，不伪装成空内容。按返回的 `nextStartLine`、`nextOffset` 继续；扫描受限的范围不能仅靠翻页补全。
+
+Git 差异先返回文件清单和一份 patch。使用文件页的 `nextOffset` 获取其余文件，指定 `patchFile` 查看该文件，按 patch 的续读位置读取后续片段。提交说明使用 `message.nextOffset` 配合 `messageOffset` 续读；历史差异使用 `patch.nextOffset`，工作区差异使用 `nextPatchOffset`；偏移为 UTF-16 code unit，请原样使用返回值。历史分页固定返回的提交 SHA；这不会冻结当前忽略策略，发现策略或可见文件清单变化时应丢弃已组合的分页并重新读取，无法确认完整性时注明证据不足。工作区分页还须核对 `patchSha256`，变化后重新读取。统计范围、隐藏文件和截断信息必须保留在审查结论里。Git 命令达到进程或输出预算时显式报错，不返回“没有修改”。
+
+当前文件、目录及检索是实时观察，时间戳和 hash 标识已读取证据；HEAD 不能代表未提交内容的快照。历史文件与差异同时受当前及对应历史版本的忽略规则约束。历史记录中的普通文本仍可能包含秘密；文件名规则不是通用秘密扫描器。
 
 首次连接时，在允许目录内创建一个内容已知、无敏感信息的测试文件，让 ChatGPT 调用 `read_file`，再用本地 `sha256sum /完整路径/测试文件` 比对整文件 hash 和内容。`tunnel doctor` 成功只说明本地检查通过，网页实际调用成功才确认整条链路可用。
 

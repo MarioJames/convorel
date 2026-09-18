@@ -53,7 +53,9 @@ test("multiple fixed roots retain parent policies for full file paths and reposi
     expect(() => access.directory(a + "/../opensource")).toThrow();
     expect(() => access.directory(join(a, "jump"))).toThrow();
     expect(
-      JSON.stringify(await access.directory(a).search("SECRET_MARKER")),
+      JSON.stringify(
+        (await access.directory(a).search("SECRET_MARKER")).matches,
+      ),
     ).not.toContain("SECRET_MARKER");
     expect(
       JSON.stringify(await access.directory(a).list("repo")),
@@ -113,7 +115,9 @@ test("nested custom policies apply from the parent entry and selected root repla
     const file = access.file(join(repo, "hidden.txt"));
     await expect(file.workspace.read(file.path)).rejects.toThrow();
     expect(
-      JSON.stringify(await access.directory(b).search("PRIVATE_NONCE")),
+      JSON.stringify(
+        (await access.directory(b).search("PRIVATE_NONCE")).matches,
+      ),
     ).not.toContain("PRIVATE_NONCE");
     expect(
       JSON.stringify(await access.directory(b).list("repo")),

@@ -150,8 +150,13 @@ test("real stdio client validates both workspace results, reads, searches and er
     });
     expect(empty.endLine).toBe(0);
     expect(empty.totalLines).toBe(0);
-    const listing = await f.success("list_directory", { path: f.first });
-    expect(listing.entries).toContainEqual({ path: "hello.ts", type: "file" });
+    const listing = await f.success("tree", { path: f.first });
+    expect(listing.entries).toContainEqual({
+      path: "hello.ts",
+      type: "file",
+      depth: 1,
+      parentPath: ".",
+    });
     const search = await f.success("search_workspace", {
       path: f.first,
       query: "answer",
@@ -206,14 +211,114 @@ test("real stdio client validates ordinary repository status and all diff modes"
   }
 }, 20000);
 
+test("evidence workflow discovers capabilities, locates code and reads committed changes through SDK schemas", async () => {
+  const f = await fixture();
+  try {
+    const info = await f.success("workspace_info", { path: f.first });
+    expect(info.server.capabilityVersion).toBe("evidence-v1");
+    expect(info.server.tools.sort()).toEqual(f.tools.map((t) => t.name).sort());
+    const found = await f.success("find_files", {
+      path: f.first,
+      pattern: "*.ts",
+    });
+    expect(found.entries).toEqual([{ path: "hello.ts", type: "file" }]);
+    const search = await f.success("search_workspace", {
+      path: f.first,
+      query: "answer",
+      pattern: "*.ts",
+      contextLines: 1,
+      limit: 1,
+    });
+    expect(search.matches[0].sha256).toHaveLength(64);
+    expect(search.nextOffset).toBeNull();
+    f.git("init", "-q", "-b", "main");
+    f.git("config", "user.name", "Fixture");
+    f.git("config", "user.email", "fixture@example.invalid");
+    f.git("add", "hello.ts");
+    f.git("commit", "-qm", "first");
+    const first = await f.success("git_log", { path: f.first, limit: 1 });
+    const base = first.resolvedRef;
+    f.put("hello.ts", "export const answer = 43;\n");
+    f.git("add", "hello.ts");
+    f.git("commit", "-qm", "second");
+    const log = await f.success("git_log", { path: f.first, limit: 1 });
+    expect(log.commits[0].subject).toBe("second");
+    expect(log.nextOffset).toBe(1);
+    expect(
+      (
+        await f.success("git_log", {
+          path: f.first,
+          ref: log.resolvedRef,
+          offset: log.nextOffset,
+        })
+      ).commits[0].sha,
+    ).toBe(base);
+    const show = await f.success("git_show", {
+      path: f.first,
+      ref: log.resolvedRef,
+    });
+    expect(show.patch.text).toContain("+export const answer = 43;");
+    const comparison = await f.success("git_compare", {
+      path: f.first,
+      base,
+      head: log.resolvedRef,
+    });
+    expect(comparison.files[0]).toMatchObject({
+      path: "hello.ts",
+      additions: 1,
+      deletions: 1,
+    });
+    const old = await f.success("git_read_file", {
+      path: f.first,
+      ref: base,
+      filePath: "hello.ts",
+    });
+    expect(old.content).toContain("42");
+    expect(old.commit).toBe(base);
+    const png =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6XcAAAAASUVORK5CYII=";
+    writeFileSync(join(f.first, "proof.png"), Buffer.from(png, "base64"));
+    const image = await f.call("read_image", {
+      path: join(f.first, "proof.png"),
+    });
+    expect(image.isError).not.toBe(true);
+    expect(image.content).toContainEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: png,
+    });
+    const imageSchema = f.tools.find(
+      (t) => t.name === "read_image",
+    )!.outputSchema!;
+    expect(
+      f.validator.getValidator(imageSchema)(image.structuredContent).valid,
+    ).toBe(true);
+    expect(image.structuredContent).not.toHaveProperty("imageData");
+    for (const [name, args] of [
+      ["git_log", { path: f.first, ref: "--all" }],
+      ["git_read_file", { path: f.first, filePath: ".env" }],
+      ["git_compare", { path: f.first, base: "missing" }],
+      ["find_files", { path: join(f.root, "outside"), pattern: "*" }],
+    ] as const)
+      expect((await f.call(name, args)).isError).toBe(true);
+  } finally {
+    await f.close();
+  }
+}, 20000);
+
 test("tree shares directory policy, depth and pagination through real stdio", async () => {
   const f = await fixture();
   try {
     expect(f.tools.map((tool) => tool.name).sort()).toEqual([
+      "find_files",
+      "git_compare",
       "git_diff",
+      "git_log",
+      "git_read_file",
+      "git_show",
       "git_status",
-      "list_directory",
       "read_file",
+      "read_image",
       "search_workspace",
       "tree",
       "workspace_info",
@@ -266,10 +371,6 @@ test("tree shares directory policy, depth and pagination through real stdio", as
       "alias",
     ])
       expect(JSON.stringify(full)).not.toContain(denied);
-    const list = await f.success("list_directory", { path: f.first, depth: 4 });
-    expect(full.entries.map(({ path, type }: any) => ({ path, type }))).toEqual(
-      list.entries,
-    );
     const paged: unknown[] = [];
     let offset = 0;
     do {
