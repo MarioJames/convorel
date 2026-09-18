@@ -1,5 +1,15 @@
 # Validation
 
+## 2026-09-18：已恢复草稿的发送前恢复
+
+`bun run check` 通过 TypeScript 和 112 个测试；`test:browser` 在隔离的自带 Chromium 中验证 textarea、ProseMirror 多段落、原生删除输入事件、过期授权及聚焦时改稿保护，并通过文本节点读取回归。浏览器 fixture 无页面错误，精确关闭测试标签页及 Chromium，原有标签页保持不变。`test:package` 和 `format:check` 均通过。
+
+真实已登录的普通 Chrome 新建页复现了 `fill("")` 返回成功但正文未清空：仅 contenteditable 的 `value` 属性变空，输入正文未变。与 [agent-browser 0.34.0 的 fill 实现](https://github.com/vercel-labs/agent-browser/blob/v0.34.0/cli/src/native/interaction.rs#L107-L167) 一致。新 `clear-draft` 按用户授权的完整备份匹配、持久备份、删除并读回确认空。原 prepared run 之后经 retry 和模型核验成功发送，resume 确认会话 URL 和用户消息；没有创建替代 task/run，没有改写已保存 prompt。大 prompt 填入后曾出现命令超时，页面已保留完整原 prompt；同一 run 的 retry 复用该草稿并只提交一次。
+
+工作区 snapshot 与正文审查路径不同的情况由 `status --workspace` 明确报告。`start --workspace` 可显式指定新任务绑定，`rebind-workspace` 仅修正尚未发送首轮的元数据，不改变 prompt、全局配置或 MCP 允许根。已发送实例保留历史 snapshot，不用改 JSON 或重复请求规避。
+
+以上验证证明本次页面结构上的恢复和发送边界；不保证未来 ChatGPT DOM 不变，也不将模型回复视为已读取全部代码的证据。共享 Chrome、登录态及持久任务记录保留，其他任务不变。
+
 ## 2026-09-18 — live web batch acceptance of twelve tools
 
 One existing ChatGPT web conversation, using the configured 6 Pro model, invoked all twelve Convorel tools against a task-owned synthetic repository. The completed report records 33 MCP calls: 29 normal results and four expected errors. The remote interface reported evidence-v1; no tool was missing. Tree, glob discovery, text, literal search, Git status, log, commit details and version comparison were paginated to their terminal cursors. Both staged and unstaged patches were returned, and an already-deleted file was read from its historical commit. Native image inspection correctly identified the fixture's red left half and blue right half.

@@ -20,7 +20,12 @@ test("watchers exclude other runs of the same task and release the lock promptly
   });
   const observations: any[] = [];
   const poll = async () =>
-    ({ currentRun: "r1", runs: [{ id: "r1", state: "waiting" }] }) as any;
+    ({
+      config: { workspace: root },
+      workspaceId: "fixture",
+      currentRun: "r1",
+      runs: [{ id: "r1", state: "waiting" }],
+    }) as any;
   try {
     const first = waitForConversation(
       store,
@@ -55,7 +60,12 @@ test("watchers exclude other runs of the same task and release the lock promptly
     });
     expect(store.has("lock-watch-task")).toBe(false);
     const complete = async () =>
-      ({ currentRun: "r2", runs: [{ id: "r2", state: "complete" }] }) as any;
+      ({
+        config: { workspace: root },
+        workspaceId: "fixture",
+        currentRun: "r2",
+        runs: [{ id: "r2", state: "complete" }],
+      }) as any;
     expect(
       await waitForConversation(
         store,
@@ -78,7 +88,12 @@ test("a watcher never follows a newer run and releases ownership on failure", as
   try {
     const store = new State(root);
     const poll = async () =>
-      ({ currentRun: "r2", runs: [{ id: "r2", state: "complete" }] }) as any;
+      ({
+        config: { workspace: root },
+        workspaceId: "fixture",
+        currentRun: "r2",
+        runs: [{ id: "r2", state: "complete" }],
+      }) as any;
     await expect(
       waitForConversation(
         store,
@@ -101,6 +116,8 @@ test("waiting retries only observation failures and stops after three consecutiv
   const store = new State(root);
   const task = {
     id: "task",
+    config: { workspace: root },
+    workspaceId: "fixture",
     currentRun: "r1",
     runs: [{ id: "r1", state: "waiting", userMessageId: "u1" }],
   } as any;

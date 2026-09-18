@@ -31,16 +31,16 @@ convorel_cli init --workspace /absolute/project --cdp 9222
 
 Convorel 从进程环境、其次从**安装根** `.env` 读取 `CONVOREL_MODEL`、`CONVOREL_PROJECT_URL` 和 `CONVOREL_PROJECT_NAME`；同名进程变量即使为空也优先，不回退到文件。不加载调用目录/代码工作区的环境文件、不展开其中变量，不把个人配置写入技能。项目 URL/name 必须成对；不要只提供其中一个或猜项目 URL。模型可选，默认 Latest + Power 末端 Pro；用户明确选择的模型通过 `CONVOREL_MODEL` 配置。
 
-新 task 保存配置 snapshot，续谈保留既有模型/项目；后续修改环境或重新初始化不会迁移旧 task。先读 `conversation status` 核对原配置；与当前明确需求冲突时报告，不改状态 JSON、不创建重复审查。`doctor` 仅验证本地 CDP/MCP，不证明 ChatGPT 已取得代码访问；不要擅自安装工具、扩大共享根或启动重复隧道。
+新 task 保存配置 snapshot，续谈保留既有模型/项目；后续修改环境或重新初始化不会迁移旧 task。新任务显式使用 `start --workspace PATH`，避免默认工作区和实际审查对象不同。先用 `conversation status --id ID --workspace PATH` 核对绑定；不匹配时返回 `workspaceMismatch` 和退出码 2。仅未发送的首轮可用 `rebind-workspace --id ID --run RUN_ID --from-workspace OLD --workspace NEW` 修正元数据，原 prompt/run 保留。已发送或投递未知时检查原 prompt 的路径/revision 并继续同一 run；不改状态 JSON、不创建重复审查。工作区绑定不等于 MCP 允许根，也不会改写 prompt。`doctor` 仅验证本地 CDP/MCP，不证明 ChatGPT 已取得代码访问；不要擅自安装工具、扩大共享根或启动重复隧道。
 
 ## 准备和发送
 
 先用 `conversation list`，再用 `conversation status --id ID` 匹配需求和工作区；已有 active run 继续观察，已有适用结果直接复用。
 
-将完整请求写到私有 UTF-8 文件，按 [review-prompt.md](review-prompt.md) 补齐实际决策、约束、项目路径/revision、MCP 可读取路径、验证摘要和未决问题。代码审查补关键代码及解释；结果校验采用 [result-review.md](result-review.md) 的目标与实际结果对照。检查最终文件。Convorel 只附加关联 marker，不添加角色、项目路径、源码包或审查规则。
+将完整请求写到私有 UTF-8 文件，按 [review-prompt.md](review-prompt.md) 补齐实际决策、约束、项目路径/revision、MCP 可读取路径、验证摘要和未决问题。代码审查补相关文件的 `路径:起始行:结束行` 引用和审查问题，默认通过 MCP 读取，不内嵌仓库源码；结果校验采用 [result-review.md](result-review.md) 的目标与实际结果对照。检查最终文件。Convorel 只附加关联 marker，不添加角色、项目路径、源码包或审查规则。
 
 ```bash
-convorel_cli conversation start --id ID --prompt-file /private/request.md
+convorel_cli conversation start --id ID --prompt-file /private/request.md --workspace /absolute/project
 ```
 
 保存返回的 `currentRun`、观察到的会话 URL 和状态根。传输层每次发送前核验模型/页面。重复同一请求不会重发，冲突的请求 key/内容失败。
@@ -69,6 +69,8 @@ convorel_cli conversation result --id ID --run RUN_ID
 Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何种通知，都须用同一 `--id`、`--run` 取得当前完整 `result`，不能以通知、退出码或最后可见的网页答案代替。
 
 `resume` 仅观察和核对，不发送。只有状态为 `prepared` 且已解决发送前错误时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。它重新核验模型、页面和草稿；不得重试 `submitting`/`delivery_unknown`，不得覆盖变更后的草稿强行推进。未知发送或等待超时不能用新 ID 再发。
+
+新建页恢复了旧草稿时，先读取并备份完整原文。仅用户明确授权删除该页草稿副本后，才使用 `conversation clear-draft --id ID --run RUN_ID --expected-draft-file /private/approved-draft.txt`。该命令只处理任务自有、无历史消息的新建页和未发送首轮；逐字核对草稿，持久保存备份，删除后实际读回确认。草稿已变、附件存在、页面身份不同或投递未知都会停止，不扩大到其他标签页。成功后再显式 retry 同一 run；命令成功回执不能代替空草稿、模型、页面和投递状态核验。
 
 `status` 的 `summary` 区分已确认投递、发送结果未知和未尝试发送，并返回当前阶段、最近观察时间、观察错误和下一步动作。`status` 退出 0 只表示本地状态读取成功；`start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅完成时退出 0，未完成或需处理时退出 2，参数/基础设施等异常可退出 1。不要仅凭退出码取代精确轮次的 `result`。`wait` 仅对观察失败做最多三次连续尝试，不自动重发；登录、页面身份或草稿等需处理的问题不会被当作临时读取失败反复尝试。
 

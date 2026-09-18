@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { State } from "./state.ts";
-import { Browser, ObservationError, sendPrompt } from "./browser.ts";
+import {
+  Browser,
+  clearDraft,
+  ObservationError,
+  sendPrompt,
+} from "./browser.ts";
 import { Workspace, sha } from "./workspace.ts";
 import {
   classify,
@@ -29,6 +34,13 @@ interface Run {
   observedModel?: string;
   lastObservedAt?: string;
   observationError?: { at: string; message: string; retryable: boolean };
+  draftRecovery?: {
+    draft: string;
+    hash: string;
+    target: string;
+    at: string;
+    cleared: boolean;
+  };
 }
 interface Binding {
   target: string;
@@ -50,6 +62,7 @@ export interface Task {
   runs: Run[];
   organization?: any;
   cleanup?: any;
+  workspaceBindingChange?: { from: string; to: string; at: string };
 }
 const same = (a: string, b: string) => {
   try {
@@ -94,6 +107,23 @@ export class Conversation {
     const r = t.runs.find((r) => r.id === t.currentRun);
     if (!r) throw new Error("RUN_MISSING");
     return r;
+  }
+  private checkWorkspace(t: Task, expected?: string) {
+    if (!expected) return;
+    const root = new Workspace(expected).root;
+    if (root !== t.config.workspace)
+      throw new Error(
+        `WORKSPACE_MISMATCH: task=${t.id} bound=${t.config.workspace} expected=${root}; inspect status; do not create a duplicate task`,
+      );
+  }
+  private workspace(path: string) {
+    const workspace = new Workspace(path);
+    if (
+      this.store.root === workspace.root ||
+      this.store.root.startsWith(workspace.root + "/")
+    )
+      throw new Error("STATE_INSIDE_WORKSPACE");
+    return workspace;
   }
   private guard(t: Task) {
     const now = this.get(t.id);
@@ -271,6 +301,7 @@ export class Conversation {
     input: string,
     requestId = "initial",
     followup = false,
+    workspace?: string,
   ) {
     if (
       !/^[a-z0-9][a-z0-9-]{0,79}$/.test(id) ||
@@ -285,6 +316,7 @@ export class Conversation {
       const inputHash = sha(input);
       if (this.store.has("task-" + id)) {
         t = this.get(id);
+        this.checkWorkspace(t, workspace);
         const previous = t.runs.find((r) => r.requestId === requestId);
         if (previous) {
           if (previous.inputHash !== inputHash)
@@ -298,6 +330,7 @@ export class Conversation {
       } else {
         if (followup) throw new Error("TASK_NOT_FOUND");
         const config = conversationConfig(this.store.read<Config>("config"));
+        if (workspace) config.workspace = this.workspace(workspace).root;
         t = {
           version: 1,
           id,
@@ -342,9 +375,10 @@ export class Conversation {
       return this.submitPrepared(t);
     });
   }
-  async retry(id: string, run: string) {
+  async retry(id: string, run: string, workspace?: string) {
     return this.store.locked(async () => {
       const t = this.get(id);
+      this.checkWorkspace(t, workspace);
       if (
         this.current(t, run).state !== "prepared" ||
         this.current(t, run).userMessageId
@@ -352,6 +386,72 @@ export class Conversation {
         throw new Error("RUN_NOT_PREPARED");
       this.begin(t);
       return this.submitPrepared(t);
+    });
+  }
+  async rebindWorkspace(id: string, run: string, from: string, path: string) {
+    return this.store.locked(async () => {
+      const t = this.get(id),
+        r = this.current(t, run);
+      if (
+        r.state !== "prepared" ||
+        r.userMessageId ||
+        t.runs.length !== 1 ||
+        t.url
+      )
+        throw new Error("RUN_NOT_PREPARED");
+      this.checkWorkspace(t, from);
+      const workspace = this.workspace(path);
+      t.workspaceBindingChange = {
+        from: t.config.workspace,
+        to: workspace.root,
+        at: new Date().toISOString(),
+      };
+      t.config.workspace = workspace.root;
+      t.workspaceId = workspace.id;
+      this.begin(t);
+      return t;
+    });
+  }
+  async clearDraft(id: string, run: string, expected: string) {
+    return this.store.locked(async () => {
+      const t = this.get(id),
+        r = this.current(t, run);
+      if (r.state !== "prepared" || r.userMessageId)
+        throw new Error("RUN_NOT_PREPARED");
+      if (t.url || t.runs.length !== 1 || !t.binding?.owned || t.binding.closed)
+        throw new Error("DRAFT_RECOVERY_REQUIRES_OWNED_NEW_PAGE");
+      if (!expected.trim()) throw new Error("EXPECTED_DRAFT_REQUIRED");
+      this.begin(t);
+      try {
+        const b = await this.page(t),
+          p = await this.observe(t, b);
+        if (
+          p.url !== (t.config.projectUrl || "https://chatgpt.com/") ||
+          p.messages.length
+        )
+          throw new Error("UNEXPECTED_CONVERSATION_HISTORY");
+        if (p.draft !== expected) throw new Error("DRAFT_CHANGED");
+        if (p.blocked || p.generating || p.attachments || !p.hasComposer)
+          throw new Error("PAGE_NOT_IDLE");
+        r.draftRecovery = {
+          draft: expected,
+          hash: sha(expected),
+          target: t.binding!.target,
+          at: new Date().toISOString(),
+          cleared: false,
+        };
+        this.save(t); // Durable backup before the only destructive action.
+        this.guard(t);
+        await clearDraft(b, p);
+        this.guard(t);
+        r.draftRecovery.cleared = true;
+        r.error = undefined;
+        this.save(t);
+        return t;
+      } catch (e) {
+        this.recordFailure(t, e);
+        throw e;
+      }
     });
   }
   private async submitPrepared(t: Task) {

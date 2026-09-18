@@ -52,7 +52,7 @@ Lifecycle ownership does not promise that ChatGPT keeps a remote conversation fo
 ## Durable identities
 
 - Workspace: canonical local root plus opaque hash; this is a routing identity, not authentication.
-- Task: user-supplied stable ID, permanently mapped to one workspace and conversation.
+- Task: user-supplied stable ID mapped to a workspace and conversation. Only an unsent initial prepared run permits explicit compare-and-rebind of workspace metadata; its prompt and run stay unchanged.
 - Conversation: validated ChatGPT conversation URL and ID; survives closed tabs.
 - Browser binding: endpoint, browser epoch, target ID, ownership. It expires across browser restarts.
 - Run: UUID, prompt marker/hash, observed user message ID, observed model, reply and terminal outcome.
@@ -67,6 +67,10 @@ A single atomic private task document stores its runs and binding, avoiding cros
 4. Failures before Send remain `prepared` with their error; an explicit run-bound `retry` can continue only that unsent run after rechecking page/model/draft/prior history. `resume` only observes. If submission outcome is uncertain, retain that state. Reconcile by marker on the same conversation/owned draft. Never retry Send just because a command or wait timed out.
 5. Match completion to the exact submitted user message, refuse a later user message and keep each run's reply.
 6. On restart, use conversation identity to recover. An existing user tab is borrowed, never retroactively marked owned.
+
+An owned new page can restore an unrelated draft. `clear-draft` requires explicit authorization represented by the complete expected-draft file and the exact prepared run. It rejects conversation history, borrowed pages, attachments and uncertain delivery, persists a backup before editing, compares the observed page and draft inside the same synchronous browser operation, then verifies an empty editor with a second read. It does not submit. Recovery uses a browser editing deletion rather than setting a contenteditable element's synthetic `value` property; focus-triggered edits abort before deletion. Failures retain the run and backup for inspection.
+
+`start --workspace` chooses a new task's snapshot; existing tasks reject conflicting workspace assertions. `status --workspace` diagnoses mismatches without page access, and `rebind-workspace` changes only prepared task metadata using an expected old binding. None of these operations changes allowed MCP roots or rewrites a saved prompt.
 
 Browser UI cannot provide a transactional exactly-once send guarantee. The guarantee is no automatic second submission after an uncertain outcome, with explicit recovery evidence.
 

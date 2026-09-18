@@ -91,7 +91,7 @@ export const PAGE_SCRIPT = `(() => {
   const sendReady = !!send && !send.disabled && send.getAttribute('aria-disabled') !== 'true'
     && !!hit && (hit === send || send.contains(hit));
   // ProseMirror renders every input line as a paragraph. innerText inserts extra blank lines.
-  const draft = composer?.tagName === 'TEXTAREA' ? composer.value : (composer && Array.from(composer.children).every(e => e.tagName === 'P')
+  const draft = composer?.tagName === 'TEXTAREA' ? composer.value : (composer && Array.from(composer.childNodes).every(e => e.nodeType === 1 && e.nodeName === 'P')
     ? Array.from(composer.children).map(e => Array.from(e.childNodes).filter(n => !(n.nodeType === 1 && n.classList?.contains('ProseMirror-trailingBreak'))).map(n => n.nodeName === 'BR' ? '\\n' : n.textContent).join('')).join('\\n')
     : composer?.innerText || '');
   return { url:location.href, title:document.title, messages,

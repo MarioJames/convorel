@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Browser, sendPrompt } from "../src/browser.ts";
+import { Browser, clearDraft, sendPrompt } from "../src/browser.ts";
 import { command } from "../src/command.ts";
 
 const chromePath = process.argv[process.argv.indexOf("--chrome") + 1];
@@ -110,6 +110,13 @@ try {
   );
   await b.run("eval", `document.querySelector('#closing-overlay').remove()`);
   assert.equal((await b.read()).sendReady, true);
+  await b.run("fill", "#prompt-textarea", "restored textarea draft");
+  await clearDraft(b, await b.read());
+  assert.equal(
+    (await b.read()).draft,
+    "",
+    "recovery supports textarea composers",
+  );
   await (await controller.page(created.targetId)).read();
   assert.equal(
     (await list()).length,
@@ -127,10 +134,49 @@ try {
   );
   await b.run(
     "eval",
+    `window.recoveryInputs = 0; document.querySelector('#prompt-textarea').addEventListener('input', () => window.recoveryInputs++)`,
+  );
+  await clearDraft(b, await b.read());
+  assert.equal(
+    (await b.read()).draft?.trim(),
+    "",
+    "recovered multiline draft is empty",
+  );
+  assert.equal(
+    (await b.run("eval", "window.recoveryInputs")).result,
+    1,
+    "deletion emits editor input",
+  );
+  await b.run(
+    "eval",
     `document.querySelector('#prompt-textarea').innerHTML = '<p><br class="ProseMirror-trailingBreak"></p>'`,
   );
   await b.run("fill", "#prompt-textarea", "edited draft");
   assert.equal((await b.read()).draft, "edited draft");
+  const restored = await b.read();
+  await clearDraft(b, restored);
+  assert.equal(
+    (await b.read()).draft?.trim(),
+    "",
+    "authorized recovery clears contenteditable, not its value property",
+  );
+  await b.run("fill", "#prompt-textarea", "user edit");
+  await assert.rejects(clearDraft(b, restored), /DRAFT_CHANGED/);
+  assert.equal(
+    (await b.read()).draft,
+    "user edit",
+    "a later edit survives stale recovery authorization",
+  );
+  await b.run(
+    "eval",
+    `document.querySelector('button').focus(); document.querySelector('#prompt-textarea').addEventListener('focus', e => {e.target.textContent = 'changed during focus'}, {once: true})`,
+  );
+  await assert.rejects(clearDraft(b, await b.read()), /DRAFT_CHANGED/);
+  assert.equal(
+    (await b.read()).draft,
+    "changed during focus",
+    "recheck after focus protects synchronous edits",
+  );
   const pageErrors = await b.run("errors");
   assert.deepEqual(
     pageErrors.errors,
@@ -167,6 +213,8 @@ try {
         "pin protection",
         "missing target",
         "composer paragraph extraction",
+        "authorized draft clearing and input event",
+        "stale authorization and focus race protection",
         "localized structural submit",
         "stop button exclusion",
         "send obstruction",

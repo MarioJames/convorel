@@ -5,6 +5,61 @@ import { PAGE_SCRIPT, SEND_SELECTOR, type PageState } from "./chatgpt/page.ts";
 // Only observation failures may be retried automatically; never a browser action.
 export class ObservationError extends Error {}
 
+/** Explicit, compare-and-delete recovery; never use fill("") on contenteditable. */
+export async function clearDraft(
+  page: {
+    run: (...args: string[]) => Promise<any>;
+    read: () => Promise<PageState>;
+  },
+  expected: PageState,
+) {
+  if (!expected.draft?.trim()) throw new Error("EXPECTED_DRAFT_REQUIRED");
+  const result = await page.run(
+    "eval",
+    `(() => {
+    const expected = ${JSON.stringify(expected)};
+    const read = () => ${PAGE_SCRIPT};
+    const history = p => JSON.stringify(p.messages.map(m => [m.id, m.role, m.text, m.final, m.model]));
+    const check = () => {
+      const p = read();
+      if (p.url !== expected.url || history(p) !== history(expected)) throw new Error('PAGE_CHANGED');
+      if (p.blocked || p.generating || p.attachments || !p.hasComposer) throw new Error('PAGE_NOT_IDLE');
+      if (p.draft !== expected.draft) throw new Error('DRAFT_CHANGED');
+    };
+    check();
+    const e = document.querySelector('#prompt-textarea');
+    if (!e || (e.tagName !== 'TEXTAREA' && !e.isContentEditable)) throw new Error('COMPOSER_UNRECOGNIZED');
+    e.focus();
+    check();
+    if (e.tagName === 'TEXTAREA') e.select();
+    else {
+      const range = document.createRange(); range.selectNodeContents(e);
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    }
+    check();
+    // Browser editing updates ProseMirror's document and emits its native input event.
+    if (!document.execCommand('delete')) throw new Error('DRAFT_CLEAR_UNVERIFIED');
+    return { cleared: read().draft.trim() === '' };
+  })()`,
+  );
+  if (result.result?.cleared !== true)
+    throw new Error("DRAFT_CLEAR_UNVERIFIED");
+  // Observe again after the editor has processed the input; never repeat the mutation.
+  await Bun.sleep(250);
+  const after = await page.read();
+  if (
+    after.url !== expected.url ||
+    after.draft === undefined ||
+    after.draft.trim() !== "" ||
+    after.blocked ||
+    after.generating ||
+    after.attachments ||
+    !after.hasComposer ||
+    JSON.stringify(after.messages) !== JSON.stringify(expected.messages)
+  )
+    throw new Error("DRAFT_CLEAR_UNVERIFIED");
+}
+
 export async function sendPrompt(
   page: { run: (...args: string[]) => Promise<any> },
   observed: PageState,

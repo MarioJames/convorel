@@ -35,6 +35,8 @@ export function conversationStatus(task: Task) {
   return {
     id: task.id,
     runId: run.id,
+    workspace: task.config.workspace,
+    workspaceId: task.workspaceId,
     state: run.state,
     delivery,
     phase,

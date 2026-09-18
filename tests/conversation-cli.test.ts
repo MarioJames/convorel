@@ -46,7 +46,7 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
   };
   store.write("config", config);
   store.write("task-task", task);
-  const run = async (operation: string, runId = "r1") => {
+  const run = async (operation: string, runId = "r1", extra: string[] = []) => {
     const child = Bun.spawn(
       [
         process.execPath,
@@ -58,6 +58,7 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
         "task",
         "--run",
         runId,
+        ...extra,
       ],
       {
         env: {
@@ -84,6 +85,29 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
       state: "waiting",
       nextAction: "wait",
     });
+    const otherWorkspace = join(root, "other-code");
+    mkdirSync(otherWorkspace);
+    const mismatch = await run("status", "r1", ["--workspace", otherWorkspace]);
+    expect(mismatch.code).toBe(2);
+    expect(mismatch.value.workspaceMismatch).toEqual({
+      expected: otherWorkspace,
+      bound: workspace,
+      recovery: "inspect_saved_prompt_and_binding",
+    });
+    expect(
+      (await run("retry", "r1", ["--workspace", otherWorkspace])).err,
+    ).toContain("WORKSPACE_MISMATCH");
+    expect(
+      (
+        await run("rebind-workspace", "r1", [
+          "--from-workspace",
+          workspace,
+          "--workspace",
+          otherWorkspace,
+        ])
+      ).err,
+    ).toContain("RUN_NOT_PREPARED");
+    expect(store.read<any>("task-task").config.workspace).toBe(workspace);
     const interrupted = await run("resume");
     expect(interrupted.code).toBe(2);
     expect(interrupted.value.summary).toMatchObject({
@@ -105,6 +129,27 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
     expect(complete.code).toBe(0);
     expect(complete.value.summary.nextAction).toBe("result");
     expect((await run("result")).value.reply.text).toBe("Final result");
+    delete task.url;
+    task.runs[0] = {
+      ...task.runs[0],
+      state: "prepared",
+      userMessageId: undefined,
+    };
+    store.write("task-task", task);
+    const corrected = await run("rebind-workspace", "r1", [
+      "--from-workspace",
+      workspace,
+      "--workspace",
+      otherWorkspace,
+    ]);
+    expect(corrected.code).toBe(0);
+    expect(corrected.value.summary.workspace).toBe(otherWorkspace);
+    expect(corrected.value.currentRun).toBe("r1");
+    expect(corrected.value.runs[0].prompt).toBe("Review");
+    expect(
+      (await run("status", "r1", ["--workspace", otherWorkspace])).value
+        .workspaceMismatch,
+    ).toBeNull();
   } finally {
     server.stop(true);
     rmSync(root, { recursive: true, force: true });

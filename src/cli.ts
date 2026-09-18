@@ -40,10 +40,13 @@ init --workspace PATH --cdp PORT_OR_HTTP
 skills install --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH]
 doctor
 conversation list
-conversation start --id ID --prompt-file FILE [--request-id KEY]
-conversation followup --id ID --prompt-file FILE --request-id KEY
+conversation start --id ID --prompt-file FILE [--request-id KEY] [--workspace PATH]
+conversation followup --id ID --prompt-file FILE --request-id KEY [--workspace PATH]
 conversation status|resume|wait|result --id ID [--run UUID]
-conversation retry --id ID --run UUID
+conversation retry --id ID --run UUID [--workspace PATH]
+conversation clear-draft --id ID --run UUID --expected-draft-file FILE
+conversation rebind-workspace --id ID --run UUID --from-workspace PATH --workspace PATH
+conversation status --id ID [--run UUID] [--workspace EXPECTED_PATH]
 conversation finish --id ID --run UUID
 conversation attach --id ID --url CONVERSATION --user-message ID
 conversation organize --id ID --run UUID --type DES --topic TOPIC [--language en|zh]
@@ -264,14 +267,34 @@ export async function main(args = process.argv.slice(2)) {
         ? required(o, "request-id")
         : o["request-id"] || "initial",
       sub === "followup",
+      o.workspace,
     );
     print({ ...t, summary: conversationStatus(t) });
     return conversationExitCode(t, "start");
   }
   if (sub === "retry") {
-    const t = await conversation.retry(id, required(o, "run"));
+    const t = await conversation.retry(id, required(o, "run"), o.workspace);
     print({ ...t, summary: conversationStatus(t) });
     return conversationExitCode(t, "start");
+  }
+  if (sub === "rebind-workspace") {
+    const t = await conversation.rebindWorkspace(
+      id,
+      required(o, "run"),
+      required(o, "from-workspace"),
+      required(o, "workspace"),
+    );
+    print({ ...t, summary: conversationStatus(t) });
+    return 0;
+  }
+  if (sub === "clear-draft") {
+    const expected = readFileSync(
+      realpathSync(required(o, "expected-draft-file")),
+      "utf8",
+    );
+    const t = await conversation.clearDraft(id, required(o, "run"), expected);
+    print({ ...t, summary: conversationStatus(t) });
+    return 0;
   }
   if (sub === "attach") {
     print(
@@ -286,8 +309,23 @@ export async function main(args = process.argv.slice(2)) {
   if (sub === "status") {
     const t = conversation.get(id);
     if (o.run && o.run !== t.currentRun) throw new Error("STALE_RUN");
-    print({ ...t, summary: conversationStatus(t) });
-    return 0;
+    const expected = o.workspace ? new Workspace(o.workspace).root : undefined;
+    const workspaceMismatch =
+      expected && expected !== t.config.workspace
+        ? {
+            expected,
+            bound: t.config.workspace,
+            recovery:
+              t.runs.length === 1 &&
+              t.runs[0].state === "prepared" &&
+              !t.runs[0].userMessageId &&
+              !t.url
+                ? "rebind-workspace"
+                : "inspect_saved_prompt_and_binding",
+          }
+        : null;
+    print({ ...t, summary: conversationStatus(t), workspaceMismatch });
+    return workspaceMismatch ? 2 : 0;
   }
   if (sub === "resume") {
     try {

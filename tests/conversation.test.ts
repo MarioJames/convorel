@@ -1,5 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { State } from "../src/state.ts";
@@ -23,6 +23,9 @@ class FakeBrowser {
   targets: any[] = [];
   pages = new Map<string, any>();
   sends = 0;
+  clears = 0;
+  restoredDraft = "";
+  ignoreClear = false;
   nextTarget = 0;
   failSend = false;
   delayedUrl = false;
@@ -41,7 +44,7 @@ class FakeBrowser {
         generating: false,
         hasComposer: true,
         blocked: null,
-        draft: "",
+        draft: this.restoredDraft,
         sendReady: this.sendReady,
       });
       return { targetId };
@@ -61,6 +64,11 @@ class FakeBrowser {
       read: async () => structuredClone(p),
       run: async (...args: string[]) => {
         if (args[0] === "fill") p.draft = args[2];
+        if (args[0] === "eval" && args[1].includes("execCommand")) {
+          self.clears++;
+          if (!self.ignoreClear) p.draft = "";
+          return { result: { cleared: true } };
+        }
         if (args[0] === "click") {
           self.sends++;
           const text = p.draft;
@@ -679,4 +687,174 @@ test("explicit retry preserves a changed draft and continues only the recorded m
   expect(sent.runs).toHaveLength(1);
   expect(sent.runs[0].state).toBe("waiting");
   expect(browser.sends).toBe(1);
+});
+
+test("restored draft recovery backs up, confirms clearing, then retries the same prompt with model verification", async () => {
+  const { state, browser } = setup();
+  let modelChecks = 0;
+  const conversation = new Conversation(state, browser as any, async () => {
+    modelChecks++;
+    return { observedModel: "6 Pro" };
+  });
+  browser.restoredDraft = "Old restored draft\nsecond line";
+  const t = await conversation.start("restored", "Recorded question");
+  expect(t.runs[0].error).toContain("DRAFT_CHANGED");
+  expect(browser.sends).toBe(0);
+  expect(modelChecks).toBe(0);
+  const original = browser.page.bind(browser);
+  browser.page = async (target: string) => {
+    const b = await original(target);
+    return {
+      ...b,
+      run: async (...args: string[]) => {
+        if (args[0] === "eval")
+          expect(conversation.get(t.id).runs[0].draftRecovery).toMatchObject({
+            draft: browser.restoredDraft,
+            cleared: false,
+            target,
+          });
+        return b.run(...args);
+      },
+    };
+  };
+  const cleared = await conversation.clearDraft(
+    t.id,
+    t.currentRun,
+    browser.restoredDraft,
+  );
+  expect(cleared.runs[0].draftRecovery?.cleared).toBe(true);
+  expect(cleared.runs[0].state).toBe("prepared");
+  expect(browser.sends).toBe(0);
+  expect(browser.clears).toBe(1);
+  const sent = await conversation.retry(t.id, t.currentRun);
+  expect(sent.runs).toHaveLength(1);
+  expect(sent.currentRun).toBe(t.currentRun);
+  expect(sent.runs[0].prompt).toBe(t.runs[0].prompt);
+  expect(sent.runs[0].state).toBe("waiting");
+  expect(sent.runs[0].observedModel).toBe("6 Pro");
+  expect(modelChecks).toBe(2);
+  expect(browser.sends).toBe(1);
+  expect(browser.pages.get(t.binding!.target).messages[0].text).toBe(
+    t.runs[0].prompt,
+  );
+  await expect(
+    conversation.clearDraft(t.id, t.currentRun, browser.restoredDraft),
+  ).rejects.toThrow("RUN_NOT_PREPARED");
+});
+
+test("recovery refuses changed drafts, stale runs, attachments, history, and borrowed pages without clearing", async () => {
+  const { state, browser, conversation } = setup();
+  browser.restoredDraft = "Old draft";
+  const t = await conversation.start("recovery-guards", "Question");
+  const p = browser.pages.get(t.binding!.target);
+  await expect(
+    conversation.clearDraft(t.id, "stale", "Old draft"),
+  ).rejects.toThrow("STALE_RUN");
+  p.draft = "User edit";
+  await expect(
+    conversation.clearDraft(t.id, t.currentRun, "Old draft"),
+  ).rejects.toThrow("DRAFT_CHANGED");
+  expect(p.draft).toBe("User edit");
+  p.draft = "Old draft";
+  p.attachments = true;
+  await expect(
+    conversation.clearDraft(t.id, t.currentRun, p.draft),
+  ).rejects.toThrow("PAGE_NOT_IDLE");
+  p.attachments = false;
+  p.messages = [{ id: "submitted", role: "user", text: t.runs[0].prompt }];
+  await expect(
+    conversation.clearDraft(t.id, t.currentRun, p.draft),
+  ).rejects.toThrow("UNEXPECTED_CONVERSATION_HISTORY");
+  p.messages = [];
+  const borrowed = conversation.get(t.id);
+  borrowed.binding!.owned = false;
+  state.write("task-" + t.id, borrowed);
+  await expect(
+    conversation.clearDraft(t.id, t.currentRun, p.draft),
+  ).rejects.toThrow("DRAFT_RECOVERY_REQUIRES_OWNED_NEW_PAGE");
+  expect(browser.clears).toBe(0);
+  expect(browser.sends).toBe(0);
+});
+
+test("a successful browser command does not prove the draft cleared and never triggers retry", async () => {
+  const { browser, conversation } = setup();
+  browser.restoredDraft = "Restored draft";
+  browser.ignoreClear = true;
+  const t = await conversation.start("unverified-clear", "Question");
+  await expect(
+    conversation.clearDraft(t.id, t.currentRun, browser.restoredDraft),
+  ).rejects.toThrow("DRAFT_CLEAR_UNVERIFIED");
+  expect(conversation.get(t.id).runs[0].draftRecovery?.cleared).toBe(false);
+  expect(conversation.get(t.id).runs[0].state).toBe("prepared");
+  expect(browser.clears).toBe(1);
+  expect(browser.sends).toBe(0);
+});
+
+for (const delivery of ["submitting", "delivery_unknown"]) {
+  test(`draft recovery cannot reauthorize ${delivery} delivery`, async () => {
+    const { state, browser, conversation } = setup();
+    browser.restoredDraft = "Old draft";
+    const t = await conversation.start("unknown-recovery", "Question");
+    t.runs[0].state = delivery;
+    state.write("task-" + t.id, t);
+    await expect(
+      conversation.clearDraft(t.id, t.currentRun, "Old draft"),
+    ).rejects.toThrow("RUN_NOT_PREPARED");
+    await expect(conversation.retry(t.id, t.currentRun)).rejects.toThrow(
+      "RUN_NOT_PREPARED",
+    );
+    expect(browser.clears).toBe(0);
+    expect(browser.sends).toBe(0);
+  });
+}
+
+test("workspace snapshots can be selected explicitly and mismatch cannot silently reuse or retry a task", async () => {
+  const { browser, conversation } = setup();
+  const other = join(ws, "other");
+  mkdirSync(other);
+  browser.restoredDraft = "Old draft";
+  const t = await conversation.start(
+    "workspace-binding",
+    "Question",
+    "initial",
+    false,
+    other,
+  );
+  expect(t.config.workspace).toBe(other);
+  expect(conversationStatus(t).workspace).toBe(other);
+  await expect(
+    conversation.start(t.id, "Question", "initial", false, ws),
+  ).rejects.toThrow("WORKSPACE_MISMATCH");
+  await expect(conversation.retry(t.id, t.currentRun, ws)).rejects.toThrow(
+    "WORKSPACE_MISMATCH",
+  );
+  expect(browser.sends).toBe(0);
+});
+
+test("explicit prepared workspace correction retains prompt/run and rejects stale binding or uncertain delivery", async () => {
+  const { state, browser, conversation } = setup();
+  const other = join(ws, "other");
+  mkdirSync(other);
+  browser.restoredDraft = "Old draft";
+  const t = await conversation.start("correct-workspace", "Question");
+  const corrected = await conversation.rebindWorkspace(
+    t.id,
+    t.currentRun,
+    ws,
+    other,
+  );
+  expect(corrected.config.workspace).toBe(other);
+  expect(corrected.workspaceId).not.toBe(t.workspaceId);
+  expect(corrected.runs).toEqual(t.runs);
+  expect(corrected.currentRun).toBe(t.currentRun);
+  expect(state.read<any>("config").workspace).toBe(ws);
+  await expect(
+    conversation.rebindWorkspace(t.id, t.currentRun, ws, other),
+  ).rejects.toThrow("WORKSPACE_MISMATCH");
+  corrected.runs[0].state = "delivery_unknown";
+  state.write("task-" + t.id, corrected);
+  await expect(
+    conversation.rebindWorkspace(t.id, t.currentRun, other, ws),
+  ).rejects.toThrow("RUN_NOT_PREPARED");
+  expect(browser.sends).toBe(0);
 });

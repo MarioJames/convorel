@@ -215,11 +215,33 @@ bun --no-env-file src/cli.ts conversation followup \
 
 重复相同任务和请求不会重发；新问题使用 `followup` 和新请求 ID。后续操作使用它返回的新 `currentRun`。等待超时只停止本地监视，不会停止网页生成。
 
-`start`、`retry`、`status`、`resume` 和 `list` 的任务输出包含 `summary`：`delivery` 区分 `not_attempted`、`unknown` 和 `confirmed`；`phase`、`lastObservedAt`、`observationError`、`nextAction` 说明当前阶段、最近读取和继续方式。`status` 读取本地保存状态，不宣称网页仍保持该状态。
+`start`、`retry`、`status`、`resume` 和 `list` 的任务输出包含 `summary`：`delivery` 区分 `not_attempted`、`unknown` 和 `confirmed`；`workspace`/`workspaceId` 显示任务绑定；`phase`、`lastObservedAt`、`observationError`、`nextAction` 说明当前阶段、最近读取和继续方式。`status` 读取本地保存状态，不宣称网页仍保持该状态。
 
 `start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅完成时退出 0，未完成或需要处理时退出 2；`status` 退出 0 只表示读取本地状态成功。参数、锁等错误可退出 1。完整回复必须通过同一轮次的 `result` 取得。短暂观察失败最多连续尝试三次，期间保留已确认投递事实，不重复发送；登录、页面身份和草稿问题需要先检查处理。
 
-同一允许范围内切换审查项目，只需在对话中提供新的完整路径，无需重新初始化。`CONVOREL_HOME` 用于隔离任务状态、默认项目和 CDP 配置；它不会自动隔离安装目录 `.env` 中的读取范围。确需独立状态时，将它设为允许目录之外的私有目录，再执行 `setup`。不同读取边界的连接应分别配置允许根和独立隧道。
+新任务可以用 `conversation start --workspace /absolute/project` 显式保存任务工作区；省略时使用初始化的默认工作区，不从当前目录或 prompt 推断。`followup`/`retry --workspace PATH` 只断言已有绑定，发现不同就拒绝操作。`status --workspace PATH` 返回 `workspaceMismatch`，不匹配时退出 2，且不修改任务或页面。
+
+尚未发送的首轮（`prepared`、无已确认消息和会话 URL）可显式修正绑定，保留原 run 和 prompt，不修改全局配置、不发送：
+
+```bash
+bun --no-env-file src/cli.ts conversation rebind-workspace \
+  --id first-question --run RUN_ID \
+  --from-workspace /previous/default --workspace /absolute/project
+```
+
+已发送或投递未知的轮次不允许改绑。应检查保存的 prompt 是否准确指定了实际项目和 revision，并继续观察同一 run；不要手改 JSON 或另建同需求任务。工作区绑定仅是任务元数据，不会改写 prompt、扩大 MCP 允许根或证明远端读取了代码。
+
+新建页可能恢复旧草稿。普通 `retry` 会保留不匹配草稿并返回 `DRAFT_CHANGED`。先检查并备份完整草稿；仅在用户明确授权删除该副本后执行：
+
+```bash
+bun --no-env-file src/cli.ts conversation clear-draft \
+  --id first-question --run RUN_ID --expected-draft-file /private/approved-draft.txt
+bun --no-env-file src/cli.ts conversation retry --id first-question --run RUN_ID
+```
+
+`clear-draft` 只接受首轮尚未发送、没有历史消息的任务自有新建页。文件须逐字匹配当前草稿；命令先持久保存备份，再在页面内核对 URL、历史、附件、生成状态和草稿，触发编辑器删除并重新读取确认。变化后的草稿、借用页、提交中或投递未知轮次均拒绝清理。它不发送，也不会自动调用 retry；删除命令返回成功但未读回空草稿仍视为失败，保留现场。不要用 `fill("")` 的成功回执作为已清空证据。
+
+同一允许范围内切换审查项目，在 prompt 中提供新的完整路径，并为新任务显式指定对应 `--workspace`，无需重新初始化。`CONVOREL_HOME` 用于隔离任务状态、默认项目和 CDP 配置；它不会自动隔离安装目录 `.env` 中的读取范围。确需独立状态时，将它设为允许目录之外的私有目录，再执行 `setup`。不同读取边界的连接应分别配置允许根和独立隧道。
 
 完整命令见 `bun --no-env-file src/cli.ts --help`。
 
