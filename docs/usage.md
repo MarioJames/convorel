@@ -294,7 +294,7 @@ bun --no-env-file src/cli.ts conversation recover-send \
 
 `prompt-file` 必须是原始输入（不带 Convorel marker），与保存的 hash 逐字一致。证据文件是仅含 `method/url/status/timestamp` 的 JSON 数组，必须唯一包含 `POST https://chatgpt.com/backend-api/f/conversation`、`status: 403` 和指定毫秒时间。时间不得早于本轮发送时间（旧记录使用创建时间），不得在未来或复用已消费证据。`--confirm-cloudflare-challenge true` 是操作者对该请求响应为 `cf-mitigated: challenge`、HTML 挑战页的明确确认；工具不自行推断 403 的原因或证明证据归属。禁止提供原请求 headers、token 或未经脱敏的网络转储。
 
-此命令只接受当前 `blocked`、曾记录 user ID 且没有本轮完成结果的后续轮次。它要求原 URL、仍有效的自有 target、空 composer、无附件/生成，并核验上一 complete run 的用户正文、回复 ID/hash 和完整分支。准备及发送前再次检查原消息/marker 缺失、历史、草稿和 target；不重开、不新建、不重新绑定页面。仅 DOM 缺失、一般网络失败、`waiting` 或 `delivery_unknown` 均不构成恢复依据。
+此命令只接受当前 `blocked`、曾记录 user ID 且没有本轮完成结果的后续轮次。它要求原 URL、仍有效的自有 target、空 composer、无附件/生成，并核验上一 complete run 的精确 user ID、唯一 run marker、回复 ID/hash 和完整分支。旧用户消息以身份锚点匹配，不将 Markdown 渲染后的页面正文与原输入逐字比较；保存原文的 hash 仍须完整一致。准备及发送前再次检查原消息/marker 缺失、历史、草稿和 target；不重开、不新建、不重新绑定页面。仅 DOM 缺失、一般网络失败、`waiting` 或 `delivery_unknown` 均不构成恢复依据。
 
 通过后在发送边界持久保存 `sendRecoveries`（旧 user ID、旧/新 attempt、原因、target/URL、四字段证据和操作者确认），继续使用同一 task/run/request/prompt，只点击一次。退出码与 `start` 相同；提交异常保留未知投递，不自动再发。发送前失败保留 `blocked` 和旧 user ID，已填入的草稿留待检查，不变成普通 `retry` 可用的 `prepared`。重复调用必须重新满足全部条件；旧证据不能授权另一次发送。普通 `retry`、`resume` 语义不变。
 

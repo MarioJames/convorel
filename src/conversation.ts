@@ -498,15 +498,20 @@ export class Conversation {
         )
           throw new Error("RECOVERY_MESSAGE_OR_URL_CHANGED");
         this.safeCompleted(t, { ...p, draft: "" }, previous);
-        const user = p.messages.find(
-          (m) => m.id === previous.userMessageId && m.role === "user",
+        const users = p.messages.filter(
+          (m) => m.role === "user" && m.text.includes(previous.marker),
         );
-        const normalize = (s: string) => s.replace(/\u00a0/g, " ").trim();
+        // Rendered Markdown is not the submitted source (paragraphs/code fences
+        // change innerText). Bind the user by its exact ID and unique run marker;
+        // safeCompleted above still verifies the reply hash and entire branch.
         if (
-          !user ||
+          previous.marker !== `[CONVOREL:${previous.id}]` ||
           !previous.promptHash ||
           sha(previous.prompt) !== previous.promptHash ||
-          normalize(user.text) !== normalize(previous.prompt)
+          !previous.prompt.startsWith(`${previous.marker}\n\n`) ||
+          users.length !== 1 ||
+          users[0].id !== previous.userMessageId ||
+          users[0].text.split(previous.marker).length !== 2
         )
           throw new Error("COMPLETED_USER_CHANGED");
       };

@@ -909,10 +909,10 @@ test("explicit prepared workspace correction retains prompt/run and rejects stal
   expect(browser.sends).toBe(0);
 });
 
-async function missingDelivery() {
+async function missingDelivery(priorInput = "Architecture review") {
   const ctx = setup();
   const { conversation, browser } = ctx;
-  const first = await conversation.start("missing-send", "Architecture review");
+  const first = await conversation.start("missing-send", priorInput);
   browser.complete();
   await conversation.poll(first.id, first.currentRun);
   const sent = await conversation.start(
@@ -1167,3 +1167,45 @@ test("recovery rechecks the composer after the final target check", async () => 
   expect(p.draft).toBe("User changed the composer");
   expect(browser.sends).toBe(2);
 });
+
+test("recovery anchors the completed user despite rendered code whitespace and Show more text", async () => {
+  const { conversation, t, p, options } = await missingDelivery(
+    "Architecture review\n\n```ts\n/*\n *   request's cost; the next request is then blocked.\n */\n```\n",
+  );
+  p.messages[0].text = `${t.runs[0].marker}\n\nArchitecture review\n\n\n\`\`\`ts\n/*\n * request's cost; the next request is then blocked.\n */\n\`\`\`\n\nShow more`;
+  const recovered = await conversation.recoverSend(t.id, t.currentRun, options);
+  expect(recovered.runs[1].state).toBe("waiting");
+  expect(recovered.runs[0]).toEqual(t.runs[0]);
+});
+
+for (const mismatch of [
+  "missing-marker",
+  "duplicate-marker",
+  "repeated-marker",
+  "changed-user-id",
+  "corrupt-saved-marker",
+]) {
+  test(`completed-user recovery anchor rejects ${mismatch}`, async () => {
+    const { conversation, state, browser, t, p, options } =
+      await missingDelivery();
+    if (mismatch === "missing-marker")
+      p.messages[0].text = "Architecture review";
+    if (mismatch === "duplicate-marker")
+      p.messages.unshift({
+        id: "unrelated",
+        role: "user",
+        text: t.runs[0].marker,
+      });
+    if (mismatch === "repeated-marker") p.messages[0].text += t.runs[0].marker;
+    if (mismatch === "changed-user-id") p.messages[0].id = "unrelated";
+    if (mismatch === "corrupt-saved-marker") {
+      t.runs[0].marker = "";
+      state.write("task-" + t.id, t);
+    }
+    await expect(
+      conversation.recoverSend(t.id, t.currentRun, options),
+    ).rejects.toThrow();
+    expect(browser.sends).toBe(2);
+    expect(p.draft).toBe("");
+  });
+}
