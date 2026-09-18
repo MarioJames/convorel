@@ -666,10 +666,23 @@ export class Conversation {
           throw new Error("UNEXPECTED_CONVERSATION_HISTORY");
       };
       checkDraft(p);
+      // Retries retain this run's verified model (including rejected sends).
+      // Otherwise honor the task's explicit preference before inheriting the
+      // latest completed observation. New tasks still resolve Latest Pro.
+      const model =
+        r.observedModel?.trim() ||
+        t.config.model?.trim() ||
+        t.runs
+          .slice(0, t.runs.indexOf(r))
+          .findLast(
+            (run) => run.state === "complete" && run.observedModel?.trim(),
+          )
+          ?.observedModel?.trim() ||
+        "";
       const observed = await this.verify(b, {
         url: p.url,
         target: t.binding!.target,
-        model: (recovery && r.observedModel) || t.config.model || "",
+        model,
       });
       this.guard(t);
       r.observedModel = observed.observedModel;

@@ -267,7 +267,16 @@ test("draft URL recovery never trusts a different submitted message", async () =
   expect(state.read<any>("task-" + first.id).url).toBe("https://chatgpt.com/");
 });
 test("new tasks resolve environment preferences while followups retain their original snapshot", async () => {
-  const { state, browser, conversation } = setup();
+  const { state, browser } = setup();
+  const checks: string[] = [];
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async (_b, opts) => {
+      checks.push(opts.model);
+      return { observedModel: opts.model || "8 Pro" };
+    },
+  );
   const keys = [
     "CONVOREL_MODEL",
     "CONVOREL_PROJECT_URL",
@@ -289,6 +298,8 @@ test("new tasks resolve environment preferences while followups retain their ori
     browser.delayedUrl = true;
     const other = await conversation.start("default-preferences", "Other");
     expect(other.config.model).toBeUndefined();
+    expect(checks).toEqual(["7 Pro", "7 Pro", "7 Pro", "7 Pro", "", "8 Pro"]);
+    expect(other.runs[0].observedModel).toBe("8 Pro");
     expect(state.read<any>("config").model).toBe("6 Pro");
   } finally {
     for (const key of keys) {
@@ -585,12 +596,26 @@ test("followup restores a closed conversation after page loading and retains ear
       },
     };
   };
+  const modelChecks: Record<string, string>[] = [];
   const restored = new Conversation(
     new State(home),
     browser as any,
-    async () => ({ observedModel: "6 Pro" }),
+    async (_b, opts) => {
+      modelChecks.push(opts);
+      if (opts.model !== "6 Pro") throw new Error("No element found: Latest");
+      return { observedModel: "6 Pro" };
+    },
   );
   const next = await restored.start("continued", "Follow-up", "second", true);
+  expect(modelChecks).toEqual([
+    { url: first.url!, target: next.binding!.target, model: "6 Pro" },
+    {
+      url: first.url!,
+      target: next.binding!.target,
+      model: "6 Pro",
+      "verify-only": "true",
+    },
+  ]);
   expect(next.url).toBe(first.url);
   expect(next.runs).toHaveLength(2);
   expect(next.runs[0].reply?.text).toBe("Answer");
@@ -1213,6 +1238,7 @@ for (const mismatch of [
 for (const mode of [
   "observed",
   "observed-over-config",
+  "history-fallback",
   "config-fallback",
   "default-fallback",
 ]) {
@@ -1220,9 +1246,15 @@ for (const mode of [
     const { state, browser, t, options } = await missingDelivery();
     t.config.model = mode.includes("config") ? "5.6 Pro" : undefined;
     t.runs[1].observedModel = mode.startsWith("observed") ? "6 Pro" : undefined;
+    if (mode === "default-fallback") delete t.runs[0].observedModel;
     state.write("task-" + t.id, t);
     const checks: Record<string, string>[] = [];
-    const expected = t.runs[1].observedModel || t.config.model || "";
+    const expected =
+      mode === "default-fallback"
+        ? ""
+        : mode === "config-fallback"
+          ? "5.6 Pro"
+          : "6 Pro";
     const selected = expected || "7 Pro";
     const conversation = new Conversation(
       state,
@@ -1271,3 +1303,140 @@ test("recovery retaining a model still refuses a failed final verification", asy
   expect(result.runs[1].sendRecoveries).toBeUndefined();
   expect(browser.sends).toBe(2);
 });
+
+for (const mode of [
+  "followup",
+  "retry-before-verification",
+  "retry-after-verification",
+  "explicit-config",
+  "model-conflict",
+]) {
+  test(`continuation preserves the verified model through both checks: ${mode}`, async () => {
+    const { state, browser, conversation } = setup();
+    const first = await conversation.start("continue-model", "First");
+    browser.complete();
+    const completed = await conversation.poll(first.id, first.currentRun);
+    completed.config.model = mode === "explicit-config" ? "7 Pro" : undefined;
+    state.write("task-" + first.id, completed);
+    const checks: Record<string, string>[] = [];
+    let fail = mode.startsWith("retry-");
+    const expected = mode === "explicit-config" ? "7 Pro" : "6 Pro";
+    const continuation = new Conversation(
+      state,
+      browser as any,
+      async (_b, opts) => {
+        checks.push(opts);
+        if (!opts.model) throw new Error("No element found: Latest");
+        if (mode === "model-conflict")
+          throw new Error("Pro selection did not match expected model 6 Pro");
+        if (
+          fail &&
+          (mode === "retry-before-verification" ||
+            opts["verify-only"] === "true")
+        )
+          throw new Error("Temporary verification failure");
+        return { observedModel: opts.model };
+      },
+    );
+    let result = await continuation.start(first.id, "Followup", "second", true);
+    const prepared = structuredClone(result.runs[1]);
+    if (mode.startsWith("retry-")) {
+      expect(prepared.state).toBe("prepared");
+      expect(prepared.observedModel).toBe(
+        mode === "retry-after-verification" ? "6 Pro" : undefined,
+      );
+      expect(browser.sends).toBe(1);
+      // A same-run observation must win even over a conflicting saved config.
+      if (mode === "retry-after-verification") {
+        result.config.model = "7 Pro";
+        state.write("task-" + result.id, result);
+      }
+      fail = false;
+      checks.length = 0;
+      result = await continuation.retry(result.id, result.currentRun);
+      expect(result.runs[1]).toMatchObject({
+        id: prepared.id,
+        prompt: prepared.prompt,
+        promptHash: prepared.promptHash,
+        inputHash: prepared.inputHash,
+        marker: prepared.marker,
+      });
+    }
+    expect(checks[0]).toEqual({
+      url: first.url!,
+      target: first.binding!.target,
+      model: expected,
+    });
+    expect(result.runs[0]).toMatchObject({
+      id: completed.runs[0].id,
+      prompt: completed.runs[0].prompt,
+      promptHash: completed.runs[0].promptHash,
+      observedModel: "6 Pro",
+      reply: completed.runs[0].reply!,
+      replyHash: completed.runs[0].replyHash!,
+      branch: completed.runs[0].branch!,
+      state: "complete",
+    });
+    if (mode === "model-conflict") {
+      expect(result.runs[1].state).toBe("prepared");
+      expect(result.runs[1].error).toContain("expected model 6 Pro");
+      expect(checks).toHaveLength(1);
+      expect(browser.sends).toBe(1);
+      expect(browser.pages.get(first.binding!.target).draft).toBe("");
+    } else {
+      expect(checks).toHaveLength(2);
+      expect(checks[1]).toEqual({ ...checks[0], "verify-only": "true" });
+      expect(result.runs[1]).toMatchObject({
+        state: "waiting",
+        observedModel: expected,
+      });
+      expect(browser.sends).toBe(2);
+    }
+  });
+}
+
+for (const historicalState of [
+  "complete",
+  "prepared",
+  "waiting",
+  "blocked",
+  "delivery_unknown",
+]) {
+  test(`continuation only inherits a completed historical observation: ${historicalState}`, async () => {
+    const { state, browser, conversation } = setup();
+    const first = await conversation.start("historical-model", "First");
+    browser.complete();
+    const completed = await conversation.poll(first.id, first.currentRun);
+    completed.config.model = undefined;
+    const anchor = structuredClone(completed.runs[0]);
+    // Legacy completed anchors may lack an observation; inspect older runs only.
+    delete completed.runs[0].observedModel;
+    completed.runs.unshift({
+      ...anchor,
+      id: "older",
+      requestId: "older",
+      state: historicalState,
+      observedModel: "5.6 Pro",
+    });
+    state.write("task-" + first.id, completed);
+    const checks: string[] = [];
+    const continuation = new Conversation(
+      state,
+      browser as any,
+      async (_b, opts) => {
+        checks.push(opts.model);
+        return { observedModel: opts.model || "7 Pro" };
+      },
+    );
+    const result = await continuation.start(
+      first.id,
+      "Followup",
+      "second",
+      true,
+    );
+    expect(checks).toEqual(
+      historicalState === "complete" ? ["5.6 Pro", "5.6 Pro"] : ["", "7 Pro"],
+    );
+    expect(result.runs[2].state).toBe("waiting");
+  });
+}
