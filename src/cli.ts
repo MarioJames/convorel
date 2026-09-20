@@ -13,6 +13,7 @@ import {
   recoverTunnelLock,
 } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
+import { jsonPrinter } from "./output.ts";
 import { installationEnv } from "./env.ts";
 import { conversationConfig } from "./config.ts";
 import { installSkill } from "./skills.ts";
@@ -33,7 +34,6 @@ function opts(args: string[]) {
   }
   return o;
 }
-const print = (x: unknown) => console.log(JSON.stringify(x, null, 2));
 const help = `convorel 0.1.0 (Bun, Linux)
 setup --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claude-code]
 init --workspace PATH --cdp PORT_OR_HTTP
@@ -51,6 +51,8 @@ conversation status --id ID [--run UUID] [--workspace EXPECTED_PATH]
 conversation finish --id ID --run UUID
 conversation attach --id ID --url CONVERSATION --user-message ID
 conversation organize --id ID --run UUID --type DES --topic TOPIC [--language en|zh]
+All conversation commands: [--fields id,currentRun,summary] selects top-level JSON fields.
+Lists select fields per item; missing fields are null. Exit codes are unchanged.
 mcp serve [--roots JSON_ARRAY]
 tunnel instructions|doctor|run|recover-lock [--tunnel-id ID]
 Model/project: CONVOREL_MODEL, CONVOREL_PROJECT_URL, CONVOREL_PROJECT_NAME
@@ -70,6 +72,8 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error(
       "ENV_AUTOLOAD_DISABLED_REQUIRED: invoke bun --no-env-file or the installed executable",
     );
+  const conversationOptions = area === "conversation" ? opts(rest) : undefined;
+  const print = jsonPrinter(conversationOptions?.fields);
   if (area === "mcp") {
     if (sub !== "serve") throw new Error("UNKNOWN_MCP_COMMAND");
     const o = opts(rest);
@@ -254,7 +258,7 @@ export async function main(args = process.argv.slice(2)) {
     );
     return 0;
   }
-  const o = opts(rest),
+  const o = conversationOptions!,
     id = required(o, "id");
   if (sub === "start" || sub === "followup") {
     const naming =

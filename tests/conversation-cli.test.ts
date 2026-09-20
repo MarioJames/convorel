@@ -85,6 +85,34 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
       state: "waiting",
       nextAction: "wait",
     });
+    const selected = await run("status", "r1", [
+      "--fields",
+      "id, currentRun,summary,workspaceMismatch,missing,toString,__proto__",
+    ]);
+    expect(selected.code).toBe(0);
+    expect(selected.value).toEqual(
+      JSON.parse(
+        JSON.stringify({
+          id: "task",
+          currentRun: "r1",
+          summary: status.value.summary,
+          workspaceMismatch: null,
+          missing: null,
+          toString: null,
+          ["__proto__"]: null,
+        }),
+      ),
+    );
+    const listed = await run("list", "r1", ["--fields", "id,state"]);
+    expect(listed.code).toBe(0);
+    expect(listed.value).toEqual([{ id: "task", state: "waiting" }]);
+    for (const fields of ["", "id,", "summary.state"]) {
+      const invalid = await run("finish", "r1", ["--fields", fields]);
+      expect(invalid.code).toBe(1);
+      expect(invalid.value).toBeNull();
+      expect(invalid.err).toContain("INVALID_FIELDS");
+      expect(store.read<any>("task-task")).toEqual(task);
+    }
     const promptFile = join(root, "prompt.md");
     const evidenceFile = join(root, "rejection.json");
     writeFileSync(promptFile, "Review");
@@ -123,6 +151,14 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
       bound: workspace,
       recovery: "inspect_saved_prompt_and_binding",
     });
+    const selectedMismatch = await run("status", "r1", [
+      "--workspace",
+      otherWorkspace,
+      "--fields",
+      "id",
+    ]);
+    expect(selectedMismatch.code).toBe(2);
+    expect(selectedMismatch.value).toEqual({ id: "task" });
     expect(
       (await run("retry", "r1", ["--workspace", otherWorkspace])).err,
     ).toContain("WORKSPACE_MISMATCH");
@@ -158,6 +194,12 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
     expect(complete.code).toBe(0);
     expect(complete.value.summary.nextAction).toBe("result");
     expect((await run("result")).value.reply.text).toBe("Final result");
+    expect((await run("result", "r1", ["--fields", "reply"])).value).toEqual({
+      reply: task.runs[0].reply,
+    });
+    const waited = await run("wait", "r1", ["--fields", "id,state"]);
+    expect(waited.code).toBe(0);
+    expect(waited.value).toEqual({ id: "task", state: "complete" });
     delete task.url;
     task.runs[0] = {
       ...task.runs[0],

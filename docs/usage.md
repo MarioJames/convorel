@@ -219,6 +219,18 @@ bun --no-env-file src/cli.ts conversation followup \
 
 `start`、`retry`、`status`、`resume` 和 `list` 的任务输出包含 `summary`：`delivery` 区分 `not_attempted`、`unknown` 和 `confirmed`；`workspace`/`workspaceId` 显示任务绑定；`phase`、`lastObservedAt`、`observationError`、`nextAction` 说明当前阶段、最近读取和继续方式。`status` 读取本地保存状态，不宣称网页仍保持该状态。
 
+所有 `conversation` 子命令支持 `--fields`，按逗号分隔的顶层字段名缩减 JSON，无需额外 Python 或 jq 管道：
+
+```bash
+convorel conversation status --id first-question --workspace /absolute/project \
+  --fields id,currentRun,summary,workspaceMismatch
+convorel conversation list --fields id,state,summary
+convorel conversation wait --id first-question --run RUN_ID --fields id,runId,state,nextAction,error
+convorel conversation result --id first-question --run RUN_ID --fields reply
+```
+
+省略时返回完整输出；列表逐项筛选，`wait` 每次报告均筛选，嵌套对象（例如 `summary`）完整保留。不存在的字段返回 `null`，不支持点路径、表达式或记录过滤。字段名只允许字母、数字、下划线，不能以数字开头；空字段或非法语法在执行操作前报错。筛选只影响 stdout，不改保存的数据、stderr 错误或退出码；即使省略 `workspaceMismatch`，绑定不匹配仍退出 2。`wait` 的状态字段位于顶层，`status` 的状态字段位于 `summary` 内。
+
 `start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅完成时退出 0，未完成或需要处理时退出 2；`status` 退出 0 只表示读取本地状态成功。参数、锁等错误可退出 1。完整回复必须通过同一轮次的 `result` 取得。短暂观察失败最多连续尝试三次，期间保留已确认投递事实，不重复发送；登录、页面身份和草稿问题需要先检查处理。
 
 新任务可以用 `conversation start --workspace /absolute/project` 显式保存任务工作区；省略时使用初始化的默认工作区，不从当前目录或 prompt 推断。`followup`/`retry --workspace PATH` 只断言已有绑定，发现不同就拒绝操作。`status --workspace PATH` 返回 `workspaceMismatch`，不匹配时退出 2，且不修改任务或页面。
