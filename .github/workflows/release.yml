@@ -1,0 +1,88 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require the tag to match package.json
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "require('./package.json').version")"
+          test "$tag" = "$version" || {
+            echo "tag v$tag does not match package version $version" >&2
+            exit 1
+          }
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run format:check
+      - run: bun run test:package
+      # test:install rebuilds dist/ for the runner's own platform only, so it
+      # must run before the multi-target build whose output gets published.
+      - name: Build, install and drive the standalone artifact
+        run: bun run test:install
+      - name: Build every published target
+        run: bun run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Attest the artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          notes="$(mktemp)"
+          {
+            echo "## Install"
+            echo
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/install.sh | bash -s -- --version $tag"
+            echo '```'
+            echo
+            echo "Linux x64 and arm64 (glibc). Verify provenance with \`gh attestation verify <archive> --repo $GITHUB_REPOSITORY\`."
+            echo
+            echo "## SHA-256"
+            echo
+            echo '```'
+            cat dist/sha256sums.txt
+            echo '```'
+          } >"$notes"
+          flags=()
+          case "$tag" in *-*) flags+=(--prerelease) ;; esac
+          # A rerun after a failed upload replaces the assets instead of failing.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" --clobber dist/convorel-*.tar.gz dist/sha256sums.txt
+          else
+            gh release create "$tag" --verify-tag --title "$tag" \
+              --generate-notes --notes-file "$notes" "${flags[@]}" \
+              dist/convorel-*.tar.gz dist/sha256sums.txt
+          fi

@@ -2,16 +2,19 @@
 
 ## 解析 CLI 与私有状态
 
-优先使用显式 `CONVOREL_BIN`，它是 CLI **脚本文件路径**，不是命令串；以 `bun --no-env-file "$CONVOREL_BIN"` 调用。不设置时从 `PATH` 查找 `convorel`。可在当前 shell 使用以下函数，后文 `convorel_cli` 均指这次解析结果；后台进程需传递同一可执行参数，不依赖 shell 函数跨进程继承。
+优先使用显式 `CONVOREL_BIN`，它是 CLI **文件路径**，不是命令串：源码安装时指向 `src/cli.ts` 脚本，以 `bun --no-env-file "$CONVOREL_BIN"` 调用；独立可执行文件安装时指向 `convorel` 二进制，直接执行。不设置时从 `PATH` 查找 `convorel`（安装脚本默认链接到 `~/.local/bin/convorel`）。可在当前 shell 使用以下函数，后文 `convorel_cli` 均指这次解析结果；后台进程需传递同一可执行参数，不依赖 shell 函数跨进程继承。
 
 ```bash
 convorel_cli() {
   if [ "${CONVOREL_BIN+x}" = x ]; then
     if [ -z "$CONVOREL_BIN" ] || [ ! -f "$CONVOREL_BIN" ]; then
-      echo 'CONVOREL_BIN 必须指向可读取的 CLI 脚本' >&2
+      echo 'CONVOREL_BIN 必须指向可读取的 CLI 脚本或可执行文件' >&2
       return 1
     fi
-    bun --no-env-file "$CONVOREL_BIN" "$@"
+    case "$CONVOREL_BIN" in
+      *.ts) bun --no-env-file "$CONVOREL_BIN" "$@" ;;
+      *) "$CONVOREL_BIN" "$@" ;;
+    esac
   else
     command convorel "$@"
   fi
@@ -19,7 +22,7 @@ convorel_cli() {
 convorel_cli --help
 ```
 
-使用绝对脚本路径，保留含空格路径的引号；不要 `eval`、拼接命令串或猜测技能的 `../../src/cli.ts`。缺少 CLI/Bun 时报告前置条件；安装技能不等于安装 Convorel 运行时。查看实际安装包的 CLI 帮助和接入文档，不读取代码工作区的 `.env` 来找运行配置。
+使用绝对路径，保留含空格路径的引号；不要 `eval`、拼接命令串或猜测技能的 `../../src/cli.ts`。缺少 CLI（源码方式还有 Bun）时报告前置条件；安装技能不等于安装 Convorel 运行时。查看实际安装包的 CLI 帮助和接入文档，不读取代码工作区的 `.env` 来找运行配置。
 
 审查侧使用普通 Google Chrome 的有头窗口，通过 loopback CDP 连接。启动参数不得包含 `--headless`，登录 profile 与验收侧自带 Chromium 分开。Convorel 始终显式连接其已配置 CDP，不从 browser-harness 继承可执行路径、窗口模式或 profile；不得为审查修改验收侧 agent-browser 配置。
 

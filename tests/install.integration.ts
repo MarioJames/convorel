@@ -1,0 +1,229 @@
+// Offline acceptance for the released artifact: build, install.sh, then drive the
+// installed standalone executable exactly as a user would. No network, no Chrome.
+import { strict as assert } from "node:assert";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { childEnv } from "../src/command.ts";
+const source = resolve(import.meta.dir, "..");
+const pkg = await Bun.file(join(source, "package.json")).json();
+const platform = `linux-${process.arch === "arm64" ? "arm64" : "x64"}`;
+const temp = mkdtempSync(join(tmpdir(), "convorel install acceptance "));
+const home = join(temp, "home"),
+  prefix = join(temp, "lib"),
+  bin = join(temp, "bin"),
+  state = join(temp, "state"),
+  workspace = join(temp, "code"),
+  shared = join(temp, "shared"),
+  env: Record<string, string> = {
+    ...childEnv(),
+    HOME: home,
+    CONVOREL_HOME: state,
+  };
+// A custom preferences directory also proves childEnv forwards it to a re-entered CLI.
+const preferences = join(temp, "prefs");
+env.CONVOREL_CONFIG_HOME = preferences;
+for (const directory of [home, workspace, shared]) mkdirSync(directory);
+// Prove uninstall never reaches conversation state, preferences or skills.
+mkdirSync(join(home, ".local/share/convorel"), { recursive: true });
+writeFileSync(join(home, ".local/share/convorel/keep.json"), "{}\n");
+async function run(
+  args: string[],
+  options: {
+    env?: Record<string, string>;
+    failure?: boolean;
+    cwd?: string;
+  } = {},
+) {
+  const process_ = Bun.spawn(args, {
+    cwd: options.cwd ?? temp,
+    env: { ...env, ...options.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, err, code] = await Promise.all([
+    new Response(process_.stdout).text(),
+    new Response(process_.stderr).text(),
+    process_.exited,
+  ]);
+  if (options.failure) {
+    assert.notEqual(code, 0, `Expected failure: ${args.join(" ")}`);
+    return out + err;
+  }
+  assert.equal(code, 0, err || out);
+  return out;
+}
+const installer = (...args: string[]) => [
+  "bash",
+  join(source, "install.sh"),
+  ...args,
+];
+try {
+  await run(
+    [process.execPath, "--no-env-file", "run", "dist", `bun-${platform}`],
+    { cwd: source, env: { ...childEnv(), HOME: home } },
+  );
+  const dist = join(source, "dist");
+  const artifacts = readdirSync(dist).filter((f) => f.endsWith(".tar.gz"));
+  assert.equal(
+    artifacts.length,
+    1,
+    "expected one archive for this platform: " + artifacts.join(","),
+  );
+  const checksums = readFileSync(join(dist, "sha256sums.txt"), "utf8");
+  assert.match(
+    checksums,
+    new RegExp("^[a-f0-9]{64}  " + artifacts[0].replaceAll(".", "\\."), "m"),
+  );
+
+  await run(
+    installer("--dist-dir", dist, "--prefix", prefix, "--bin-dir", bin),
+  );
+  assert.equal(
+    (await run([join(bin, "convorel"), "--version"])).trim(),
+    pkg.version,
+  );
+  const reported = JSON.parse(await run([join(bin, "convorel"), "version"]));
+  assert.equal(reported.version, pkg.version);
+  assert.equal(reported.runtime, "standalone");
+  assert.ok(
+    existsSync(reported.browserController) &&
+      lstatSync(reported.browserController).size > 1_000_000,
+    "the installed controller must be the packaged native binary",
+  );
+  assert.match(
+    await run([join(bin, "agent-browser"), "--version"]),
+    /0\.34\.0/,
+  );
+
+  // Preferences resolve for the child the CLI re-enters, and for a standalone
+  // MCP server that is given no roots of its own.
+  await run([
+    join(bin, "convorel"),
+    "config",
+    "set",
+    "mcp.roots",
+    JSON.stringify([shared]),
+  ]);
+  writeFileSync(join(shared, "proof.txt"), "installed artifact evidence\n");
+  await run([join(bin, "convorel"), "config", "set", "model", "6 Pro"]);
+  const initialized = JSON.parse(
+    await run([
+      join(bin, "convorel"),
+      "init",
+      "--workspace",
+      workspace,
+      "--cdp",
+      "9223",
+    ]),
+  );
+  assert.equal(initialized.modelPolicy, "6 Pro");
+  const doctor = await run([join(bin, "convorel"), "doctor"], {
+    failure: true,
+  });
+  const report = JSON.parse(doctor);
+  assert.match(report.agentBrowser, /agent-browser 0\.34\.0/);
+  assert.equal(report.localMcp.status, "verified");
+  assert.equal(report.localMcp.tools.length, 12);
+  assert.deepEqual(
+    report.localMcp.roots.map((root: any) => root.path),
+    [shared],
+  );
+  // A dead CDP endpoint must be reported, never mistaken for a crash.
+  assert.equal(report.browser.status, "failed");
+  assert.match(doctor, /CDP_UNAVAILABLE/);
+
+  const mcp = Bun.spawn([join(bin, "convorel"), "mcp", "serve"], {
+    env,
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  mcp.stdin.write(
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"acceptance","version":"1"}}}\n',
+  );
+  const hello = await mcp.stdout.getReader().read();
+  mcp.kill("SIGKILL");
+  assert.match(
+    new TextDecoder().decode(hello.value),
+    /"serverInfo":\{"name":"convorel"/,
+    "a bare mcp serve must resolve roots from the forwarded preferences directory",
+  );
+
+  const skillOutput = JSON.parse(
+    await run([
+      join(bin, "convorel"),
+      "skills",
+      "install",
+      "--agent",
+      "codex,claude-code",
+    ]),
+  );
+  assert.equal(skillOutput.files.length, 7);
+  for (const file of skillOutput.files)
+    assert.equal(
+      readFileSync(join(home, ".agents/skills/chatgpt-review", file), "utf8"),
+      readFileSync(join(source, "skills/chatgpt-review", file), "utf8"),
+      `installed skill asset differs: ${file}`,
+    );
+  assert.equal(
+    readFileSync(join(home, ".claude/skills/chatgpt-review/SKILL.md"), "utf8")
+      .length > 0,
+    true,
+  );
+
+  const backup = readFileSync(join(dist, "sha256sums.txt"), "utf8");
+  writeFileSync(
+    join(dist, "sha256sums.txt"),
+    backup.replace(/^.{64}/m, "0".repeat(64)),
+  );
+  assert.match(
+    await run(
+      installer("--dist-dir", dist, "--prefix", prefix, "--bin-dir", bin),
+      {
+        failure: true,
+      },
+    ),
+    /CHECKSUM_MISMATCH/,
+  );
+  writeFileSync(join(dist, "sha256sums.txt"), backup);
+
+  assert.match(
+    await run(
+      installer("--dist-dir", dist, "--prefix", prefix, "--bin-dir", bin),
+    ),
+    new RegExp(`installed convorel ${pkg.version}`),
+  );
+  await run(installer("--uninstall", "--prefix", prefix, "--bin-dir", bin));
+  assert.equal(existsSync(join(bin, "convorel")), false);
+  assert.equal(existsSync(prefix), false);
+  assert.ok(existsSync(join(home, ".local/share/convorel/keep.json")));
+  assert.ok(existsSync(join(preferences, "preferences.json")));
+  assert.ok(existsSync(join(home, ".agents/skills/chatgpt-review/SKILL.md")));
+  console.log(
+    JSON.stringify({
+      passed: true,
+      platform,
+      checks: [
+        "standalone archive with pinned browser controller",
+        "offline install from a local directory",
+        "config preferences read back by a re-entered MCP child",
+        "doctor reports a dead CDP endpoint without crashing",
+        "installed skill assets are byte identical",
+        "checksum tampering is refused",
+        "reinstall and uninstall keep state, preferences and skills",
+      ],
+    }),
+  );
+} finally {
+  rmSync(temp, { recursive: true, force: true });
+}

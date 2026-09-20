@@ -15,7 +15,7 @@ import { runTunnel, tunnelInstructions, recoverTunnelLock } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
 import { jsonPrinter } from "./output.ts";
 import { settingValue } from "./env.ts";
-import { selfExec } from "./runtime.ts";
+import { agentBrowserLocation, COMPILED, selfExec } from "./runtime.ts";
 import { conversationConfig } from "./config.ts";
 import { configCommand } from "./config-command.ts";
 import { preferenceDirectory } from "./user-config.ts";
@@ -28,6 +28,7 @@ import {
 import { MODEL_SCRIPT } from "./chatgpt/model.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import packageInfo from "../package.json";
 function opts(args: string[]) {
   const o: Record<string, string> = {};
   for (let i = 0; i < args.length; i += 2) {
@@ -37,12 +38,13 @@ function opts(args: string[]) {
   }
   return o;
 }
-const help = `convorel 0.1.0 (Bun, Linux)
+const help = `convorel ${packageInfo.version} (Linux, ${COMPILED ? "standalone" : "source"})
 setup --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claude-code]
 init --workspace PATH --cdp PORT_OR_HTTP
 skills install --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH]
 config list|get KEY|set KEY VALUE|unset KEY|path|import-env
 doctor
+version|--version
 conversation list
 conversation start --id ID --prompt-file FILE [--type DES --topic TOPIC] [--language en|zh] [--request-id KEY] [--workspace PATH]
 conversation followup --id ID --prompt-file FILE --request-id KEY [--workspace PATH]
@@ -80,6 +82,18 @@ export async function main(args = process.argv.slice(2)) {
     );
   const conversationOptions = area === "conversation" ? opts(rest) : undefined;
   const print = jsonPrinter(conversationOptions?.fields);
+  if (area === "version" || area === "--version") {
+    if (area === "--version") console.log(packageInfo.version);
+    else
+      print({
+        version: packageInfo.version,
+        commit: process.env.CONVOREL_BUILD_COMMIT || "source checkout",
+        runtime: COMPILED ? "standalone" : `bun ${Bun.version}`,
+        architecture: process.arch,
+        browserController: agentBrowserLocation(),
+      });
+    return 0;
+  }
   if (area === "mcp") {
     if (sub !== "serve") throw new Error("UNKNOWN_MCP_COMMAND");
     const o = opts(rest);
@@ -215,7 +229,10 @@ export async function main(args = process.argv.slice(2)) {
       "--roots",
       JSON.stringify(roots),
     ]);
-const client = new Client({ name: "convorel-doctor", version: "0.1.0" }),
+    const client = new Client({
+        name: "convorel-doctor",
+        version: packageInfo.version,
+      }),
       transport = new StdioClientTransport({
         command: selfCommand,
         args: selfArgs,

@@ -25,16 +25,17 @@ flowchart LR
 
 ## 快速开始
 
-首版支持 **Linux**，需要 Bun ≥ 1.3、Node ≥ 24、Git 和已安装的 Google Chrome。当前仅实现 ChatGPT 网页适配。
+首版支持 **Linux（x64 / arm64，glibc）**，需要 Git 和已安装的 Google Chrome；从源码运行另需 Bun ≥ 1.3、Node ≥ 24。当前仅实现 ChatGPT 网页适配。
 
-### 1. 获取项目
+### 1. 安装
 
 ```bash
-git clone https://github.com/MarioJames/convorel.git
-cd convorel
+curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-以下步骤使用源码安装。
+安装脚本下载当前架构的 Release 压缩包，按该版本的 `sha256sums.txt` 校验后解压到 `~/.local/lib/convorel`，并把 `convorel` 与固定版本的 `agent-browser` 链接到 `~/.local/bin`；不使用 sudo。支持 `--version vX.Y.Z`、`--prefix`、`--bin-dir`、`--uninstall`，卸载只移除可执行文件，不动会话状态、偏好和已安装技能。产物带 GitHub 构建来源证明，可用 `gh attestation verify 压缩包 --repo MarioJames/convorel` 核验。
+
+从源码运行时：`git clone https://github.com/MarioJames/convorel.git`，以下命令把 `convorel` 换成 `bun --no-env-file src/cli.ts`，初始化改用 `bun --no-env-file setup.ts`（它会先执行 `bun install --frozen-lockfile`）。
 
 ### 2. 准备浏览器
 
@@ -49,13 +50,13 @@ google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 
 
 ### 3. 初始化
 
-在 Convorel 目录执行，将 `--workspace` 替换为代码工作区的绝对路径：
+将 `--workspace` 替换为代码工作区的绝对路径：
 
 ```bash
-bun --no-env-file setup.ts --workspace /absolute/path/to/your-project --cdp 9222
+convorel setup --workspace /absolute/path/to/your-project --cdp 9222
 ```
 
-`setup` 会安装锁定的本地依赖，将配置写入 `~/.local/share/convorel/`，并检查 CDP 和本地 MCP。模型和项目偏好从环境配置读取，新任务保存当时的配置。
+`setup` 将配置写入 `~/.local/share/convorel/`，并检查 CDP 和本地 MCP（源码方式还会先安装锁定的本地依赖）。模型和项目偏好从 `convorel config` 或环境配置读取，新任务保存当时的配置。
 
 `--workspace` 保存默认代码工作区；未配置 `CONVOREL_MCP_ROOTS` 时，它也是唯一允许读取的目录。配置多目录后，对话中直接提供目标项目的完整路径即可，无需设置 `CONVOREL_WORKSPACE`。
 
@@ -105,17 +106,19 @@ bun --no-env-file src/cli.ts skills install --agent claude-code --scope project 
 bunx skills add ./skills --skill chatgpt-review -a codex -g
 ```
 
-`-g` 表示用户范围；直接使用 Skills CLI 时保留交互确认，遇到同名个人技能应取消覆盖；包装入口会预先拒绝此类冲突。源码发布后也可将 `./skills` 换为 `https://github.com/MarioJames/convorel`。安装技能不安装 Convorel 运行时；让 `convorel` 在 `PATH` 中，或在 Agent 进程环境设置 `CONVOREL_BIN=/absolute/path/to/convorel/src/cli.ts`。技能会以 `bun --no-env-file` 执行该脚本，即使技能安装到另一个目录也无需相对路径。
+`-g` 表示用户范围；直接使用 Skills CLI 时保留交互确认，遇到同名个人技能应取消覆盖；包装入口会预先拒绝此类冲突。源码发布后也可将 `./skills` 换为 `https://github.com/MarioJames/convorel`。安装技能不安装 Convorel 运行时；让 `convorel` 在 `PATH` 中（安装脚本默认链接到 `~/.local/bin`），或在 Agent 进程环境设置 `CONVOREL_BIN`：指向独立可执行文件时直接执行，指向源码 `src/cli.ts` 时技能以 `bun --no-env-file` 执行，即使技能安装到另一个目录也无需相对路径。
 
-可在 Convorel 安装根 `.env` 配置审查目标：
+审查目标用 `convorel config` 保存到 `~/.config/convorel/preferences.json`（`convorel config path` 显示位置，`config list` 查看来源）：
 
-```dotenv
-CONVOREL_PROJECT_URL=https://chatgpt.com/g/g-p-实际项目ID/project
-CONVOREL_PROJECT_NAME=实际项目名称
-# 可选：CONVOREL_MODEL=用户明确选择的模型
+```bash
+convorel config set project.url https://chatgpt.com/g/g-p-实际项目ID/project
+convorel config set project.name 实际项目名称
+# 可选：convorel config set model '用户明确选择的模型'
 ```
 
-URL 必须来自实际项目页面，URL/name 成对配置。配置项目后直接在该项目的“新建对话”输入框创建；项目入口不匹配则在发送前停止，不在普通会话中创建后移动。标题使用 `MMDD｜TYPE｜Topic`，日期来自会话 `createdAt` 转 `Asia/Shanghai`；默认英文 TYPE，明确要求中文时用 `start --language zh`。创建时通过 `--type`/`--topic` 提供命名信息，首条消息与持久化 URL 确认后立即改名，不等待回复完成；主题不明时省略命名参数，保留原标题。URL 延迟时 `resume`/`wait` 会补做尚未开始的命名。命名失败独立记录在 `organization.error`，检查后用 `organize --id ID --run RUN_ID --type EXP --topic '具体主题'` 显式恢复，不重发消息；命名只改标题，项目归属不符则报错。同名进程环境变量包括空值都优先于安装根 `.env`。新 task 保存配置 snapshot，续谈保留原模型/项目，修改环境不会改写旧 task。
+源码安装也可写在安装根 `.env`，`convorel config import-env` 能把已有 `.env` 一次导入偏好文件。
+
+URL 必须来自实际项目页面，URL/name 成对配置。配置项目后直接在该项目的“新建对话”输入框创建；项目入口不匹配则在发送前停止，不在普通会话中创建后移动。标题使用 `MMDD｜TYPE｜Topic`，日期来自会话 `createdAt` 转 `Asia/Shanghai`；默认英文 TYPE，明确要求中文时用 `start --language zh`。创建时通过 `--type`/`--topic` 提供命名信息，首条消息与持久化 URL 确认后立即改名，不等待回复完成；主题不明时省略命名参数，保留原标题。URL 延迟时 `resume`/`wait` 会补做尚未开始的命名。命名失败独立记录在 `organization.error`，检查后用 `organize --id ID --run RUN_ID --type EXP --topic '具体主题'` 显式恢复，不重发消息；命名只改标题，项目归属不符则报错。优先级为同名进程环境变量（含空值）> 安装根 `.env`（仅源码）> 偏好文件。新 task 保存配置 snapshot，续谈保留原模型/项目，修改环境不会改写旧 task。
 
 技能会整理证据、处理意见并清理已完成的自有标签页。等待可以使用宿主后台进程或分段 CLI wait；Herdr 可用时才增强为 service lane，无需安装 Herdr 或记忆服务。
 
@@ -127,19 +130,21 @@ URL 必须来自实际项目页面，URL/name 成对配置。配置项目后直�
 
 安装官方 [tunnel-client](https://github.com/openai/tunnel-client/releases/latest)，确保命令在 `PATH` 中。在 [Platform 隧道设置](https://platform.openai.com/settings/organization/tunnels) 创建隧道，并关联目标 ChatGPT 工作区。在同一组织的 [Runtime API keys](https://platform.openai.com/settings/organization/api-keys) 创建具有 **Tunnels Read + Use** 权限的运行时密钥。
 
-### 2. 配置环境文件与读取范围
+### 2. 配置凭据与读取范围
 
-在 Convorel 安装目录复制 `.env.example` 为 `.env`（已有文件则直接编辑），填入自己的配置：
+用 `convorel config` 保存凭据和读取范围；密钥写入 0600 的偏好文件，`config get`/`config list` 只显示是否已配置，不回显：
 
-```dotenv
-CONVOREL_TUNNEL_API_KEY=你的_OpenAI_运行时密钥
-CONVOREL_TUNNEL_ID=tunnel_你的隧道ID
-CONVOREL_MCP_ROOTS='["~/workspaces","~/opensource"]'
+```bash
+convorel config set tunnel.apiKey 你的_OpenAI_运行时密钥
+convorel config set tunnel.id tunnel_你的隧道ID
+convorel config set mcp.roots '["~/workspaces","~/opensource"]'
 ```
+
+源码安装也可在安装目录复制 `.env.example` 为 `.env` 填写同名变量（`CONVOREL_TUNNEL_API_KEY`、`CONVOREL_TUNNEL_ID`、`CONVOREL_MCP_ROOTS`）。
 
 `CONVOREL_MCP_ROOTS` 是允许读取的根目录 JSON 数组，支持绝对路径和 `~/`。未设置时使用初始化时指定的目录；根目录不能重复、嵌套或是符号链接。修改读取范围后需重启隧道。
 
-同名环境变量优先于 `.env`，包括显式空值；隧道 ID 还可用 `--tunnel-id` 覆盖。无论从哪个目录调用，程序只读取 Convorel 安装目录的 `.env`，不加载被审查项目的环境文件、`.env.local` 等变体，也不执行变量展开。保留命令中的 `--no-env-file`，由 Convorel 按上述规则加载配置。
+优先级为同名环境变量（含显式空值）> 安装根 `.env`（仅源码）> 偏好文件；隧道 ID 还可用 `--tunnel-id` 覆盖。无论从哪个目录调用，程序只读取 Convorel 安装目录的 `.env` 与偏好文件，不加载被审查项目的环境文件、`.env.local` 等变体，也不执行变量展开。源码命令保留 `--no-env-file`，独立可执行文件已内置该行为。
 
 `.env` 和 `.env.*` 已被 Git 忽略（保留可提交的 `.env.example` 模板）。可执行 `chmod 600 .env` 限制本机访问。密钥只在启动官方客户端时映射为它需要的 `CONTROL_PLANE_API_KEY`，不写入提示词或任务 JSON。
 

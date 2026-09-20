@@ -35,6 +35,15 @@ function interpret(path: string): string[] {
   return [bun, "--no-env-file", path];
 }
 
+/** Where the controller resolves to, reported by a diagnostic that must not fail. */
+export function agentBrowserLocation() {
+  try {
+    return agentBrowserInvocation()[0];
+  } catch {
+    return "unresolved";
+  }
+}
+
 let browser: string[] | undefined;
 /** The browser controller is a pinned native binary or the packaged JS launcher. */
 export function agentBrowserInvocation(): string[] {

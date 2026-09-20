@@ -16,7 +16,7 @@ description: 通过 Convorel 调用 ChatGPT Pro 审查架构决策、重要方�
 - 判断何时审查、何时可通过决策门槛：读取 [proactive-review.md](references/proactive-review.md)。
 - 开发完成后校验架构实现结果、有无偏移：读取 [result-review.md](references/result-review.md)，以目标、实际结果和差异为主，不默认深入代码审查。
 - 编写最终请求前：读取 [review-prompt.md](references/review-prompt.md)，按实际问题补入约束、`文件路径:起始行-结束行` 引用、审查问题和证据限制。
-- 发起、续谈、恢复或收尾：读取 [convorel.md](references/convorel.md)。技能可单独安装，通过 `PATH` 的 `convorel` 或 `CONVOREL_BIN` 指定的 CLI 脚本使用独立运行时，不依赖技能目录旁存在源码。
+- 发起、续谈、恢复或收尾：读取 [convorel.md](references/convorel.md)。技能可单独安装，通过 `PATH` 的 `convorel` 或 `CONVOREL_BIN` 指定的 CLI 文件（独立可执行文件或源码脚本）使用独立运行时，不依赖技能目录旁存在源码。
 - 需要 Herdr 后台等待增强且环境可用时：才读取 [herdr.md](references/herdr.md)。Herdr 不是前置条件。
 
 ## 审查约束

@@ -50,16 +50,19 @@ Convorel 把 ChatGPT 接入本地开发流程。让 Codex 或 Claude Code 带着
 
 ## 快速开始
 
-当前版本面向 **Linux + ChatGPT 网页**，使用你已登录的 **有头 Google Chrome + CDP**。需要 Bun ≥ 1.3、Node ≥ 24、Git，以及能使用目标模型的 ChatGPT 账号。默认选择网页 Latest 的 Pro 模式，不固定模型版本。
+当前版本面向 **Linux（x64 / arm64）+ ChatGPT 网页**，使用你已登录的 **有头 Google Chrome + CDP**。需要 Git，以及能使用目标模型的 ChatGPT 账号。默认选择网页 Latest 的 Pro 模式，不固定模型版本。
 
-### 1. 获取项目
+### 1. 安装
+
+从 GitHub Release 安装独立可执行文件，自带固定版本的浏览器控制器，不需要 Bun 或 Node：
 
 ```bash
-git clone https://github.com/MarioJames/convorel.git
-cd convorel
+curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-当前以源码安装为准。
+脚本会校验发布的 `sha256sums.txt`，安装到 `~/.local/lib/convorel`，并在 `~/.local/bin` 链接 `convorel`；不使用 sudo。`--version vX.Y.Z` 安装指定版本，`--uninstall` 只移除可执行文件，保留会话状态、偏好和已安装技能。
+
+也可以从源码运行（需要 Bun ≥ 1.3、Node ≥ 24）：`git clone https://github.com/MarioJames/convorel.git`，下文命令把 `convorel` 换成 `bun --no-env-file src/cli.ts`，初始化改用 `bun --no-env-file setup.ts`。
 
 ### 2. 启动专用浏览器并登录
 
@@ -72,15 +75,15 @@ google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 
 
 ### 3. 初始化并安装审查技能
 
-在 Convorel 目录执行，替换为实际代码工作区：
+替换为实际代码工作区：
 
 ```bash
-bun --no-env-file setup.ts --workspace /absolute/path/to/your-project --cdp 9222 --agent codex
+convorel setup --workspace /absolute/path/to/your-project --cdp 9222 --agent codex
 ```
 
 使用 Claude Code 时，将 `codex` 换成 `claude-code`；同时安装用 `codex,claude-code`。已有同名技能时会停止并提示，不会覆盖个人修改。
 
-技能需要找到 Convorel 运行时。如果 `convorel` 尚未在 `PATH` 中，在启动 Agent 的终端设置下面的绝对脚本路径，让 Agent 进程继承它：
+技能通过 `PATH` 中的 `convorel` 找到运行时。源码方式运行时，在启动 Agent 的终端设置下面的绝对脚本路径，让 Agent 进程继承它：
 
 ```bash
 export CONVOREL_BIN=/absolute/path/to/convorel/src/cli.ts
@@ -88,7 +91,7 @@ export CONVOREL_BIN=/absolute/path/to/convorel/src/cli.ts
 
 此时可以讨论由 Agent 提供的上下文。要让 ChatGPT **直接读取本地代码**，还需按[代码连接指南](docs/usage.md#让-chatgpt-读取本地代码)配置官方隧道与 ChatGPT developer app；仅连接浏览器不会开放代码访问。
 
-模型与目标项目通过 `CONVOREL_MODEL`、`CONVOREL_PROJECT_URL`、`CONVOREL_PROJECT_NAME` 配置。配置项目时直接在该项目中创建会话；首条消息发送成功后按调用方提供的主题命名，不等待回复完成、不移动会话。完整命令、配置和首次讨论示例见[使用指南](docs/usage.md)。
+模型与目标项目用 `convorel config set model|project.url|project.name VALUE` 保存到 `~/.config/convorel/preferences.json`；同名 `CONVOREL_*` 环境变量（源码方式还有安装根 `.env`）优先于该文件。配置项目时直接在该项目中创建会话；首条消息发送成功后按调用方提供的主题命名，不等待回复完成、不移动会话。完整命令、配置和首次讨论示例见[使用指南](docs/usage.md)。
 
 ## 使用边界
 

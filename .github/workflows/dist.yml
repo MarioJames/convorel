@@ -1,0 +1,30 @@
+name: dist
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: dist-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      # test:install rebuilds dist/ for this platform only; keep it before dist.
+      - name: Build, install and drive the standalone artifact
+        run: bun run test:install
+      - name: Build every published target
+        run: bun run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

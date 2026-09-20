@@ -1,5 +1,11 @@
 # Validation
 
+## 2026-09-20：独立可执行文件、偏好文件与发布流水线
+
+`bun run dist` 用 `bun build --compile` 生成 `convorel-0.1.0-linux-x64.tar.gz` 与 `linux-arm64`（x64 主机交叉编译）及 `sha256sums.txt`，每个包含 `bin/convorel`、bun.lock 固定的 `agent-browser` 0.34.0 原生二进制和许可证文件；编译时关闭 dotenv 自动加载并内置 `--no-env-file`。`bun run test:install` 在临时 HOME 下通过：构建→`install.sh --dist-dir` 离线安装→`--version`/`version` 报告 standalone→`config set` 的 `mcp.roots`/`model` 被重入的 MCP 子进程与 `init` 读回→`doctor` 对不可达 CDP 报告 failed 而非崩溃→安装的技能文件与源码逐字节一致→篡改 `sha256sums.txt` 被 `CHECKSUM_MISMATCH` 拒绝→重装与卸载保留状态、偏好和技能。`bun run check` 199 项测试与 `format:check` 通过。
+
+发布流水线审查发现并修正：`release.yml` 原先在 `bun run dist` 之后再跑 `test:install`，后者会清空 `dist/` 只重建本平台，导致 Release 只会带 x64 包；已调整顺序，并把发布权限收敛到 publish job、失败重跑改为覆盖上传、含 `-` 的 tag 标记 prerelease、Release 正文附安装命令与校验和。技能的 `convorel_cli` 辅助函数原先总是用 `bun --no-env-file` 执行 `CONVOREL_BIN`，与安装脚本产出的二进制不兼容；现按 `.ts` 后缀区分脚本与可执行文件。`install.sh` 补上文档已声明的 `CONVOREL_VERSION`。GitHub Actions 端到端（tag 触发、attestation、Release 创建）尚未在真实仓库运行，需要首次打 tag 时核对。
+
 ## 2026-09-20：并发调度改造——per-tab 锁与 tab 竞态管理
 
 修复并发调度缺陷：此前 `Conversation.exclusive()` 对每个浏览器操作都抢同一把全局 `operation` 锁，且 `locked()` 抢不到即抛 `LOCK_BUSY`（不等待、不退避），导致一个 agent 在发送或 `wait` 轮询时，另一个 agent 的 `start` 被直接挡回、其编排层只能停下来等对方，而不是先在自己那一份 tab 上建任务、发 prompt。改造为按 task（等价按 tab，因 binding 为 1 任务↔1 target）串行：`task-<id>` 锁下不同任务并行；`registry` 锁只做「跨任务冲突检查+原子写入」这一纯文件临界区，保护会话 URL、tab binding、request key 的全局唯一性；`tabs` 锁覆盖末位 tab 的 keepalive+close check-then-act，防并发关到零 tab。`locked()` 增加有界等待（超时才 `LOCK_BUSY`，绝不清除活属主锁），保持 exactly-once 与不自动重发。`CONVOREL_SERIAL=1` 逃生开关退回单一全局 `operation` 锁，供无法稳定并行的 Chrome/CDP 环境。`status`/`list` 投影每个任务自有 `tab`（target/epoch/owned/closed）与 advisory `locked`；`recover-lock` 支持 `--task`/`--watch-task`/`--registry`/`--tabs`/`--name`。
