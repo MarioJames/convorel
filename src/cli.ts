@@ -6,15 +6,11 @@ import { Conversation, type Config } from "./conversation.ts";
 import { Workspace } from "./workspace.ts";
 import { WorkspaceAccess, parseRoots } from "./workspace-access.ts";
 import { serve } from "./mcp.ts";
-import {
-  cliPath,
-  runTunnel,
-  tunnelInstructions,
-  recoverTunnelLock,
-} from "./tunnel.ts";
+import { runTunnel, tunnelInstructions, recoverTunnelLock } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
 import { jsonPrinter } from "./output.ts";
 import { installationEnv } from "./env.ts";
+import { selfExec } from "./runtime.ts";
 import { conversationConfig } from "./config.ts";
 import { installSkill } from "./skills.ts";
 import { waitForConversation, watcherLockName } from "./wait.ts";
@@ -189,17 +185,16 @@ export async function main(args = process.argv.slice(2)) {
     } finally {
       await browser.release();
     }
+    const [selfCommand, ...selfArgs] = selfExec([
+      "mcp",
+      "serve",
+      "--roots",
+      JSON.stringify(roots),
+    ]);
     const client = new Client({ name: "convorel-doctor", version: "0.1.0" }),
       transport = new StdioClientTransport({
-        command: process.execPath,
-        args: [
-          "--no-env-file",
-          cliPath,
-          "mcp",
-          "serve",
-          "--roots",
-          JSON.stringify(roots),
-        ],
+        command: selfCommand,
+        args: selfArgs,
         env: childEnv(),
         stderr: "pipe",
       });

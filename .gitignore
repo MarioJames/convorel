@@ -3,6 +3,7 @@ node_modules/
 .env.*
 !.env.example
 *.tgz
+dist/
 coverage/
 .DS_Store
 .tools/

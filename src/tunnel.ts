@@ -1,12 +1,12 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { State, processIdentity } from "./state.ts";
 import { Workspace, sha } from "./workspace.ts";
 import { childEnv } from "./command.ts";
 import { WorkspaceAccess } from "./workspace-access.ts";
 import { installationEnv } from "./env.ts";
-export const cliPath = resolve(import.meta.dir, "cli.ts");
+import { selfExec } from "./runtime.ts";
 export const shellQuote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 export function tunnelArgs(
   id: string,
@@ -15,15 +15,12 @@ export function tunnelArgs(
   roots = [root],
 ) {
   if (!/^tunnel_[a-f0-9]{32}$/.test(id)) throw new Error("INVALID_TUNNEL_ID");
-  const mcp = [
-    process.execPath,
-    "--no-env-file",
-    cliPath,
+  const mcp = selfExec([
     "mcp",
     "serve",
     "--roots",
     JSON.stringify(new WorkspaceAccess(roots).roots.map((ws) => ws.root)),
-  ]
+  ])
     .map(shellQuote)
     .join(" ");
   return [
@@ -47,31 +44,15 @@ export function tunnelInstructions(id: string, root: string, roots = [root]) {
     })),
     requires: [
       "official tunnel-client on PATH",
-      "CONVOREL_TUNNEL_API_KEY in the environment or convorel installation .env",
+      "CONVOREL_TUNNEL_API_KEY in the environment or convorel configuration",
       "Platform tunnel associated with target ChatGPT workspace",
       "ChatGPT developer app connected and enabled",
     ],
     commands: {
-      doctor: [
-        process.execPath,
-        "--no-env-file",
-        cliPath,
-        "tunnel",
-        "doctor",
-        "--tunnel-id",
-        id,
-      ]
+      doctor: selfExec(["tunnel", "doctor", "--tunnel-id", id])
         .map(shellQuote)
         .join(" "),
-      run: [
-        process.execPath,
-        "--no-env-file",
-        cliPath,
-        "tunnel",
-        "run",
-        "--tunnel-id",
-        id,
-      ]
+      run: selfExec(["tunnel", "run", "--tunnel-id", id])
         .map(shellQuote)
         .join(" "),
     },

@@ -1,5 +1,4 @@
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { agentBrowserInvocation } from "./runtime.ts";
 export function childEnv() {
   const env: Record<string, string> = {};
   for (const key of [
@@ -15,19 +14,10 @@ export function childEnv() {
     if (process.env[key]) env[key] = process.env[key]!;
   return env;
 }
-export const agentBrowserScript = join(
-  dirname(createRequire(import.meta.url).resolve("agent-browser/package.json")),
-  "bin/agent-browser.js",
-);
 export async function command(argv: string[], seconds = 25): Promise<string> {
   const actual =
     argv[0] === "agent-browser"
-      ? [
-          process.execPath,
-          "--no-env-file",
-          agentBrowserScript,
-          ...argv.slice(1),
-        ]
+      ? [...agentBrowserInvocation(), ...argv.slice(1)]
       : argv;
   const p = Bun.spawn(actual, {
     stdout: "pipe",

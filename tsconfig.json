@@ -10,5 +10,11 @@
     "types": ["bun"],
     "lib": ["ESNext", "DOM"]
   },
-  "include": ["setup.ts", "src/**/*.ts", "skills/**/*.ts", "tests/**/*.ts"]
+  "include": [
+    "setup.ts",
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "skills/**/*.ts",
+    "tests/**/*.ts"
+  ]
 }

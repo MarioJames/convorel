@@ -30,6 +30,7 @@
     "check": "bun run typecheck && bun test",
     "test:browser": "bun tests/browser.integration.ts",
     "test:package": "bun tests/package.integration.ts",
+    "dist": "bun --no-env-file scripts/build.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
