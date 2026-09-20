@@ -62,6 +62,8 @@ curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh
 
 脚本会校验发布的 `sha256sums.txt`，安装到 `~/.local/lib/convorel`，并在 `~/.local/bin` 链接 `convorel`；不使用 sudo。`--version vX.Y.Z` 安装指定版本，`--uninstall` 只移除可执行文件，保留会话状态、偏好和已安装技能。
 
+安装后可用 `convorel version --check` 检查最新版、`convorel upgrade` 升级，或加 `--version vX.Y.Z` 指定版本；旧版本与用户数据保留。
+
 也可以从源码运行（需要 Bun ≥ 1.3、Node ≥ 24）：`git clone https://github.com/MarioJames/convorel.git`，下文命令把 `convorel` 换成 `bun --no-env-file src/cli.ts`，初始化改用 `bun --no-env-file setup.ts`。
 
 ### 2. 启动专用浏览器并登录

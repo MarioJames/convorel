@@ -137,3 +137,11 @@ Added offline fixtures reproducing optimistic user insertion followed by disappe
 The parent then found a completed-user rendering mismatch before any resend: code-comment indentation collapsed, and DOM text included a trailing `Show more` control. Recovery now validates the exact previous user ID and its unique run marker together with the existing reply ID/hash and full-branch check, while verifying the saved source hash. It does not compare rendered user text byte-for-byte, strip text strings, or change PAGE_SCRIPT/newline handling. TDD reproduced the rendering failure and missing marker-uniqueness guards; TypeScript and all 159 tests passed. The regression was refined with the parent's whitespace/Show more evidence and all six focused cases passed again. No live browser or task state was touched.
 
 A further parent-side pre-send failure came from reselecting Latest despite the rejected run already having observed `6 Pro`. Recovery now passes that run's observed model to the first existing model verifier, falling back to the task/default policy only when absent. Maximum Pro power verification and the second verify-only call are retained; model.ts and PAGE_SCRIPT are unchanged. TDD reproduced the missing parameter preference; TypeScript and 95 conversation/model tests passed, covering saved-model preference, configured/default fallbacks and refusal of a failed final verification. The parent verified live power was already 4/4; this child used only fixtures.
+
+## 2026-09-20 — 顶层进程管理、自定义 Skill 目录与升级
+
+Linux x64、Bun 1.4.2。`bun run check` 通过 TypeScript 和 207 个测试；进程终止逻辑最终微调后，service/tunnel 的 5 个定向测试再次通过。`bun run format:check`、`git diff --check` 和 `bun run test:package` 均通过。
+
+`bun run test:install` 使用隔离 HOME、配置、工作区和安装目录验证真实 standalone：`start/status/logs/restart/stop`、重复启动、`skills install --dir` 的完整资源与重复安装保护，以及安装、重装和卸载后的用户数据保留。升级验证已接入这一既有发布验收入口，也可用 `bun run test:upgrade` 单独执行；本地 HTTP release fixture 覆盖最新版检查、指定版本、同版本重装、旧版本保留、checksum 拒绝、路径及安装布局校验。安装器行为测试还验证激活失败时回滚两个链接和拒绝不安全归档；带空格、引号及反斜线的自定义路径通过独立升级验收。
+
+进程行为测试覆盖并发启动的单实例约束、配置丢失后停止、身份不匹配时不发送信号、启动失败反馈、日志跟随与轮转，以及忽略 SIGTERM 的后代进程清理。测试使用替代 tunnel-client，没有连接真实云端；`status.running` 仅证明本地进程存活。没有操作共享 Chrome、真实安装或持久会话数据；测试进程、临时 release HTTP 服务及临时安装由验收脚本释放。此次为 CLI 变更，不涉及前端页面或浏览器验收。

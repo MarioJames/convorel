@@ -88,19 +88,33 @@ bun --no-env-file src/cli.ts conversation finish --id first-question --run RUN_I
 
 先消费、保存回复，再执行 `finish`。它保留会话链接和结果，只关闭经过核验的自有标签页；用户原有标签页不会关闭。
 
+## 升级与版本检查
+
+```bash
+convorel version --check
+convorel upgrade
+convorel upgrade --version vX.Y.Z
+```
+
+`version --check` 返回当前版本、`latest` 和 `upToDate`。独立安装的 `upgrade` 复用内嵌安装脚本，下载并验证 checksum 和可执行文件版本后切换安装链接，保留旧版本、会话、偏好与技能。自定义安装目录由安装器的 `layout.json` 记录；无法识别布局时提示重新运行安装器。源码方式提示在仓库执行 `git pull` 和 `bun install --frozen-lockfile`。升级不自动重启已有后台进程，需要使用新版时运行 `convorel restart`。
+
 ## 安装审查技能
 
-Convorel 提供现有 Skills CLI 的薄包装，支持 Codex 和 Claude Code，也可用 `--agent codex,claude-code` 同时安装。此入口无需先初始化浏览器或任务配置，`--scope` 默认 `user`：
+Convorel 内置技能安装命令，支持 Codex 和 Claude Code，也可用 `--agent codex,claude-code` 同时安装。此入口无需先初始化浏览器或任务配置，`--scope` 默认 `user`：
 
 ```bash
 bun --no-env-file src/cli.ts skills install --agent codex --scope user
+# 安装到自定义技能根目录，生成 /absolute/custom-skills/chatgpt-review
+convorel skills install --dir /absolute/custom-skills
 # 仅安装到指定项目
 bun --no-env-file src/cli.ts skills install --agent claude-code --scope project --cwd /absolute/path/to/project
 ```
 
-包装入口固定使用 `skills@1.6.0` 从本安装包的 `skills` 目录安装；预检公共 `.agents/skills` 及所选 Agent 的目标路径（包含旧 `.codex/skills`），发现同名目录或链接就拒绝覆盖，安装后核验技能入口。也可在初始化时增加 `--agent codex`，例如 `bun --no-env-file setup.ts --workspace /absolute/path/to/project --cdp 9222 --agent codex`：初始化后安装技能，再执行 doctor。省略 `--agent` 不安装技能。
+安装入口直接复制本安装包内置的完整技能资源；预检公共 `.agents/skills` 及所选 Agent 的目标路径（包含旧 `.codex/skills`），发现同名目录或链接就拒绝覆盖，安装后核验技能入口。也可在初始化时增加 `--agent codex`，例如 `bun --no-env-file setup.ts --workspace /absolute/path/to/project --cdp 9222 --agent codex`：初始化后安装技能，再执行 doctor。省略 `--agent` 不安装技能。
 
-在 Convorel 源码或安装包目录中使用现有 Skills CLI：
+`--dir` 与 `--agent`、`--scope`、`--cwd` 互斥，同样拒绝覆盖已有技能，不创建 Agent 专用链接。
+
+在 Convorel 源码目录中也可使用现有 Skills CLI：
 
 ```bash
 bunx skills add ./skills --skill chatgpt-review -a codex -g
@@ -156,7 +170,20 @@ bun --no-env-file src/cli.ts tunnel doctor
 bun --no-env-file src/cli.ts tunnel run
 ```
 
-保持 `tunnel run` 运行。在 [ChatGPT Plugins](https://chatgpt.com/plugins) 创建 developer app，选择 **Connection → Tunnel** 和对应隧道；当前本地 MCP 不提供应用层 OAuth，认证选择 **No Auth**。隧道连接仍受运行时密钥和工作区权限控制。随后在审查对话中启用该 app。一个 stdio 隧道 ID 同时只能运行一个客户端。
+日常可使用顶层命令在后台管理官方 tunnel-client：
+
+```bash
+convorel start
+convorel status
+convorel logs --lines 100
+convorel logs --follow
+convorel restart
+convorel stop
+```
+
+这些命令均可加 `--tunnel-id ID`，否则使用已配置的 ID。`start` 等待本地进程注册并短暂稳定，重复调用不会多开；`status` 的 `running` 只表示本地进程存活，不代表云端连接已验证。`stop` 按注册表中的进程身份停止客户端及其进程组，保留状态与日志；配置文件或代码目录丢失后仍可停止。`logs --follow` 用 Ctrl+C 退出。日志在 `~/.local/share/convorel-tunnels/`，每次启动保留上一份为 `.log.previous`。后台进程随当前登录环境运行，不注册系统开机服务，也不管理 Chrome。
+
+需要前台运行时继续使用 `tunnel run`。在 [ChatGPT Plugins](https://chatgpt.com/plugins) 创建 developer app，选择 **Connection → Tunnel** 和对应隧道；当前本地 MCP 不提供应用层 OAuth，认证选择 **No Auth**。隧道连接仍受运行时密钥和工作区权限控制。随后在审查对话中启用该 app。一个 stdio 隧道 ID 同时只能运行一个客户端。
 
 完整接入步骤见[接入指南](quickstart.md#code-access-through-a-tunnel)与 [OpenAI 官方文档](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)。
 

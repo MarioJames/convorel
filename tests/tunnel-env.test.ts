@@ -100,6 +100,10 @@ test("CLI loads installation dotenv from another cwd and maps only the tunnel ke
       join(import.meta.dir, "../package.json"),
       join(installation, "package.json"),
     );
+    cpSync(
+      join(import.meta.dir, "../install.sh"),
+      join(installation, "install.sh"),
+    );
     symlinkSync(
       join(import.meta.dir, "../node_modules"),
       join(installation, "node_modules"),

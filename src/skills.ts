@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { assetPath, cliScript, COMPILED } from "./runtime.ts";
 
 const name = "chatgpt-review";
@@ -27,20 +27,39 @@ function bundleFiles(root: string): string[] {
 
 export function skillInstallPlan(opts: Record<string, string>) {
   for (const key of Object.keys(opts))
-    if (!["agent", "scope", "cwd"].includes(key))
+    if (!["agent", "scope", "cwd", "dir"].includes(key))
       throw new Error(`Unknown skills option --${key}`);
+  const source = assetPath("skills", name);
+  if (opts.dir !== undefined) {
+    // A plain copy into a caller-chosen directory: no agent links, no scope.
+    if (["agent", "scope", "cwd"].some((key) => opts[key] !== undefined))
+      throw new Error(
+        "--dir cannot be combined with --agent, --scope or --cwd",
+      );
+    if (!opts.dir) throw new Error("--dir requires a directory path");
+    const canonical = join(resolve(opts.dir), name);
+    assertAbsent([canonical]);
+    return {
+      source,
+      canonical,
+      targets: [canonical],
+      scope: "directory",
+      agents: [] as string[],
+    };
+  }
   const agents = [...new Set((opts.agent || "").split(","))];
   if (
     !agents.length ||
     agents.some((a) => !["codex", "claude-code"].includes(a))
   )
-    throw new Error("Choose --agent codex, claude-code, or codex,claude-code");
+    throw new Error(
+      "Choose --agent codex, claude-code, or codex,claude-code; or --dir PATH",
+    );
   const scope = opts.scope || "user";
   if (scope !== "user" && scope !== "project")
     throw new Error("Choose --scope user or project");
   const cwd = realpathSync(opts.cwd || process.cwd());
   const root = scope === "user" ? homedir() : cwd;
-  const source = assetPath("skills", name);
   const canonical = join(root, ".agents/skills", name);
   const links = agents.flatMap((a) =>
     a === "claude-code"
@@ -50,7 +69,12 @@ export function skillInstallPlan(opts: Record<string, string>) {
         : [],
   );
   const targets = [...new Set([canonical, ...links])];
-  // Check dangling links as well as directories. Never pass overwrite consent for an existing skill.
+  assertAbsent(targets);
+  return { source, canonical, targets, scope, agents };
+}
+
+// Check dangling links as well as directories. Never pass overwrite consent for an existing skill.
+function assertAbsent(targets: string[]) {
   for (const target of targets) {
     try {
       lstatSync(target);
@@ -62,7 +86,6 @@ export function skillInstallPlan(opts: Record<string, string>) {
       `SKILL_ALREADY_EXISTS: ${target}; inspect and migrate the existing skill before installing`,
     );
   }
-  return { source, canonical, targets, scope, agents };
 }
 
 export async function installSkill(opts: Record<string, string>) {
@@ -72,6 +95,8 @@ export async function installSkill(opts: Record<string, string>) {
   for (const target of targets) {
     mkdirSync(dirname(target), { recursive: true, mode: 0o755 });
     if (target === canonical) {
+      // Claim the destination exclusively so concurrent installers cannot overwrite it.
+      mkdirSync(canonical, { mode: 0o755 });
       for (const file of files) {
         const to = join(canonical, file);
         mkdirSync(dirname(to), { recursive: true, mode: 0o755 });

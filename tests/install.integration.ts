@@ -14,6 +14,7 @@ import {
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { childEnv } from "../src/command.ts";
+import { verifyUpgrade } from "./upgrade.integration.ts";
 const source = resolve(import.meta.dir, "..");
 const pkg = await Bun.file(join(source, "package.json")).json();
 const platform = `linux-${process.arch === "arm64" ? "arm64" : "x64"}`;
@@ -105,6 +106,8 @@ try {
     /0\.34\.0/,
   );
 
+  await verifyUpgrade(run, prefix, bin, dist);
+
   // Preferences resolve for the child the CLI re-enters, and for a standalone
   // MCP server that is given no roots of its own.
   await run([
@@ -181,6 +184,59 @@ try {
     true,
   );
 
+  const customSkills = join(temp, "custom skills");
+  const custom = JSON.parse(
+    await run([
+      join(bin, "convorel"),
+      "skills",
+      "install",
+      "--dir",
+      customSkills,
+    ]),
+  );
+  assert.deepEqual(custom.paths, [join(customSkills, "chatgpt-review")]);
+  for (const file of custom.files)
+    assert.equal(
+      readFileSync(join(custom.paths[0], file), "utf8"),
+      readFileSync(join(source, "skills/chatgpt-review", file), "utf8"),
+    );
+  assert.match(
+    await run(
+      [join(bin, "convorel"), "skills", "install", "--dir", customSkills],
+      { failure: true },
+    ),
+    /SKILL_ALREADY_EXISTS/,
+  );
+
+  // Exercise compiled selfExec and detached supervision without contacting a real tunnel.
+  const tunnelClient = join(bin, "tunnel-client");
+  writeFileSync(
+    tunnelClient,
+    `#!/bin/sh\ntrap 'exit 0' TERM INT\nprintf 'standalone client ready\\n'\nwhile :; do sleep 1; done\n`,
+    { mode: 0o700 },
+  );
+  const serviceEnv = {
+    PATH: bin + ":" + env.PATH,
+    CONVOREL_TUNNEL_ID: "tunnel_" + "a".repeat(32),
+    CONVOREL_TUNNEL_API_KEY: "fixture-key",
+  };
+  const service = (action: string) =>
+    run([join(bin, "convorel"), action], { env: serviceEnv });
+  try {
+    const started = JSON.parse(await service("start"));
+    assert.equal(started.running, true);
+    assert.equal(JSON.parse(await service("start")).alreadyRunning, true);
+    assert.equal(JSON.parse(await service("status")).running, true);
+    assert.match(await service("logs"), /standalone client ready/);
+    const restarted = JSON.parse(await service("restart"));
+    assert.equal(restarted.running, true);
+    assert.notEqual(restarted.client.pid, started.client.pid);
+  } finally {
+    await service("stop");
+  }
+  assert.equal(JSON.parse(await service("status")).running, false);
+  rmSync(tunnelClient);
+
   const backup = readFileSync(join(dist, "sha256sums.txt"), "utf8");
   writeFileSync(
     join(dist, "sha256sums.txt"),
@@ -216,9 +272,12 @@ try {
       checks: [
         "standalone archive with pinned browser controller",
         "offline install from a local directory",
+        "standalone version check, upgrade, failure preservation and retained releases",
         "config preferences read back by a re-entered MCP child",
         "doctor reports a dead CDP endpoint without crashing",
         "installed skill assets are byte identical",
+        "custom skill directory and repeat-install protection",
+        "standalone detached start/status/logs/restart/stop",
         "checksum tampering is refused",
         "reinstall and uninstall keep state, preferences and skills",
       ],

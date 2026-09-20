@@ -55,6 +55,7 @@ export function tunnelInstructions(id: string, root: string, roots = [root]) {
       run: selfExec(["tunnel", "run", "--tunnel-id", id])
         .map(shellQuote)
         .join(" "),
+      start: selfExec(["start", "--tunnel-id", id]).map(shellQuote).join(" "),
     },
     nativeArguments: args,
     settingsUrl: "https://platform.openai.com/settings/organization/tunnels",
@@ -63,14 +64,21 @@ export function tunnelInstructions(id: string, root: string, roots = [root]) {
     note: "One active stdio client per tunnel ID. This wrapper fixes the workspace and binds health/admin to loopback. Do not also start the same tunnel outside this wrapper.",
   };
 }
+/** Private single-instance registry shared by the foreground run and the service manager. */
+export const tunnelRegistry = () =>
+  new State(join(homedir(), ".local/share/convorel-tunnels"));
+export const tunnelKey = (id: string) => {
+  if (!/^tunnel_[a-f0-9]{32}$/.test(id)) throw new Error("INVALID_TUNNEL_ID");
+  return "tunnel-" + sha(id).slice(0, 24);
+};
 export async function runTunnel(
   action: "run" | "doctor",
   id: string,
   root: string,
   roots = [root],
 ) {
-  const registry = new State(join(homedir(), ".local/share/convorel-tunnels")),
-    key = "tunnel-" + sha(id).slice(0, 24),
+  const registry = tunnelRegistry(),
+    key = tunnelKey(id),
     workspace = new Workspace(root);
   const access = new WorkspaceAccess(roots);
   access.assertPrivate(registry.root);
@@ -102,12 +110,17 @@ export async function runTunnel(
       }
       if (live) throw new Error("TUNNEL_CHILD_STILL_RUNNING");
     }
-    registry.write(key, {
-      version: 1,
+    // The supervisor identity lets `stop` signal this wrapper, whose handler
+    // terminates the client's process group and records the exit.
+    const base = {
+      version: 1 as const,
       tunnelId: id,
       workspace: workspace.root,
       readRoots: roots,
-    });
+      supervisor: { pid: process.pid, identity: processIdentity(process.pid) },
+      startedAt: new Date().toISOString(),
+    };
+    registry.write(key, base);
     const env = {
       ...childEnv(),
       CONTROL_PLANE_API_KEY: apiKey,
@@ -124,6 +137,7 @@ export async function runTunnel(
     void exited.catch(() => {});
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stop = () => {
+      if (timer) return;
       if (child.pid) {
         try {
           process.kill(-child.pid, "SIGTERM");
@@ -140,20 +154,15 @@ export async function runTunnel(
     try {
       if (child.pid)
         registry.write(key, {
-          version: 1,
-          tunnelId: id,
-          workspace: workspace.root,
-          readRoots: roots,
+          ...base,
           pid: child.pid,
           identity: processIdentity(child.pid),
         });
       const code = await exited;
       registry.write(key, {
-        version: 1,
-        tunnelId: id,
-        workspace: workspace.root,
-        readRoots: roots,
+        ...base,
         exitCode: code,
+        exitedAt: new Date().toISOString(),
       });
       return code;
     } catch (e) {
@@ -161,7 +170,14 @@ export async function runTunnel(
       await exited.catch(() => {});
       throw e;
     } finally {
-      if (timer) clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+        // The leader may exit on TERM while a child ignores it. Finish the
+        // same process group before releasing ownership of this tunnel.
+        try {
+          process.kill(-child.pid!, "SIGKILL");
+        } catch {}
+      }
       process.off("SIGINT", stop);
       process.off("SIGTERM", stop);
     }
@@ -170,8 +186,8 @@ export async function runTunnel(
 
 export function recoverTunnelLock(id: string, root: string) {
   tunnelArgs(id, root, "/unused-health-url");
-  const registry = new State(join(homedir(), ".local/share/convorel-tunnels"));
-  const key = "tunnel-" + sha(id).slice(0, 24);
+  const registry = tunnelRegistry();
+  const key = tunnelKey(id);
   if (registry.has(key)) {
     const child = registry.read<any>(key);
     if (child.pid) {

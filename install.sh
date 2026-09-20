@@ -11,6 +11,7 @@ install_dir="${CONVOREL_INSTALL_DIR:-$HOME/.local/lib/convorel}"
 bin_dir="${CONVOREL_BIN_DIR:-$HOME/.local/bin}"
 # A directory of built artifacts, for an offline install or a release acceptance run.
 dist_dir="${CONVOREL_DIST_DIR:-}"
+release_base="${CONVOREL_RELEASE_BASE_URL:-https://github.com/$owner/$repository/releases}"
 action=install
 
 say() { printf '%s\n' "$*"; }
@@ -69,6 +70,17 @@ done
 for path in "$install_dir" "$bin_dir"; do
   case "$path" in /*) ;; *) die "ABSOLUTE_PATH_REQUIRED: $path" ;; esac
 done
+# Canonical paths make ownership checks independent of symlinked parent directories.
+install_dir="$(realpath -m -- "$install_dir")"
+bin_dir="$(realpath -m -- "$bin_dir")"
+[ "$install_dir" != / ] && [ "$bin_dir" != / ] || die "INSTALL_PATH_INVALID: root is not an installation directory"
+case "$install_dir$bin_dir" in *[$'\001'-$'\037']*) die "INSTALL_PATH_INVALID: control characters in path" ;; esac
+case "$bin_dir/" in "$install_dir/versions/"*|"$install_dir/parts/"*) die "INSTALL_PATH_INVALID: bin directory overlaps managed releases" ;; esac
+valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z][0-9A-Za-z.+-]*)?$ ]]; }
+if [ "$version" != latest ]; then
+  version="${version#v}"
+  valid_version "$version" || die "VERSION_INVALID: expected a release version"
+fi
 
 owned_link() {
   # Only touch a link this installer created, never a package manager's or a hand-made one.
@@ -123,63 +135,120 @@ fetch() {
   fi
 }
 
+# Validate all destinations before any download or change to an active link.
+mkdir -p "$install_dir" "$bin_dir"
+[ ! -L "$install_dir/versions" ] || die "INSTALL_PATH_INVALID: versions must not be a symlink"
+for name in convorel agent-browser; do
+  link="$bin_dir/$name"
+  if [ -e "$link" ] || [ -L "$link" ]; then
+    owned_link "$link" || die "LINK_NOT_OWNED: refusing to replace $link"
+  fi
+done
+mkdir "$install_dir/.install-lock" 2>/dev/null || die "INSTALL_BUSY: another install is in progress"
+staging=""
+source_dir=""
+target=""
+link_staging=""
+committed=0
+switched=0
+old_convorel=""
+old_browser=""
+[ ! -L "$bin_dir/convorel" ] || old_convorel="$(readlink "$bin_dir/convorel")"
+[ ! -L "$bin_dir/agent-browser" ] || old_browser="$(readlink "$bin_dir/agent-browser")"
+cleanup() {
+  status=$?
+  trap - EXIT
+  if [ "$committed" = 0 ]; then
+    if [ "$switched" = 1 ]; then
+      for name in convorel agent-browser; do
+        old="$old_convorel"
+        [ "$name" != agent-browser ] || old="$old_browser"
+        if [ -n "$old" ]; then
+          ln -s -- "$old" "$link_staging/rollback-$name"
+          mv -Tf -- "$link_staging/rollback-$name" "$bin_dir/$name"
+        else
+          rm -f -- "$bin_dir/$name"
+        fi
+      done
+    fi
+    [ -z "$target" ] || rm -rf -- "$target"
+  fi
+  [ -z "$link_staging" ] || rm -rf -- "$link_staging"
+  [ -z "$staging" ] || rm -rf -- "$staging"
+  if [ -z "$dist_dir" ] && [ -n "$source_dir" ]; then rm -rf -- "$source_dir"; fi
+  rmdir "$install_dir/.install-lock"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 if [ -n "$dist_dir" ]; then
   source_dir="$dist_dir"
-  [ -f "$source_dir/sha256sums.txt" ] ||
-    die "CHECKSUMS_MISSING: $source_dir/sha256sums.txt"
+  [ -f "$source_dir/sha256sums.txt" ] || die "CHECKSUMS_MISSING: $source_dir/sha256sums.txt"
 else
   source_dir="$(mktemp -d)"
-  trap 'rm -rf "$source_dir"' EXIT
   case "$version" in
     latest) reference="latest/download" ;;
-    *) reference="download/$version" ;;
+    *) reference="download/v$version" ;;
   esac
-  say "downloading from github.com/$owner/$repository"
-  fetch "https://github.com/$owner/$repository/releases/$reference/sha256sums.txt" \
-    "$source_dir/sha256sums.txt"
+  fetch "$release_base/$reference/sha256sums.txt" "$source_dir/sha256sums.txt"
 fi
 
-# The checksum list names the artifact, so `latest` needs no release API lookup.
-line="$(grep -e "-$platform\.tar\.gz$" "$source_dir/sha256sums.txt" | head -n1 || true)"
-[ -n "$line" ] || die "ARTIFACT_MISSING: no $platform build is published"
-want="${line%% *}"
-archive="${line##* }"
-say "using $archive"
-[ -n "$dist_dir" ] ||
-  fetch "https://github.com/$owner/$repository/releases/$reference/$archive" \
-    "$source_dir/$archive"
+# Exactly one safe artifact name per platform, with a validated version and digest.
+mapfile -t lines < <(grep -e "-$platform\.tar\.gz$" "$source_dir/sha256sums.txt" || true)
+[ "${#lines[@]}" -gt 0 ] || die "ARTIFACT_MISSING: no $platform build is published"
+[ "${#lines[@]}" = 1 ] || die "MANIFEST_INVALID: multiple artifacts for $platform"
+line="${lines[0]}"
+[[ "$line" =~ ^([a-f0-9]{64})[[:space:]]+(convorel-([^/[:space:]]+)-$platform\.tar\.gz)$ ]] || die "MANIFEST_INVALID: invalid checksum entry"
+want="${BASH_REMATCH[1]}"
+archive="${BASH_REMATCH[2]}"
+release="${BASH_REMATCH[3]}"
+valid_version "$release" || die "MANIFEST_INVALID: invalid release version"
+[ "$version" = latest ] || [ "$release" = "$version" ] || die "VERSION_MISMATCH: manifest does not match requested version"
+[ -n "$dist_dir" ] || fetch "$release_base/$reference/$archive" "$source_dir/$archive"
 [ -f "$source_dir/$archive" ] || die "ARTIFACT_MISSING: $source_dir/$archive"
-[ "$(hash_of "$source_dir/$archive")" = "$want" ] ||
-  die "CHECKSUM_MISMATCH: refusing an artifact that does not match sha256sums.txt"
+[ "$(hash_of "$source_dir/$archive")" = "$want" ] || die "CHECKSUM_MISMATCH: refusing an artifact that does not match sha256sums.txt"
 
-release="${archive#convorel-}"
-release="${release%%-*}"
-staging="$install_dir/parts/$archive"
-rm -rf "$staging"
-mkdir -p "$install_dir/versions" "$bin_dir" "$staging"
-tar -xzf "$source_dir/$archive" -C "$staging"
+mkdir -p "$install_dir/versions"
+staging="$(mktemp -d "$install_dir/parts.XXXXXXXX")"
+# Reject traversal, links and special files before extracting even a checksum-valid archive.
+tar -tzf "$source_dir/$archive" > "$staging/members"
+while IFS= read -r member; do
+  case "$member" in
+    "${archive%.tar.gz}"|"${archive%.tar.gz}/"*) ;;
+    *) die "ARTIFACT_INVALID: unexpected archive path" ;;
+  esac
+  case "/$member/" in */../*|*/./*|*\\*) die "ARTIFACT_INVALID: unsafe archive path" ;; esac
+done < "$staging/members"
+tar -tvzf "$source_dir/$archive" > "$staging/types"
+awk 'substr($0,1,1) != "-" && substr($0,1,1) != "d" {exit 1}' "$staging/types" || die "ARTIFACT_INVALID: archive contains links or special files"
+tar -xzf "$source_dir/$archive" -C "$staging" --no-same-owner --no-same-permissions
 extracted="$staging/${archive%.tar.gz}"
-[ -x "$extracted/bin/convorel" ] && [ -x "$extracted/bin/agent-browser" ] ||
+[ -f "$extracted/bin/convorel" ] && [ -x "$extracted/bin/convorel" ] &&
+  [ -f "$extracted/bin/agent-browser" ] && [ -x "$extracted/bin/agent-browser" ] ||
   die "ARTIFACT_INVALID: the archive does not contain both executables"
-# readlink -f prints a path even for a missing target, so check existence first.
-previous=""
-if [ -e "$bin_dir/convorel" ]; then
-  previous="$(readlink -f "$bin_dir/convorel")"
-fi
-target="$install_dir/versions/$release-$platform"
-rm -rf "$target"
-mv "$extracted" "$target"
-rmdir "$staging" "$install_dir/parts" 2>/dev/null || true
-# Absolute targets, because --bin-dir and --prefix need not share a parent.
-ln -sfn "$target/bin/convorel" "$bin_dir/convorel"
-ln -sfn "$target/bin/agent-browser" "$bin_dir/agent-browser"
-if [ -n "$previous" ] && [ "$previous" != "$(readlink -f "$bin_dir/convorel")" ]; then
-  say "previous release retained at ${previous%/bin/*} for reference"
-fi
+installed="$(timeout 30 "$extracted/bin/convorel" --version)" || die "VERSION_MISMATCH: downloaded binary could not report its version"
+[ "$installed" = "$release" ] || die "VERSION_MISMATCH: downloaded binary reports $installed, expected $release"
 
-installed="$("$bin_dir/convorel" --version)"
-[ "$installed" = "$release" ] ||
-  die "VERSION_MISMATCH: installed binary reports $installed, expected $release"
+# Every attempt gets an immutable directory: reinstall/downgrade never removes history.
+target="$(mktemp -d "$install_dir/versions/$release-$platform.XXXXXXXX")"
+shopt -s dotglob nullglob
+mv -- "$extracted"/* "$target/"
+json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//\"/\\\"}"; printf '%s' "$value"; }
+printf '{"version":1,"binDir":"%s"}\n' "$(json_escape "$bin_dir")" > "$staging/layout.json"
+link_staging="$(mktemp -d "$bin_dir/.convorel-links.XXXXXXXX")"
+for name in convorel agent-browser; do
+  ln -s -- "$target/bin/$name" "$link_staging/$name"
+done
+switched=1
+for name in convorel agent-browser; do
+  mv -Tf -- "$link_staging/$name" "$bin_dir/$name"
+done
+installed="$(timeout 30 "$bin_dir/convorel" --version)" || die "UPGRADE_UNVERIFIED: installed binary failed"
+[ "$installed" = "$release" ] || die "UPGRADE_UNVERIFIED: installed binary version differs"
+mv -Tf -- "$staging/layout.json" "$install_dir/layout.json"
+committed=1
+[ -z "$old_convorel" ] || say "previous release retained at $old_convorel"
 say "installed convorel $installed -> $bin_dir/convorel"
 case ":$PATH:" in *":$bin_dir:"*) ;; *)
   say "add it to PATH with: export PATH=\"$bin_dir:\$PATH\""

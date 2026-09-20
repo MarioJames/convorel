@@ -15,6 +15,7 @@
   "files": [
     ".env.example",
     "setup.ts",
+    "install.sh",
     "bun.lock",
     "src",
     "docs",
@@ -31,6 +32,7 @@
     "test:browser": "bun tests/browser.integration.ts",
     "test:package": "bun tests/package.integration.ts",
     "test:install": "bun tests/install.integration.ts",
+    "test:upgrade": "bun tests/upgrade.integration.ts",
     "dist": "bun --no-env-file scripts/build.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

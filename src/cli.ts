@@ -20,6 +20,13 @@ import { conversationConfig } from "./config.ts";
 import { configCommand } from "./config-command.ts";
 import { preferenceDirectory } from "./user-config.ts";
 import { installSkill } from "./skills.ts";
+import {
+  forwardedEnvironment,
+  manageService,
+  serviceLogs,
+  serviceStatus,
+} from "./service.ts";
+import { upgrade, versionCheck } from "./upgrade.ts";
 import { waitForConversation, watcherLockName } from "./wait.ts";
 import {
   conversationStatus,
@@ -42,9 +49,13 @@ const help = `convorel ${packageInfo.version} (Linux, ${COMPILED ? "standalone" 
 setup --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claude-code]
 init --workspace PATH --cdp PORT_OR_HTTP
 skills install --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH]
+skills install --dir PATH
+start|stop|restart|status [--tunnel-id ID]
+logs [--tunnel-id ID] [--lines NUMBER] [--follow]
+upgrade [--version TAG]
 config list|get KEY|set KEY VALUE|unset KEY|path|import-env
 doctor
-version|--version
+version [--check]|--version
 conversation list
 conversation start --id ID --prompt-file FILE [--type DES --topic TOPIC] [--language en|zh] [--request-id KEY] [--workspace PATH]
 conversation followup --id ID --prompt-file FILE --request-id KEY [--workspace PATH]
@@ -83,6 +94,11 @@ export async function main(args = process.argv.slice(2)) {
   const conversationOptions = area === "conversation" ? opts(rest) : undefined;
   const print = jsonPrinter(conversationOptions?.fields);
   if (area === "version" || area === "--version") {
+    if (
+      rest.length ||
+      (sub !== undefined && !(area === "version" && sub === "--check"))
+    )
+      throw new Error("Expected version [--check] or --version");
     if (area === "--version") console.log(packageInfo.version);
     else
       print({
@@ -91,7 +107,63 @@ export async function main(args = process.argv.slice(2)) {
         runtime: COMPILED ? "standalone" : `bun ${Bun.version}`,
         architecture: process.arch,
         browserController: agentBrowserLocation(),
+        ...(sub === "--check" ? await versionCheck() : {}),
       });
+    return 0;
+  }
+  if (area === "upgrade") {
+    const o = opts(args.slice(1));
+    for (const key of Object.keys(o))
+      if (key !== "version") throw new Error(`Unknown upgrade option --${key}`);
+    if (o.version !== undefined && !o.version)
+      throw new Error("Missing --version");
+    print(await upgrade(o.version));
+    return 0;
+  }
+  if (["start", "stop", "restart", "status", "logs"].includes(area)) {
+    const values = args.slice(1);
+    const follow = area === "logs" && values.includes("--follow");
+    const o = opts(
+      follow ? values.filter((value) => value !== "--follow") : values,
+    );
+    for (const key of Object.keys(o))
+      if (key !== "tunnel-id" && !(area === "logs" && key === "lines"))
+        throw new Error(`Unknown ${area} option --${key}`);
+    const id = o["tunnel-id"] ?? settingValue("CONVOREL_TUNNEL_ID");
+    if (!id)
+      throw new Error(
+        "TUNNEL_ID_MISSING: pass --tunnel-id or configure tunnel.id",
+      );
+    if (area === "status") print(serviceStatus(id));
+    else if (area === "logs") {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      process.on("SIGINT", abort);
+      process.on("SIGTERM", abort);
+      try {
+        return await serviceLogs(
+          id,
+          Number(o.lines ?? 100),
+          follow,
+          controller.signal,
+        );
+      } finally {
+        process.off("SIGINT", abort);
+        process.off("SIGTERM", abort);
+      }
+    } else {
+      // Stopping remains possible even if the workspace or configuration has gone away.
+      const config =
+        area === "stop" ? undefined : new State().read<Config>("config");
+      print(
+        await manageService(
+          area as "start" | "stop" | "restart",
+          id,
+          config?.workspace,
+          forwardedEnvironment(),
+        ),
+      );
+    }
     return 0;
   }
   if (area === "mcp") {
