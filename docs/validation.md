@@ -2,11 +2,15 @@
 
 ## 2026-09-20：操作返回时释放会话 daemon
 
-`bun run check` 通过 TypeScript 和 189 个测试；本机安装目录的 `.env` 会把真实项目配置带入 fixture，单测在清空 `CONVOREL_MODEL`/`CONVOREL_PROJECT_URL`/`CONVOREL_PROJECT_NAME` 后运行。新增回归覆盖conversation 操作成功与失败两条路径都释放会话，以及 `wait` 在每次观察后释放。
+`bun run check` 通过 TypeScript 和 189 个测试。新增回归覆盖 conversation 操作成功与失败两条路径都释放会话，以及 `wait` 在每轮观察后释放。
 
 `bun run test:browser --chrome /usr/bin/google-chrome` 连续通过 5 次，并在真实 Chrome 上按 `/proc` 环境标记核验本 namespace 的 daemon：操作期间存在、`release()` 后为 0；释放后用户标签页数量不变，下一条命令重新绑定同一 target 并读回原页面。另以 25 轮 `close` 后立即重新读取的连接竞争压力验证，无失败；单次 `release()` 约 130ms。会话级 `close` 只停止该 session 的 daemon，不关闭标签页，也不结束通过 `--cdp` 附加的浏览器。
 
-未验证部分：没有在真实登录的 ChatGPT 浏览器上跑 `doctor`/`conversation`，当时有 review watcher 正在使用共享 namespace。安装侧另有一个由手工 `--namespace convorel-org-recovery` 启动、存活两天的 daemon，不由本项目代码创建，未被本次改动回收，保留待用户处置。
+真实已登录 Chrome（loopback 9222）上跑 `bun --no-env-file src/cli.ts doctor`：连接成功、UI 识别、模型读取为 `6 Pro`，结束后 `convorel-e7506102a182` namespace 没有残留 daemon，原有 3 个页面标签页全部保留。安装侧另有一个由手工 `--namespace convorel-org-recovery` 启动、存活两天的 daemon，不由本项目代码创建，也未被本次改动回收，保留待用户处置。
+
+## 2026-09-20：安装 .env 不再成为单测输入
+
+`src/env.ts` 在进程环境未设置时回落到安装目录的 `.env`，因此本机配置了真实 `CONVOREL_PROJECT_URL`/`CONVOREL_PROJECT_NAME` 时，`bun test` 会以 92 个 `PROJECT_COMPOSER_UNVERIFIED` 类失败结束（CI 无该文件，掩盖了差异）。新增 `bunfig.toml` + `tests/preload.ts`，按文档规定的「进程环境（含空值）优先于安装 .env」把 6 个 `CONVOREL_*` 偏好固定为空，需要偏好的测试仍在自身内部显式设置。对照验证：移除 `bunfig.toml` 为 97 pass / 92 fail，恢复后 `bun test` 为 189 pass / 0 fail；`bun run check` 与 `prettier --check .` 通过。子进程路线不受该 preload 影响，`init.test.ts`、`tunnel-env.test.ts` 继续显式传入子进程偏好。
 
 ## 2026-09-18：项目内创建与首条消息后命名
 
