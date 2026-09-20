@@ -14,9 +14,11 @@ import { serve } from "./mcp.ts";
 import { runTunnel, tunnelInstructions, recoverTunnelLock } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
 import { jsonPrinter } from "./output.ts";
-import { installationEnv } from "./env.ts";
+import { settingValue } from "./env.ts";
 import { selfExec } from "./runtime.ts";
 import { conversationConfig } from "./config.ts";
+import { configCommand } from "./config-command.ts";
+import { preferenceDirectory } from "./user-config.ts";
 import { installSkill } from "./skills.ts";
 import { waitForConversation, watcherLockName } from "./wait.ts";
 import {
@@ -39,6 +41,7 @@ const help = `convorel 0.1.0 (Bun, Linux)
 setup --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claude-code]
 init --workspace PATH --cdp PORT_OR_HTTP
 skills install --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH]
+config list|get KEY|set KEY VALUE|unset KEY|path|import-env
 doctor
 conversation list
 conversation start --id ID --prompt-file FILE [--type DES --topic TOPIC] [--language en|zh] [--request-id KEY] [--workspace PATH]
@@ -57,11 +60,12 @@ Lists select fields per item; missing fields are null. Exit codes are unchanged.
 mcp serve [--roots JSON_ARRAY]
 tunnel instructions|doctor|run|recover-lock [--tunnel-id ID]
 Model/project: CONVOREL_MODEL, CONVOREL_PROJECT_URL, CONVOREL_PROJECT_NAME
-Process environment (including empty) > installation .env. Unset model: Latest + maximum Pro.
-Tunnel ID: --tunnel-id > CONVOREL_TUNNEL_ID environment > installation .env
+Precedence: command line > process environment (including empty) > installation .env > preferences file
+Tunnel ID: --tunnel-id > CONVOREL_TUNNEL_ID environment > preferences file
+Unset model: Latest + maximum Pro. config path prints the preferences file.
 recover-lock --task ID | --watch-task ID | --registry true | --tabs true | --name NAME
 Reclaims only a lock whose recorded process identity is dead; never a live owner's.
-Use CONVOREL_HOME for a private state directory outside the shared workspace.
+Use CONVOREL_HOME for a private state directory outside the shared workspace, and CONVOREL_CONFIG_HOME for another preferences file.
 Invoke as: bun --no-env-file src/cli.ts ... or the installed executable.
 No command installs system tools or creates OpenAI resources.`;
 export async function main(args = process.argv.slice(2)) {
@@ -79,7 +83,7 @@ export async function main(args = process.argv.slice(2)) {
   if (area === "mcp") {
     if (sub !== "serve") throw new Error("UNKNOWN_MCP_COMMAND");
     const o = opts(rest);
-    const roots = o.roots ?? installationEnv("CONVOREL_MCP_ROOTS");
+    const roots = o.roots ?? settingValue("CONVOREL_MCP_ROOTS");
     if (!roots) throw new Error("MCP_ROOTS_REQUIRED");
     await serve(parseRoots(roots));
     return 0;
@@ -98,6 +102,10 @@ export async function main(args = process.argv.slice(2)) {
   if (area === "skills") {
     if (sub !== "install") throw new Error("UNKNOWN_SKILLS_COMMAND");
     print(await installSkill(opts(rest)));
+    return 0;
+  }
+  if (area === "config") {
+    print(configCommand(sub, rest));
     return 0;
   }
   const store = new State();
@@ -150,13 +158,14 @@ export async function main(args = process.argv.slice(2)) {
     return 0;
   }
   const config = store.read<Config>("config"),
-    configuredRoots = installationEnv("CONVOREL_MCP_ROOTS"),
+    configuredRoots = settingValue("CONVOREL_MCP_ROOTS"),
     access = new WorkspaceAccess(
       configuredRoots ? parseRoots(configuredRoots) : [config.workspace],
     ),
     browser = new Browser(config.cdp, store.root),
     conversation = new Conversation(store, browser);
   access.assertPrivate(store.root);
+  access.assertPrivate(preferenceDirectory());
   const roots = access.roots.map((ws) => ws.root);
   if (area === "doctor") {
     const report: any = {
@@ -206,7 +215,7 @@ export async function main(args = process.argv.slice(2)) {
       "--roots",
       JSON.stringify(roots),
     ]);
-    const client = new Client({ name: "convorel-doctor", version: "0.1.0" }),
+const client = new Client({ name: "convorel-doctor", version: "0.1.0" }),
       transport = new StdioClientTransport({
         command: selfCommand,
         args: selfArgs,
@@ -240,10 +249,10 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (area === "tunnel") {
     const o = opts(rest),
-      id = o["tunnel-id"] ?? installationEnv("CONVOREL_TUNNEL_ID");
+      id = o["tunnel-id"] ?? settingValue("CONVOREL_TUNNEL_ID");
     if (!id)
       throw new Error(
-        "TUNNEL_ID_MISSING: set --tunnel-id or CONVOREL_TUNNEL_ID in the environment or convorel .env",
+        "TUNNEL_ID_MISSING: pass --tunnel-id, or set CONVOREL_TUNNEL_ID with convorel config set tunnel.id",
       );
     if (sub === "instructions") {
       print(tunnelInstructions(id, config.workspace, roots));

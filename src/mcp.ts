@@ -7,6 +7,7 @@ import { WorkspaceAccess, fullPath } from "./workspace-access.ts";
 import { MAX_OUT } from "./workspace.ts";
 import { outputSchemas } from "./mcp-schemas.ts";
 import { gitHistoryInputs } from "./git-history-schemas.ts";
+import { preferenceDirectory } from "./user-config.ts";
 import packageInfo from "../package.json";
 export function createServer(roots: string[]) {
   const access = new WorkspaceAccess(roots),
@@ -15,6 +16,7 @@ export function createServer(roots: string[]) {
     process.env.CONVOREL_HOME || join(homedir(), ".local/share/convorel"),
   );
   access.assertPrivate(join(homedir(), ".local/share/convorel-tunnels"));
+  access.assertPrivate(preferenceDirectory());
   const add = (
     name: keyof typeof outputSchemas,
     description: string,

@@ -10,6 +10,7 @@ export function childEnv() {
     "XDG_RUNTIME_DIR",
     "DISPLAY",
     "WAYLAND_DISPLAY",
+    "CONVOREL_CONFIG_HOME",
   ])
     if (process.env[key]) env[key] = process.env[key]!;
   return env;

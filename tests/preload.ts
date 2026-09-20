@@ -12,3 +12,6 @@ for (const key of [
   "CONVOREL_PROJECT_NAME",
 ])
   process.env[key] = "";
+// Preferences resolve from the home directory, which homedir() does not re-read
+// after a test changes HOME, so the preferences file is redirected as well.
+process.env.CONVOREL_CONFIG_HOME = "/nonexistent/convorel-test-preferences";

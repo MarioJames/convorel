@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { installationEnv } from "../src/env.ts";
+import { settingValue } from "../src/env.ts";
 import { conversationConfig } from "../src/config.ts";
 
 test("model and project preferences respect explicit empty overrides of installation defaults", () => {
@@ -15,7 +15,7 @@ test("model and project preferences respect explicit empty overrides of installa
     );
     const base = { version: 1 as const, workspace: "/repo", cdp: "9222" };
     const fromFile = conversationConfig(base, (key) =>
-      installationEnv(key, file, {}),
+      settingValue(key, file, {}),
     );
     expect(fromFile).toMatchObject({
       model: "7 Pro",
@@ -27,7 +27,7 @@ test("model and project preferences respect explicit empty overrides of installa
       CONVOREL_PROJECT_NAME: "",
     };
     expect(
-      conversationConfig(base, (key) => installationEnv(key, file, empty)),
+      conversationConfig(base, (key) => settingValue(key, file, empty)),
     ).toMatchObject({
       model: undefined,
       projectUrl: undefined,
@@ -35,7 +35,7 @@ test("model and project preferences respect explicit empty overrides of installa
     });
     expect(() =>
       conversationConfig(base, (key) =>
-        installationEnv(key, file, { CONVOREL_PROJECT_URL: "" }),
+        settingValue(key, file, { CONVOREL_PROJECT_URL: "" }),
       ),
     ).toThrow("PROJECT_CONFIG_INCOMPLETE");
   } finally {
@@ -51,16 +51,16 @@ test("tunnel key uses explicit environment before dotenv, without importing unre
       file,
       'CONVOREL_TUNNEL_API_KEY="file-key#literal" # comment\nPATH=/untrusted\n',
     );
-    expect(installationEnv("CONVOREL_TUNNEL_API_KEY", file, {})).toBe(
+    expect(settingValue("CONVOREL_TUNNEL_API_KEY", file, {})).toBe(
       "file-key#literal",
     );
     expect(
-      installationEnv("CONVOREL_TUNNEL_API_KEY", file, {
+      settingValue("CONVOREL_TUNNEL_API_KEY", file, {
         CONVOREL_TUNNEL_API_KEY: "shell-key",
       }),
     ).toBe("shell-key");
     expect(
-      installationEnv("CONVOREL_TUNNEL_API_KEY", file, {
+      settingValue("CONVOREL_TUNNEL_API_KEY", file, {
         CONVOREL_TUNNEL_API_KEY: "",
       }),
     ).toBe("");
@@ -74,13 +74,9 @@ test("missing dotenv is optional; other file errors remain visible", () => {
   const root = mkdtempSync(join(tmpdir(), "convorel-env-"));
   try {
     const file = join(root, ".env");
-    expect(
-      installationEnv("CONVOREL_TUNNEL_API_KEY", file, {}),
-    ).toBeUndefined();
+    expect(settingValue("CONVOREL_TUNNEL_API_KEY", file, {})).toBeUndefined();
     mkdirSync(file);
-    expect(() =>
-      installationEnv("CONVOREL_TUNNEL_API_KEY", file, {}),
-    ).toThrow();
+    expect(() => settingValue("CONVOREL_TUNNEL_API_KEY", file, {})).toThrow();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

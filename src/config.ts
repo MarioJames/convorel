@@ -1,4 +1,5 @@
-import { installationEnv } from "./env.ts";
+import { settingValue } from "./env.ts";
+import type { SettingKey } from "./user-config.ts";
 import { projectId } from "./chatgpt/organize.ts";
 
 export interface Config {
@@ -13,7 +14,7 @@ export interface Config {
 // Only new bindings read mutable preferences. Existing tasks retain their snapshot.
 export function conversationConfig(
   base: Config,
-  read: typeof installationEnv = installationEnv,
+  read: typeof settingValue = settingValue,
 ): Config {
   const model = read("CONVOREL_MODEL")?.trim() || undefined;
   const projectUrl = read("CONVOREL_PROJECT_URL")?.trim() || undefined;
