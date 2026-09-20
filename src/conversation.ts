@@ -131,6 +131,10 @@ export class Conversation {
   private save(t: Task) {
     this.store.write("task-" + t.id, t);
   }
+  /** No browser session this operation started may outlive its response. */
+  private exclusive<T>(fn: () => Promise<T>) {
+    return this.store.locked(fn).finally(() => this.browser.release());
+  }
   private claim(t: Task) {
     for (const other of this.store.tasks() as Task[]) {
       if (other.id === t.id) continue;
@@ -395,7 +399,7 @@ export class Conversation {
       Buffer.byteLength(input) > 100000
     )
       throw new Error("INVALID_REQUEST");
-    return this.store.locked(async () => {
+    return this.exclusive(async () => {
       let t: Task;
       const inputHash = sha(input);
       if (this.store.has("task-" + id)) {
@@ -463,7 +467,7 @@ export class Conversation {
     });
   }
   async retry(id: string, run: string, workspace?: string) {
-    return this.store.locked(async () => {
+    return this.exclusive(async () => {
       const t = this.get(id);
       this.checkWorkspace(t, workspace);
       if (
@@ -483,7 +487,7 @@ export class Conversation {
     options: RejectedSendRecovery,
     workspace?: string,
   ) {
-    return this.store.locked(async () => {
+    return this.exclusive(async () => {
       const t = this.get(id),
         r = this.current(t, run);
       this.checkWorkspace(t, workspace);
@@ -623,7 +627,7 @@ export class Conversation {
     });
   }
   async rebindWorkspace(id: string, run: string, from: string, path: string) {
-    return this.store.locked(async () => {
+    return this.exclusive(async () => {
       const t = this.get(id),
         r = this.current(t, run);
       if (
@@ -647,7 +651,7 @@ export class Conversation {
     });
   }
   async clearDraft(id: string, run: string, expected: string) {
-    return this.store.locked(async () => {
+    return this.exclusive(async () => {
       const t = this.get(id),
         r = this.current(t, run);
       if (r.state !== "prepared" || r.userMessageId)
@@ -822,7 +826,7 @@ export class Conversation {
     }
   }
   async poll(id: string, run?: string) {
-    return this.store.locked(async () => {
+    return this.exclusive(async () => {
       const t = this.get(id);
       if (
         this.current(t, run).state === "complete" &&
@@ -912,7 +916,7 @@ export class Conversation {
       throw new Error("COMPLETED_TURN_CHANGED");
   }
   async finish(id: string, run?: string) {
-    return this.store.locked(async () => {
+    return this.exclusive(async () => {
       const t = this.get(id);
       this.current(t, run);
       this.result(id, run);
@@ -970,7 +974,7 @@ export class Conversation {
     });
   }
   async attach(id: string, url: string, userMessageId: string) {
-    return this.store.locked(async () => {
+    return this.exclusive(async () => {
       conversationId(url);
       if (this.store.has("task-" + id)) throw new Error("TASK_EXISTS");
       const config = conversationConfig(this.store.read<Config>("config")),
@@ -1138,7 +1142,7 @@ export class Conversation {
   ) {
     if (language !== "en" && language !== "zh")
       throw new Error("Title language must be en or zh");
-    return this.store.locked(async () => {
+    return this.exclusive(async () => {
       const t = this.get(id);
       const r = this.current(t, run);
       if (!t.url || !r.userMessageId) throw new Error("DELIVERY_NOT_CONFIRMED");

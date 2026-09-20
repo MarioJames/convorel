@@ -8,6 +8,7 @@ import {
   writeFileSync,
   rmSync,
   mkdirSync,
+  readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +29,25 @@ const previous = {
   config: process.env.AGENT_BROWSER_CONFIG,
   namespace: process.env.AGENT_BROWSER_NAMESPACE,
 };
+// agent-browser marks each daemon it detaches with the namespace it serves.
+function daemons() {
+  return readdirSync("/proc")
+    .filter((entry) => /^\d+$/.test(entry))
+    .filter((entry) => {
+      try {
+        return readFileSync(`/proc/${entry}/environ`, "utf8")
+          .split("\0")
+          .includes(`AGENT_BROWSER_NAMESPACE=${namespace}`);
+      } catch {
+        return false;
+      }
+    });
+}
+// A closed daemon still has to finish shutting its browser connection down.
+async function settled() {
+  for (let n = 0; n < 100 && daemons().length; n++) await Bun.sleep(100);
+  return daemons();
+}
 writeFileSync(join(root, "config.json"), "{}");
 process.env.AGENT_BROWSER_CONFIG = join(root, "config.json");
 process.env.AGENT_BROWSER_NAMESPACE = namespace;
@@ -398,6 +418,7 @@ try {
         read: async () => ({ ...(await page.read()), url: followupUrl }),
       };
     },
+    release: () => controller.release(),
   };
   const conversation = new Conversation(
     fixtureState,
@@ -429,6 +450,28 @@ try {
     (await list()).map((p) => p.id),
     initial.map((p) => p.id),
   );
+  assert.ok(
+    daemons().length > 0,
+    "the operations above must have started daemons",
+  );
+  await controller.release();
+  assert.deepEqual(
+    await settled(),
+    [],
+    "release must stop every daemon this process started",
+  );
+  assert.deepEqual(
+    (await list()).map((p) => p.id),
+    initial.map((p) => p.id),
+    "releasing a session must not touch the user's tabs",
+  );
+  assert.equal(
+    (await (await controller.page(initial[0].id)).read()).url,
+    "about:blank",
+    "a released session rebinds its tab on the next command",
+  );
+  await controller.release();
+  assert.deepEqual(await settled(), [], "release is repeatable");
   console.log(
     JSON.stringify({
       passed: true,
@@ -442,6 +485,7 @@ try {
         "read",
         "rebind",
         "close",
+        "daemon release",
         "pin protection",
         "missing target",
         "composer paragraph extraction",

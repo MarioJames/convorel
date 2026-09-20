@@ -1,5 +1,13 @@
 # Validation
 
+## 2026-09-20：操作返回时释放会话 daemon
+
+`bun run check` 通过 TypeScript 和 189 个测试；本机安装目录的 `.env` 会把真实项目配置带入 fixture，单测在清空 `CONVOREL_MODEL`/`CONVOREL_PROJECT_URL`/`CONVOREL_PROJECT_NAME` 后运行。新增回归覆盖conversation 操作成功与失败两条路径都释放会话，以及 `wait` 在每次观察后释放。
+
+`bun run test:browser --chrome /usr/bin/google-chrome` 连续通过 5 次，并在真实 Chrome 上按 `/proc` 环境标记核验本 namespace 的 daemon：操作期间存在、`release()` 后为 0；释放后用户标签页数量不变，下一条命令重新绑定同一 target 并读回原页面。另以 25 轮 `close` 后立即重新读取的连接竞争压力验证，无失败；单次 `release()` 约 130ms。会话级 `close` 只停止该 session 的 daemon，不关闭标签页，也不结束通过 `--cdp` 附加的浏览器。
+
+未验证部分：没有在真实登录的 ChatGPT 浏览器上跑 `doctor`/`conversation`，当时有 review watcher 正在使用共享 namespace。安装侧另有一个由手工 `--namespace convorel-org-recovery` 启动、存活两天的 daemon，不由本项目代码创建，未被本次改动回收，保留待用户处置。
+
 ## 2026-09-18：项目内创建与首条消息后命名
 
 `bun run check` 通过 TypeScript 和 187 个测试。回归覆盖项目专属输入框与 URL 校验、普通入口拒绝、首条消息发送后命名、URL 延迟、命名失败不重发、生成中通过独立观察页核验元数据，以及观察页被用户接管时保留页面。`test:browser` 在隔离的自带 Chromium 中通过，测试浏览器及 CDP 端口已释放；格式检查通过。

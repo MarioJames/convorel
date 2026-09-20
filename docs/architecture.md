@@ -84,6 +84,8 @@ Observation failures do not erase confirmed message identity or roll a submitted
 
 Select a target unpinned before enabling pinning, avoiding an implicit blank page. Never issue browser-wide close against the user's browser. Close only an owned, identity-matching, idle page after the current reply is saved and no draft exists. Tab release, reply completion and optional title/project organization are separate states. If the owned page is the last browser tab, record and create one inert keepalive before closing it; later operations preserve that tab.
 
+agent-browser serves every session from its own background daemon, so a conversation operation releases each session it used before it returns; the released session stops that daemon and leaves the user's browser and tabs untouched, and the next command re-binds the same target. An explicitly short idle timeout remains the backstop for a process killed before it released.
+
 ## Code access
 
 One stdio process binds a fixed allowed-root list. The server does not infer a trusted conversation ID from a prompt or task ID; all clients authorized to this connector can read its allowed workspace. Separate sensitive workspaces require separate connectors/tunnels or an independently authenticated server design.

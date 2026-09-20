@@ -31,8 +31,12 @@ class FakeBrowser {
   failSend = false;
   delayedUrl = false;
   sendReady = true;
+  releases = 0;
   async epoch() {
     return this.epochValue;
+  }
+  async release() {
+    this.releases++;
   }
   async tabs(...args: string[]) {
     if (args[0] === "list") return { tabs: this.targets };
@@ -1787,3 +1791,32 @@ test.each([false, true])(
     expect(browser.sends).toBe(1);
   },
 );
+test("an operation releases its browser sessions whether it returned or failed", async () => {
+  const { browser, conversation } = setup();
+  const t = await conversation.start("released", "Review");
+  expect(browser.releases).toBe(1);
+  browser.pages.delete(t.binding!.target);
+  browser.releases = 0;
+  await expect(conversation.resume(t.id, t.currentRun)).rejects.toThrow(
+    "tab_gone",
+  );
+  expect(browser.releases).toBe(1);
+});
+test("a watcher releases its browser sessions on every observation, not only at the end", async () => {
+  const { state, browser, conversation } = setup();
+  const t = await conversation.start("watched", "Review");
+  browser.complete();
+  browser.releases = 0;
+  expect(
+    await waitForConversation(
+      state,
+      conversation,
+      t.id,
+      t.currentRun,
+      5,
+      new AbortController().signal,
+      () => {},
+    ),
+  ).toBe(0);
+  expect(browser.releases).toBe(1);
+});

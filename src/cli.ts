@@ -186,6 +186,8 @@ export async function main(args = process.argv.slice(2)) {
       }
     } catch (e) {
       report.browser = { status: "failed", error: String(e) };
+    } finally {
+      await browser.release();
     }
     const client = new Client({ name: "convorel-doctor", version: "0.1.0" }),
       transport = new StdioClientTransport({
