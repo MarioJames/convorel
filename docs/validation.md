@@ -6,7 +6,13 @@
 
 `bun run test:browser --chrome /usr/bin/google-chrome` 连续通过 5 次，并在真实 Chrome 上按 `/proc` 环境标记核验本 namespace 的 daemon：操作期间存在、`release()` 后为 0；释放后用户标签页数量不变，下一条命令重新绑定同一 target 并读回原页面。另以 25 轮 `close` 后立即重新读取的连接竞争压力验证，无失败；单次 `release()` 约 130ms。会话级 `close` 只停止该 session 的 daemon，不关闭标签页，也不结束通过 `--cdp` 附加的浏览器。
 
-真实已登录 Chrome（loopback 9222）上跑 `bun --no-env-file src/cli.ts doctor`：连接成功、UI 识别、模型读取为 `6 Pro`，结束后 `convorel-e7506102a182` namespace 没有残留 daemon，原有 3 个页面标签页全部保留。安装侧另有一个由手工 `--namespace convorel-org-recovery` 启动、存活两天的 daemon，不由本项目代码创建，也未被本次改动回收，保留待用户处置。
+真实已登录 Chrome（loopback 9222）上跑 `bun --no-env-file src/cli.ts doctor`：连接成功、UI 识别、模型读取为 `6 Pro`，结束后 `convorel-e7506102a182` namespace 没有残留 daemon，页面标签页全部保留。
+
+## 2026-09-20：运行期残留回收
+
+安装侧另有一个由手工 `--namespace convorel-org-recovery` 启动、存活两天的 daemon，不由本项目代码创建：它启动时未带 `--idle-timeout`，而默认空闲退出对 `--cdp` 附加的用户浏览器豁免。经会话级 `close --all` 回收，返回 `closed: 1`，用户浏览器和标签页不受影响。
+
+sidecar 按同一判据回收：只处理 `convorel-*` 与本任务自建的 namespace，且要求 `.pid` 无存活进程、`.target` 记录的 CDP targetId 已不在任何可达 `/json/list` 中；取不到 CDP 端点时直接终止，不把"无法判断"当成"已失效"。共删除 41 个 namespace 目录和当前安装内 100 个失效 session 文件，保留仍绑定活标签页的 4 个会话。回收后复跑 `doctor` 通过且不再留下 daemon。其他工具自建的 namespace 未触碰。
 
 ## 2026-09-20：安装 .env 不再成为单测输入
 
