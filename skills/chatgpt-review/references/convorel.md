@@ -66,7 +66,7 @@ convorel_cli conversation resume --id ID --run RUN_ID
 convorel_cli conversation result --id ID --run RUN_ID
 ```
 
-`wait` 大约每 60 秒观察一次。超时仅停止本地等待，不停止远端生成；检查返回状态，仍运行时继续监视。同一 task 仅允许一个活跃等待者，CLI 用进程身份锁强制执行并固定原 run；重启前核对原进程是否已结束。SIGINT/SIGTERM 会唤醒本地休眠并释放锁。崩溃留下的锁仅在确认原进程身份已失效后，用 `convorel_cli recover-lock --watch-task ID` 恢复，不能因超时抢占锁。等待期间继续独立工作；没有独立工作时分段等待直到完成或明确受阻，并及时报告实际状态，不把后台进程已启动当作交付完成。
+`wait` 大约每 60 秒观察一次。超时仅停止本地等待，不停止远端生成；检查返回状态，仍运行时继续监视。不同 task 的浏览器操作各在自己的 tab 上并行，不再因单一全局锁互相串行——一个 agent 等待回复不会阻止另一个 agent 先建自己的任务、发自己的 prompt；定时检查结果时各自争抢自己那一份已记录的 tab，读完即释放。同一 task 仅允许一个活跃等待者，CLI 用进程身份锁强制执行并固定原 run；重启前核对原进程是否已结束。同一 tab 被同任务另一操作短时占用时，CLI 退避并有限等待，超时才返回 `LOCK_BUSY`，绝不清除活属主的锁。SIGINT/SIGTERM 会唤醒本地休眠并释放锁。崩溃留下的锁仅在确认原进程身份已失效后恢复，不能因超时抢占：用 `convorel_cli recover-lock --watch-task ID` 恢复等待锁，或按 `--task ID`/`--registry true`/`--tabs true`/`--name NAME` 恢复对应锁。`status`/`list` 的 `tab` 与 `locked` 字段显示每个任务自有 tab 及是否正被占用。等待期间继续独立工作；没有独立工作时分段等待直到完成或明确受阻，并及时报告实际状态，不把后台进程已启动当作交付完成。
 
 Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何种通知，都须用同一 `--id`、`--run` 取得当前完整 `result`，不能以通知、退出码或最后可见的网页答案代替。
 

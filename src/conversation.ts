@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { State } from "./state.ts";
+import {
+  State,
+  registryLockName,
+  tabsLockName,
+  taskLockName,
+} from "./state.ts";
 import {
   Browser,
   clearDraft,
@@ -115,6 +120,19 @@ const same = (a: string, b: string) => {
     return false;
   }
 };
+// Browser side effects for one task serialize on its own tab; different tasks
+// run concurrently. A contended lock is retried for a bounded window, then the
+// operation fails closed. It never steals a live owner's lock.
+// The per-task window is overridable so tests can observe a bounded wait.
+const positiveMs = (value: string | undefined, fallback: number) =>
+  Number.isSafeInteger(Number(value)) && Number(value) > 0
+    ? Number(value)
+    : fallback;
+const taskWaitMs = () => positiveMs(process.env.CONVOREL_TASK_WAIT_MS, 15_000);
+const REGISTRY_WAIT_MS = 10_000;
+const TABS_WAIT_MS = 15_000;
+/** Escape hatch for environments whose Chrome/CDP cannot drive parallel sessions. */
+const serialBrowser = () => process.env.CONVOREL_SERIAL === "1";
 export class Conversation {
   constructor(
     public store: State,
@@ -131,9 +149,25 @@ export class Conversation {
   private save(t: Task) {
     this.store.write("task-" + t.id, t);
   }
-  /** No browser session this operation started may outlive its response. */
-  private exclusive<T>(fn: () => Promise<T>) {
-    return this.store.locked(fn).finally(() => this.browser.release());
+  /** Serializes one task's browser side effects on its own tab, releasing every
+   * session it opened. Different tasks proceed concurrently; CONVOREL_SERIAL=1
+   * restores the single global browser lock for environments that cannot. */
+  private exclusive<T>(id: string, fn: () => Promise<T>) {
+    const name = serialBrowser() ? "operation" : taskLockName(id);
+    return this.store
+      .locked(fn, name, taskWaitMs())
+      .finally(() => this.browser.release());
+  }
+  /** Cross-task identity publish (conversation URL, tab binding, request key).
+   * Held only for the read-all-tasks conflict check plus the atomic write; it
+   * never wraps a browser side effect. Lock order is task -> registry. */
+  private publish<T>(fn: () => Promise<T>) {
+    return this.store.locked(fn, registryLockName(), REGISTRY_WAIT_MS);
+  }
+  /** The one critical section that spans a browser close: last-tab keepalive
+   * protection, so concurrent releases cannot strand zero tabs. */
+  private tabRelease<T>(fn: () => Promise<T>) {
+    return this.store.locked(fn, tabsLockName(), TABS_WAIT_MS);
   }
   private claim(t: Task) {
     for (const other of this.store.tasks() as Task[]) {
@@ -150,6 +184,13 @@ export class Conversation {
       )
         throw new Error("TARGET_CONFLICT");
     }
+  }
+  /** A non-"initial" request key may be bound to only one run across all tasks. */
+  private assertRequestFree(id: string, requestId: string) {
+    if (requestId === "initial") return;
+    for (const other of this.store.tasks() as Task[])
+      if (other.id !== id && other.runs.some((r) => r.requestId === requestId))
+        throw new Error("REQUEST_ALREADY_BOUND_TO_ANOTHER_TASK");
   }
   private current(t: Task, run?: string) {
     if (run && run !== t.currentRun) throw new Error("STALE_RUN");
@@ -224,8 +265,10 @@ export class Conversation {
     if (existing.length > 1) throw new Error("AMBIGUOUS_CONVERSATION_TABS");
     if (existing.length) {
       t.binding = { target: existing[0].targetId, epoch, owned: false };
-      this.claim(t);
-      this.save(t);
+      await this.publish(async () => {
+        this.claim(t);
+        this.save(t);
+      });
       return { target: t.binding.target, created: false };
     }
     if (t.opening)
@@ -241,8 +284,10 @@ export class Conversation {
     if (!created.targetId) throw new Error("OPEN_UNKNOWN");
     t.binding = { target: created.targetId, epoch, owned: true };
     t.opening = false;
-    this.claim(t);
-    this.save(t);
+    await this.publish(async () => {
+      this.claim(t);
+      this.save(t);
+    });
     return { target: created.targetId, created: true };
   }
   private async page(t: Task, completedFollowup = false) {
@@ -347,8 +392,20 @@ export class Conversation {
         this.save(t);
         return t;
       }
-      t.url = p.url;
-      this.claim(t);
+      // Publish the conversation URL atomically with its cross-task conflict
+      // check. On CONVERSATION_CONFLICT the in-memory URL is rolled back so a
+      // later failure record cannot persist a URL another task already owns.
+      await this.publish(async () => {
+        const previousUrl = t.url;
+        t.url = p.url;
+        try {
+          this.claim(t);
+          this.save(t);
+        } catch (e) {
+          t.url = previousUrl;
+          throw e;
+        }
+      });
     }
     const outcome = classify(p, t.url!, r.userMessageId);
     r.state = outcome.state;
@@ -399,7 +456,7 @@ export class Conversation {
       Buffer.byteLength(input) > 100000
     )
       throw new Error("INVALID_REQUEST");
-    return this.exclusive(async () => {
+    return this.exclusive(id, async () => {
       let t: Task;
       const inputHash = sha(input);
       if (this.store.has("task-" + id)) {
@@ -432,14 +489,7 @@ export class Conversation {
           runs: [],
         };
       }
-      for (const other of this.store.tasks() as Task[]) {
-        if (
-          other.id !== id &&
-          other.runs.some((r) => r.requestId === requestId) &&
-          requestId !== "initial"
-        )
-          throw new Error("REQUEST_ALREADY_BOUND_TO_ANOTHER_TASK");
-      }
+      this.assertRequestFree(id, requestId);
       // Check the previous completed turn before assigning a successor.
       if (t.currentRun) {
         this.begin(t);
@@ -462,12 +512,16 @@ export class Conversation {
         state: "prepared",
         createdAt: new Date().toISOString(),
       });
-      this.save(t);
+      // Publish the new run's request key atomically against other tasks.
+      await this.publish(async () => {
+        this.assertRequestFree(id, requestId);
+        this.save(t);
+      });
       return this.submitPrepared(t);
     });
   }
   async retry(id: string, run: string, workspace?: string) {
-    return this.exclusive(async () => {
+    return this.exclusive(id, async () => {
       const t = this.get(id);
       this.checkWorkspace(t, workspace);
       if (
@@ -487,7 +541,7 @@ export class Conversation {
     options: RejectedSendRecovery,
     workspace?: string,
   ) {
-    return this.exclusive(async () => {
+    return this.exclusive(id, async () => {
       const t = this.get(id),
         r = this.current(t, run);
       this.checkWorkspace(t, workspace);
@@ -627,7 +681,7 @@ export class Conversation {
     });
   }
   async rebindWorkspace(id: string, run: string, from: string, path: string) {
-    return this.exclusive(async () => {
+    return this.exclusive(id, async () => {
       const t = this.get(id),
         r = this.current(t, run);
       if (
@@ -651,7 +705,7 @@ export class Conversation {
     });
   }
   async clearDraft(id: string, run: string, expected: string) {
-    return this.exclusive(async () => {
+    return this.exclusive(id, async () => {
       const t = this.get(id),
         r = this.current(t, run);
       if (r.state !== "prepared" || r.userMessageId)
@@ -826,7 +880,7 @@ export class Conversation {
     }
   }
   async poll(id: string, run?: string) {
-    return this.exclusive(async () => {
+    return this.exclusive(id, async () => {
       const t = this.get(id);
       if (
         this.current(t, run).state === "complete" &&
@@ -862,9 +916,17 @@ export class Conversation {
           )
             throw new Error("PENDING_URL_UNVERIFIED");
           conversationId(p.url);
-          t.url = p.url;
-          this.claim(t);
-          this.save(t);
+          await this.publish(async () => {
+            const previousUrl = t.url;
+            t.url = p.url;
+            try {
+              this.claim(t);
+              this.save(t);
+            } catch (e) {
+              t.url = previousUrl;
+              throw e;
+            }
+          });
           return await this.reconcile(t, b);
         }
         return await this.reconcile(t, await this.page(t));
@@ -916,7 +978,7 @@ export class Conversation {
       throw new Error("COMPLETED_TURN_CHANGED");
   }
   async finish(id: string, run?: string) {
-    return this.exclusive(async () => {
+    return this.exclusive(id, async () => {
       const t = this.get(id);
       this.current(t, run);
       this.result(id, run);
@@ -931,50 +993,55 @@ export class Conversation {
       }
       if (t.binding.epoch !== (await this.browser.epoch()))
         throw new Error("BROWSER_RESTARTED: ownership expired");
-      this.guard(t);
-      let { tabs } = await this.browser.tabs("list");
-      this.guard(t);
-      if (!tabs.some((x: any) => x.targetId === t.binding!.target)) {
-        t.binding.closed = true;
-        t.cleanup = { closed: true, alreadyGone: true };
+      // The last-tab keepalive decision and the close must be one cross-process
+      // critical section, or two releases can strand zero tabs or double-create.
+      const binding = t.binding;
+      return this.tabRelease(async () => {
+        this.guard(t);
+        let { tabs } = await this.browser.tabs("list");
+        this.guard(t);
+        if (!tabs.some((x: any) => x.targetId === binding.target)) {
+          binding.closed = true;
+          t.cleanup = { closed: true, alreadyGone: true };
+          this.save(t);
+          return t.cleanup;
+        }
+        const b = await this.browser.page(binding.target);
+        this.safeCompleted(t, await this.observe(t, b));
+        if (tabs.length === 1) {
+          this.store.write("keepalive", {
+            version: 1,
+            opening: true,
+            epoch: binding.epoch,
+          });
+          const k = await this.browser.tabs("new", "about:blank");
+          this.guard(t);
+          this.store.write("keepalive", {
+            version: 1,
+            target: k.targetId,
+            epoch: binding.epoch,
+          });
+        }
+        this.safeCompleted(t, await this.observe(t, b));
+        this.guard(t);
+        await this.browser.tabs("close", binding.target);
+        this.guard(t);
+        tabs = (await this.browser.tabs("list")).tabs;
+        if (tabs.some((x: any) => x.targetId === binding.target))
+          throw new Error("CLOSE_UNVERIFIED");
+        binding.closed = true;
+        t.cleanup = {
+          closed: true,
+          target: binding.target,
+          organizationPending: !!t.organization?.error,
+        };
         this.save(t);
         return t.cleanup;
-      }
-      const b = await this.browser.page(t.binding.target);
-      this.safeCompleted(t, await this.observe(t, b));
-      if (tabs.length === 1) {
-        this.store.write("keepalive", {
-          version: 1,
-          opening: true,
-          epoch: t.binding.epoch,
-        });
-        const k = await this.browser.tabs("new", "about:blank");
-        this.guard(t);
-        this.store.write("keepalive", {
-          version: 1,
-          target: k.targetId,
-          epoch: t.binding.epoch,
-        });
-      }
-      this.safeCompleted(t, await this.observe(t, b));
-      this.guard(t);
-      await this.browser.tabs("close", t.binding.target);
-      this.guard(t);
-      tabs = (await this.browser.tabs("list")).tabs;
-      if (tabs.some((x: any) => x.targetId === t.binding!.target))
-        throw new Error("CLOSE_UNVERIFIED");
-      t.binding.closed = true;
-      t.cleanup = {
-        closed: true,
-        target: t.binding.target,
-        organizationPending: !!t.organization?.error,
-      };
-      this.save(t);
-      return t.cleanup;
+      });
     });
   }
   async attach(id: string, url: string, userMessageId: string) {
-    return this.exclusive(async () => {
+    return this.exclusive(id, async () => {
       conversationId(url);
       if (this.store.has("task-" + id)) throw new Error("TASK_EXISTS");
       const config = conversationConfig(this.store.read<Config>("config")),
@@ -1001,8 +1068,10 @@ export class Conversation {
           },
         ],
       };
-      this.claim(t);
-      this.save(t);
+      await this.publish(async () => {
+        this.claim(t);
+        this.save(t);
+      });
       return this.reconcile(t, await this.page(t));
     });
   }
@@ -1107,27 +1176,29 @@ export class Conversation {
       t.organization = { ...t.organization, verified: false, error: String(e) };
     } finally {
       const owned = t.organizationObservation;
-      if (owned?.target && !owned.closed) {
-        try {
-          if (owned.epoch !== (await this.browser.epoch()))
-            throw new Error("BROWSER_RESTARTED");
-          this.guard(t);
-          const page = await this.browser.page(owned.target);
-          const p = await page.read();
-          if (!same(p.url, t.url!) || p.draft?.trim() || p.attachments)
-            throw new Error("METADATA_PAGE_CHANGED");
-          await this.browser.tabs("close", owned.target);
-          if (
-            (await this.browser.tabs("list")).tabs.some(
-              (x: any) => x.targetId === owned.target,
+      const observerTarget = owned?.target;
+      if (observerTarget && !owned?.closed)
+        await this.tabRelease(async () => {
+          try {
+            if (owned.epoch !== (await this.browser.epoch()))
+              throw new Error("BROWSER_RESTARTED");
+            this.guard(t);
+            const page = await this.browser.page(observerTarget);
+            const p = await page.read();
+            if (!same(p.url, t.url!) || p.draft?.trim() || p.attachments)
+              throw new Error("METADATA_PAGE_CHANGED");
+            await this.browser.tabs("close", observerTarget);
+            if (
+              (await this.browser.tabs("list")).tabs.some(
+                (x: any) => x.targetId === observerTarget,
+              )
             )
-          )
-            throw new Error("CLOSE_UNVERIFIED");
-          owned.closed = true;
-        } catch (e) {
-          owned.error = String(e);
-        }
-      }
+              throw new Error("CLOSE_UNVERIFIED");
+            owned.closed = true;
+          } catch (e) {
+            owned.error = String(e);
+          }
+        });
     }
     this.guard(t);
     this.save(t);
@@ -1142,7 +1213,7 @@ export class Conversation {
   ) {
     if (language !== "en" && language !== "zh")
       throw new Error("Title language must be en or zh");
-    return this.exclusive(async () => {
+    return this.exclusive(id, async () => {
       const t = this.get(id);
       const r = this.current(t, run);
       if (!t.url || !r.userMessageId) throw new Error("DELIVERY_NOT_CONFIRMED");

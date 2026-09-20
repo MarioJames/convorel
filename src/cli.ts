@@ -1,6 +1,11 @@
 #!/usr/bin/env -S bun --no-env-file
 import { readFileSync, realpathSync } from "node:fs";
-import { State } from "./state.ts";
+import {
+  State,
+  registryLockName,
+  tabsLockName,
+  taskLockName,
+} from "./state.ts";
 import { Browser, cdpEndpoint } from "./browser.ts";
 import { Conversation, type Config } from "./conversation.ts";
 import { Workspace } from "./workspace.ts";
@@ -54,7 +59,8 @@ tunnel instructions|doctor|run|recover-lock [--tunnel-id ID]
 Model/project: CONVOREL_MODEL, CONVOREL_PROJECT_URL, CONVOREL_PROJECT_NAME
 Process environment (including empty) > installation .env. Unset model: Latest + maximum Pro.
 Tunnel ID: --tunnel-id > CONVOREL_TUNNEL_ID environment > installation .env
-recover-lock [--watch-task ID]
+recover-lock --task ID | --watch-task ID | --registry true | --tabs true | --name NAME
+Reclaims only a lock whose recorded process identity is dead; never a live owner's.
 Use CONVOREL_HOME for a private state directory outside the shared workspace.
 Invoke as: bun --no-env-file src/cli.ts ... or the installed executable.
 No command installs system tools or creates OpenAI resources.`;
@@ -97,11 +103,20 @@ export async function main(args = process.argv.slice(2)) {
   const store = new State();
   if (area === "recover-lock") {
     const o = opts(args.slice(1));
-    print(
-      store.recoverLock(
-        o["watch-task"] ? watcherLockName(o["watch-task"]) : "operation",
-      ),
-    );
+    const name = o["watch-task"]
+      ? watcherLockName(o["watch-task"])
+      : o.task
+        ? taskLockName(o.task)
+        : o.registry
+          ? registryLockName()
+          : o.tabs
+            ? tabsLockName()
+            : o.name;
+    if (!name)
+      throw new Error(
+        "LOCK_NAME_REQUIRED: pass --task ID | --watch-task ID | --registry true | --tabs true | --name NAME",
+      );
+    print(store.recoverLock(name));
     return 0;
   }
   if (area === "init") {
@@ -126,7 +141,7 @@ export async function main(args = process.argv.slice(2)) {
           );
       }
       store.write("config", config);
-    });
+    }, "config");
     print({
       ...effective,
       modelPolicy: effective.model || "latest-pro",
@@ -250,6 +265,7 @@ export async function main(args = process.argv.slice(2)) {
         url: t.url,
         currentRun: t.currentRun,
         state: t.runs.at(-1)?.state,
+        locked: store.isLockedActive(taskLockName(t.id)),
         summary: conversationStatus(t),
       })),
     );
@@ -356,7 +372,12 @@ export async function main(args = process.argv.slice(2)) {
                 : "inspect_saved_prompt_and_binding",
           }
         : null;
-    print({ ...t, summary: conversationStatus(t), workspaceMismatch });
+    print({
+      ...t,
+      summary: conversationStatus(t),
+      workspaceMismatch,
+      locked: store.isLockedActive(taskLockName(id)),
+    });
     return workspaceMismatch ? 2 : 0;
   }
   if (sub === "resume") {

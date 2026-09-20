@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { State } from "../src/state.ts";
+import { State, processIdentity, taskLockName } from "../src/state.ts";
 let root: string;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "convorel-state-"));
@@ -37,7 +37,7 @@ test("corrupt state is not overwritten and path-like IDs are rejected", async ()
 test("lock recovery rejects live owners and requires the exact stale identity", async () => {
   const s = new State(root);
   await s.locked(async () => {
-    expect(() => s.recoverLock()).toThrow("LOCK_OWNER_ALIVE");
+    expect(() => s.recoverLock("operation")).toThrow("LOCK_OWNER_ALIVE");
   });
   s.write("lock-operation", {
     version: 1,
@@ -45,6 +45,59 @@ test("lock recovery rejects live owners and requires the exact stale identity", 
     identity: "different-boot-or-start",
     token: "stale",
   });
-  expect(s.recoverLock().recovered).toBe(true);
+  expect(s.recoverLock("operation").recovered).toBe(true);
   await s.locked(async () => {});
+});
+test("a contended lock is retried until the holder releases, within its bounded window", async () => {
+  const a = new State(root),
+    b = new State(root);
+  let holdRelease!: () => void;
+  const hold = new Promise<void>((r) => (holdRelease = r));
+  const held = a.locked(() => hold, "operation");
+  const order: string[] = [];
+  const waited = b
+    .locked(
+      async () => {
+        order.push("acquired");
+      },
+      "operation",
+      2000,
+    )
+    .then(() => order.push("done"));
+  await Bun.sleep(50);
+  expect(order).toEqual([]); // still contended by the live holder
+  holdRelease();
+  await held;
+  await waited;
+  expect(order).toEqual(["acquired", "done"]);
+});
+test("a contended lock fails closed after its bounded window without stealing the live owner", async () => {
+  const a = new State(root),
+    b = new State(root);
+  const held = a.locked(() => Bun.sleep(500).then(() => "x"), "operation");
+  await expect(b.locked(async () => "y", "operation", 80)).rejects.toThrow(
+    "LOCK_BUSY",
+  );
+  expect(a.isLockedActive("operation")).toBe(true); // live owner retained
+  await held;
+  expect(a.isLockedActive("operation")).toBe(false);
+});
+test("isLockedActive reports absent, live, and stale lock ownership", () => {
+  const s = new State(root);
+  const key = taskLockName("alpha");
+  expect(s.isLockedActive(key)).toBe(false);
+  s.write("lock-" + key, {
+    version: 1,
+    pid: process.pid,
+    identity: processIdentity(process.pid),
+    token: "live",
+  });
+  expect(s.isLockedActive(key)).toBe(true);
+  s.write("lock-" + key, {
+    version: 1,
+    pid: process.pid,
+    identity: "dead-boot-or-start",
+    token: "stale",
+  });
+  expect(s.isLockedActive(key)).toBe(false);
 });

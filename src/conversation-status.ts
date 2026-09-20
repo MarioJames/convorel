@@ -41,6 +41,16 @@ export function conversationStatus(task: Task) {
     delivery,
     phase,
     nextAction,
+    // Each task records the browser tab it owns; exposed so callers can see
+    // which tab is theirs and whether it is currently free to contend for.
+    tab: task.binding
+      ? {
+          target: task.binding.target,
+          epoch: task.binding.epoch,
+          owned: task.binding.owned,
+          closed: !!task.binding.closed,
+        }
+      : null,
     lastObservedAt: run.lastObservedAt ?? null,
     observationError: run.observationError ?? null,
     error: run.error ?? null,

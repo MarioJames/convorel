@@ -32,6 +32,9 @@ class FakeBrowser {
   delayedUrl = false;
   sendReady = true;
   releases = 0;
+  uniqueUrls = false;
+  // Concurrency tests inject a barrier here; default behavior is unchanged.
+  gate: ((where: string) => Promise<void>) | undefined = undefined;
   async epoch() {
     return this.epochValue;
   }
@@ -66,8 +69,12 @@ class FakeBrowser {
       p = this.pages.get(target);
     return {
       session: "fake",
-      read: async () => structuredClone(p),
+      read: async () => {
+        if (self.gate) await self.gate("read:" + target);
+        return structuredClone(p);
+      },
       run: async (...args: string[]) => {
+        if (self.gate) await self.gate("run:" + args[0] + ":" + target);
         if (args[0] === "fill") p.draft = args[2];
         if (args[0] === "eval" && args[1].includes("execCommand")) {
           self.clears++;
@@ -78,8 +85,13 @@ class FakeBrowser {
           self.sends++;
           const text = p.draft;
           p.draft = "";
+          // A real conversation gets a distinct URL per tab only when a test
+          // needs several live conversations at once; otherwise all tabs share
+          // one URL so target-selection behavior stays exercised.
           if (!self.delayedUrl)
-            p.url = "https://chatgpt.com/c/test-conversation";
+            p.url =
+              "https://chatgpt.com/c/" +
+              (self.uniqueUrls ? target : "test-conversation");
           self.targets.find((t) => t.targetId === target).url = p.url;
           p.messages.push({
             id: "u" + self.sends,
@@ -1819,4 +1831,99 @@ test("a watcher releases its browser sessions on every observation, not only at 
     ),
   ).toBe(0);
   expect(browser.releases).toBe(1);
+});
+
+function makeGate() {
+  const blockKeys = new Set<string>();
+  const reached = new Set<string>();
+  const latches = new Map<string, { p: Promise<void>; resolve: () => void }>();
+  return {
+    gate: async (where: string) => {
+      if (!blockKeys.has(where)) return;
+      reached.add(where);
+      let l = latches.get(where);
+      if (!l) {
+        let resolve!: () => void;
+        const p = new Promise<void>((r) => (resolve = r));
+        l = { p, resolve };
+        latches.set(where, l);
+      }
+      await l.p;
+    },
+    block: (key: string) => void blockKeys.add(key),
+    release: (key: string) => latches.get(key)?.resolve(),
+    reached: (key: string) => reached.has(key),
+    releaseAll: () => {
+      for (const l of latches.values()) l.resolve();
+    },
+  };
+}
+async function waitUntil(cond: () => boolean, ms = 3000) {
+  for (let i = 0; i < ms / 5; i++) {
+    if (cond()) return;
+    await Bun.sleep(5);
+  }
+  throw new Error("waitUntil timed out");
+}
+
+test("one task holding its own tab does not block another task's send", async () => {
+  const { browser, conversation } = setup();
+  const g = makeGate();
+  browser.gate = g.gate;
+  browser.uniqueUrls = true; // two live conversations coexist
+  g.block("run:fill:target1");
+  try {
+    const a = conversation.start("task-a", "Review A");
+    await waitUntil(() => g.reached("run:fill:target1")); // A holds lock-task-a only
+    const tb = await conversation.start("task-b", "Review B"); // must not LOCK_BUSY
+    expect(tb.binding!.target).toBe("target2");
+    g.release("run:fill:target1");
+    const ta = await a;
+    expect(ta.binding!.target).toBe("target1");
+    expect(ta.url).not.toBe(tb.url);
+  } finally {
+    g.releaseAll();
+  }
+});
+
+test("a second operation on the same task waits a bounded window then fails closed without sending", async () => {
+  const { browser, conversation } = setup();
+  const g = makeGate();
+  browser.gate = g.gate;
+  process.env.CONVOREL_TASK_WAIT_MS = "120";
+  g.block("run:fill:target1");
+  try {
+    const a = conversation.start("same-task", "Review");
+    await waitUntil(() => g.reached("run:fill:target1"));
+    const sendsBefore = browser.sends;
+    await expect(conversation.poll("same-task")).rejects.toThrow("LOCK_BUSY");
+    expect(browser.sends).toBe(sendsBefore); // contention never crosses the send boundary
+    g.release("run:fill:target1");
+    expect((await a).id).toBe("same-task");
+  } finally {
+    delete process.env.CONVOREL_TASK_WAIT_MS;
+    g.releaseAll();
+  }
+});
+
+test("CONVOREL_SERIAL=1 restores a single global browser lock across different tasks", async () => {
+  const { browser, conversation } = setup();
+  const g = makeGate();
+  browser.gate = g.gate;
+  process.env.CONVOREL_SERIAL = "1";
+  process.env.CONVOREL_TASK_WAIT_MS = "120";
+  g.block("run:fill:target1");
+  try {
+    const a = conversation.start("serial-a", "Review A");
+    await waitUntil(() => g.reached("run:fill:target1"));
+    await expect(conversation.start("serial-b", "Review B")).rejects.toThrow(
+      "LOCK_BUSY",
+    ); // different task, still serialized by the global lock
+    g.release("run:fill:target1");
+    expect((await a).id).toBe("serial-a");
+  } finally {
+    delete process.env.CONVOREL_SERIAL;
+    delete process.env.CONVOREL_TASK_WAIT_MS;
+    g.releaseAll();
+  }
 });

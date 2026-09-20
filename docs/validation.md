@@ -1,5 +1,11 @@
 # Validation
 
+## 2026-09-20：并发调度改造——per-tab 锁与 tab 竞态管理
+
+修复并发调度缺陷：此前 `Conversation.exclusive()` 对每个浏览器操作都抢同一把全局 `operation` 锁，且 `locked()` 抢不到即抛 `LOCK_BUSY`（不等待、不退避），导致一个 agent 在发送或 `wait` 轮询时，另一个 agent 的 `start` 被直接挡回、其编排层只能停下来等对方，而不是先在自己那一份 tab 上建任务、发 prompt。改造为按 task（等价按 tab，因 binding 为 1 任务↔1 target）串行：`task-<id>` 锁下不同任务并行；`registry` 锁只做「跨任务冲突检查+原子写入」这一纯文件临界区，保护会话 URL、tab binding、request key 的全局唯一性；`tabs` 锁覆盖末位 tab 的 keepalive+close check-then-act，防并发关到零 tab。`locked()` 增加有界等待（超时才 `LOCK_BUSY`，绝不清除活属主锁），保持 exactly-once 与不自动重发。`CONVOREL_SERIAL=1` 逃生开关退回单一全局 `operation` 锁，供无法稳定并行的 Chrome/CDP 环境。`status`/`list` 投影每个任务自有 `tab`（target/epoch/owned/closed）与 advisory `locked`；`recover-lock` 支持 `--task`/`--watch-task`/`--registry`/`--tabs`/`--name`。
+
+验证：`bun test` 为 199 pass / 0 fail，含新增并发回归——一个 task 持有自身 tab 不阻塞另一 task 发送（旧代码会 `LOCK_BUSY`）、同任务第二操作有界等待后 `LOCK_BUSY` 且不越过发送边界、`CONVOREL_SERIAL=1` 令不同任务重新串行；以及 `state.ts` 层的有界等待获取、超时失败关闭且不抢占活锁、`isLockedActive` 对 absent/live/stale 的判定。既有 189 项（单-watcher 互斥、跨 tab 选择/歧义、发送与恢复语义、每操作释放 session）全部保留。本次仅覆盖离线 `FakeBrowser` 并发；真实登录 Chrome 上的多 tab 并行验收待执行。`git` 树内并存的偏好/配置改造（`env.ts`/`user-config.ts`/`config-command.ts` 及其测试）非本任务范围；本任务改动的文件自身类型检查通过。
+
 ## 2026-09-20：操作返回时释放会话 daemon
 
 `bun run check` 通过 TypeScript 和 189 个测试。新增回归覆盖 conversation 操作成功与失败两条路径都释放会话，以及 `wait` 在每轮观察后释放。

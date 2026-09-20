@@ -22,6 +22,18 @@ export function processIdentity(pid: number) {
     stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]
   );
 }
+/** Lock namespaces. Per-task serialization equals per-tab, because a tab
+ * binding is one task to one target (see Conversation.claim). */
+export function taskLockName(id: string) {
+  if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(id)) throw new Error("INVALID_TASK_ID");
+  return "task-" + id;
+}
+export function registryLockName() {
+  return "registry";
+}
+export function tabsLockName() {
+  return "tabs";
+}
 export class State {
   readonly root: string;
   constructor(
@@ -73,16 +85,31 @@ export class State {
       .filter((f) => f.startsWith("task-") && f.endsWith(".json"))
       .map((f) => this.read<any>(f.slice(0, -5)));
   }
-  async locked<T>(fn: () => Promise<T>, name = "operation"): Promise<T> {
+  /**
+   * Acquire the named lock, run fn, then release. When waitForMs is set, a
+   * contended lock is retried with jitter until the deadline; it is never
+   * stolen from a live owner. Only after the deadline does it fail closed.
+   */
+  async locked<T>(
+    fn: () => Promise<T>,
+    name = "operation",
+    waitForMs = 0,
+  ): Promise<T> {
     const path = this.path("lock-" + name),
-      token = randomUUID();
+      token = randomUUID(),
+      deadline = Date.now() + Math.max(0, waitForMs);
     let fd: number;
-    try {
-      fd = openSync(path, "wx", 0o600);
-    } catch {
-      throw new Error(
-        `LOCK_BUSY: ${name}; inspect lock, then recover-lock if its exact owner is dead`,
-      );
+    for (;;) {
+      try {
+        fd = openSync(path, "wx", 0o600);
+        break;
+      } catch {
+        if (Date.now() >= deadline)
+          throw new Error(
+            `LOCK_BUSY: ${name}; inspect lock, then recover-lock if its exact owner is dead`,
+          );
+        await Bun.sleep(25 + Math.floor(Math.random() * 25));
+      }
     }
     try {
       writeFileSync(
@@ -105,7 +132,28 @@ export class State {
       if (current.token === token) unlinkSync(path);
     }
   }
-  recoverLock(name = "operation") {
+  /** Advisory liveness for status/list projection; the caller must not use it
+   * to steal. A present-but-unreadable or metadata-invalid lock counts active. */
+  isLockedActive(name: string): boolean {
+    const key = "lock-" + name;
+    if (!this.has(key)) return false;
+    let x: any;
+    try {
+      x = this.read<any>(key);
+    } catch {
+      return true;
+    }
+    if (!Number.isSafeInteger(x.pid) || typeof x.identity !== "string")
+      return true;
+    let identity: string | undefined;
+    try {
+      identity = processIdentity(x.pid);
+    } catch (e: any) {
+      if (e.code !== "ENOENT") return true;
+    }
+    return identity === x.identity;
+  }
+  recoverLock(name: string) {
     const key = "lock-" + name,
       x = this.read<any>(key);
     if (!Number.isSafeInteger(x.pid) || typeof x.identity !== "string")
