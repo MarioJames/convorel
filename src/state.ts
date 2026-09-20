@@ -11,7 +11,7 @@ import {
   unlinkSync,
   readdirSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { stateDirectory } from "./paths.ts";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 export function processIdentity(pid: number) {
@@ -36,10 +36,7 @@ export function tabsLockName() {
 }
 export class State {
   readonly root: string;
-  constructor(
-    root = process.env.CONVOREL_HOME ||
-      join(homedir(), ".local/share/convorel"),
-  ) {
+  constructor(root = stateDirectory()) {
     if (process.platform !== "linux")
       throw new Error(
         "PLATFORM_UNSUPPORTED: v0.1 validates process ownership on Linux",

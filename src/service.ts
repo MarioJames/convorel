@@ -10,11 +10,11 @@ import {
   renameSync,
   statSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { processIdentity } from "./state.ts";
 import { Workspace } from "./workspace.ts";
 import { WorkspaceAccess, parseRoots } from "./workspace-access.ts";
-import { settingValue } from "./env.ts";
+import { preference } from "./user-config.ts";
 import { childEnv } from "./command.ts";
 import { selfExec } from "./runtime.ts";
 import { recoverTunnelLock, tunnelKey, tunnelRegistry } from "./tunnel.ts";
@@ -45,27 +45,11 @@ function alive(entry?: { pid?: number; identity?: string } | null) {
   }
 }
 
-/** Settings the supervisor must see exactly as the caller does, empty values included. */
-export function forwardedEnvironment(env: NodeJS.ProcessEnv = process.env) {
-  const forward: Record<string, string> = {};
-  for (const key of [
-    "CONVOREL_HOME",
-    "CONVOREL_TUNNEL_API_KEY",
-    "CONVOREL_TUNNEL_ID",
-    "CONVOREL_MCP_ROOTS",
-  ])
-    if (env[key] !== undefined) forward[key] = env[key]!;
-  for (const key of ["CONVOREL_HOME", "CONVOREL_CONFIG_HOME"])
-    if (env[key]) forward[key] = resolve(env[key]!);
-  return forward;
-}
-
 /** Serialize short lifecycle operations separately from the running client's lock. */
 export async function manageService(
   action: "start" | "stop" | "restart",
   id: string,
   workspace?: string,
-  forward: Record<string, string> = forwardedEnvironment(),
 ) {
   const registry = tunnelRegistry(),
     key = "manage-" + tunnelKey(id);
@@ -79,7 +63,7 @@ export async function manageService(
       const before = serviceStatus(id);
       if (before.workspace && before.workspace !== root)
         throw new Error("TUNNEL_WORKSPACE_CONFLICT");
-      const configured = settingValue("CONVOREL_MCP_ROOTS");
+      const configured = preference("mcp.roots");
       new WorkspaceAccess(
         configured ? parseRoots(configured) : [root],
       ).assertPrivate(registry.root);
@@ -87,10 +71,10 @@ export async function manageService(
         throw new Error(
           "TUNNEL_CLIENT_MISSING: install official tunnel-client",
         );
-      if (!settingValue("CONVOREL_TUNNEL_API_KEY"))
+      if (!preference("tunnel.apiKey"))
         throw new Error("TUNNEL_CREDENTIAL_MISSING: configure tunnel.apiKey");
       if (action === "restart") await stopService(id);
-      return startService(id, root, forward);
+      return startService(id, root);
     },
     key,
     35_000,
@@ -131,11 +115,7 @@ function tail(text: string, lines: number) {
   return all.slice(-lines).join("\n") + (all.length ? "\n" : "");
 }
 
-export async function startService(
-  id: string,
-  workspace: string,
-  forward: Record<string, string>,
-) {
+export async function startService(id: string, workspace: string) {
   const registry = tunnelRegistry(),
     key = tunnelKey(id),
     log = serviceLog(id);
@@ -161,7 +141,7 @@ export async function startService(
   const [command, ...args] = selfExec(["tunnel", "run", "--tunnel-id", id]);
   const child = spawn(command, args, {
     cwd: registry.root,
-    env: { ...childEnv(), ...forward },
+    env: childEnv(),
     stdio: ["ignore", fd, fd],
     detached: true,
   });

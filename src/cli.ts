@@ -1,4 +1,6 @@
 #!/usr/bin/env -S bun --no-env-file
+import { consumeRuntimeArgs } from "./paths.ts";
+declare const BUILD_COMMIT: string;
 import { readFileSync, realpathSync } from "node:fs";
 import {
   State,
@@ -14,18 +16,13 @@ import { serve } from "./mcp.ts";
 import { runTunnel, tunnelInstructions, recoverTunnelLock } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
 import { jsonPrinter } from "./output.ts";
-import { settingValue } from "./env.ts";
+import { preference } from "./user-config.ts";
 import { agentBrowserLocation, COMPILED, selfExec } from "./runtime.ts";
 import { conversationConfig } from "./config.ts";
 import { configCommand } from "./config-command.ts";
 import { preferenceDirectory } from "./user-config.ts";
 import { installSkill } from "./skills.ts";
-import {
-  forwardedEnvironment,
-  manageService,
-  serviceLogs,
-  serviceStatus,
-} from "./service.ts";
+import { manageService, serviceLogs, serviceStatus } from "./service.ts";
 import { upgrade, versionCheck } from "./upgrade.ts";
 import { waitForConversation, watcherLockName } from "./wait.ts";
 import {
@@ -53,7 +50,7 @@ skills install --dir PATH
 start|stop|restart|status [--tunnel-id ID]
 logs [--tunnel-id ID] [--lines NUMBER] [--follow]
 upgrade [--version TAG]
-config list|get KEY|set KEY VALUE|unset KEY|path|import-env
+config list|get KEY|set KEY VALUE|unset KEY|path
 doctor
 version [--check]|--version
 conversation list
@@ -72,16 +69,17 @@ All conversation commands: [--fields id,currentRun,summary] selects top-level JS
 Lists select fields per item; missing fields are null. Exit codes are unchanged.
 mcp serve [--roots JSON_ARRAY]
 tunnel instructions|doctor|run|recover-lock [--tunnel-id ID]
-Model/project: CONVOREL_MODEL, CONVOREL_PROJECT_URL, CONVOREL_PROJECT_NAME
-Precedence: command line > process environment (including empty) > installation .env > preferences file
-Tunnel ID: --tunnel-id > CONVOREL_TUNNEL_ID environment > preferences file
+Configuration: convorel config set KEY VALUE; command flags override stored settings.
+Tunnel ID: --tunnel-id > config tunnel.id
 Unset model: Latest + maximum Pro. config path prints the preferences file.
 recover-lock --task ID | --watch-task ID | --registry true | --tabs true | --name NAME
 Reclaims only a lock whose recorded process identity is dead; never a live owner's.
-Use CONVOREL_HOME for a private state directory outside the shared workspace, and CONVOREL_CONFIG_HOME for another preferences file.
+Global options before COMMAND: --state-dir PATH --config-dir PATH.
+Defaults: ~/.local/share/convorel and ~/.config/convorel.
 Invoke as: bun --no-env-file src/cli.ts ... or the installed executable.
 No command installs system tools or creates OpenAI resources.`;
 export async function main(args = process.argv.slice(2)) {
+  args = consumeRuntimeArgs(args);
   const [area, sub, ...rest] = args;
   if (!area || ["--help", "help"].includes(area)) {
     console.log(help);
@@ -103,7 +101,8 @@ export async function main(args = process.argv.slice(2)) {
     else
       print({
         version: packageInfo.version,
-        commit: process.env.CONVOREL_BUILD_COMMIT || "source checkout",
+        commit:
+          typeof BUILD_COMMIT === "string" ? BUILD_COMMIT : "source checkout",
         runtime: COMPILED ? "standalone" : `bun ${Bun.version}`,
         architecture: process.arch,
         browserController: agentBrowserLocation(),
@@ -129,7 +128,7 @@ export async function main(args = process.argv.slice(2)) {
     for (const key of Object.keys(o))
       if (key !== "tunnel-id" && !(area === "logs" && key === "lines"))
         throw new Error(`Unknown ${area} option --${key}`);
-    const id = o["tunnel-id"] ?? settingValue("CONVOREL_TUNNEL_ID");
+    const id = o["tunnel-id"] ?? preference("tunnel.id");
     if (!id)
       throw new Error(
         "TUNNEL_ID_MISSING: pass --tunnel-id or configure tunnel.id",
@@ -160,7 +159,6 @@ export async function main(args = process.argv.slice(2)) {
           area as "start" | "stop" | "restart",
           id,
           config?.workspace,
-          forwardedEnvironment(),
         ),
       );
     }
@@ -169,7 +167,7 @@ export async function main(args = process.argv.slice(2)) {
   if (area === "mcp") {
     if (sub !== "serve") throw new Error("UNKNOWN_MCP_COMMAND");
     const o = opts(rest);
-    const roots = o.roots ?? settingValue("CONVOREL_MCP_ROOTS");
+    const roots = o.roots ?? preference("mcp.roots");
     if (!roots) throw new Error("MCP_ROOTS_REQUIRED");
     await serve(parseRoots(roots));
     return 0;
@@ -222,7 +220,7 @@ export async function main(args = process.argv.slice(2)) {
     for (const key of Object.keys(o))
       if (!["workspace", "cdp"].includes(key))
         throw new Error(
-          `Unknown init option --${key}; configure model/project through CONVOREL_* environment variables`,
+          `Unknown init option --${key}; configure model/project through convorel config set`,
         );
     const config: Config = { version: 1, workspace, cdp };
     const effective = conversationConfig(config);
@@ -231,7 +229,7 @@ export async function main(args = process.argv.slice(2)) {
         const old = store.read<Config>("config");
         if (old.workspace !== workspace || old.cdp !== cdp)
           throw new Error(
-            "CONFIG_BINDING_IMMUTABLE: choose a separate CONVOREL_HOME for another workspace/browser",
+            "CONFIG_BINDING_IMMUTABLE: choose a separate --state-dir for another workspace/browser",
           );
       }
       store.write("config", config);
@@ -244,7 +242,7 @@ export async function main(args = process.argv.slice(2)) {
     return 0;
   }
   const config = store.read<Config>("config"),
-    configuredRoots = settingValue("CONVOREL_MCP_ROOTS"),
+    configuredRoots = preference("mcp.roots"),
     access = new WorkspaceAccess(
       configuredRoots ? parseRoots(configuredRoots) : [config.workspace],
     ),
@@ -338,10 +336,10 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (area === "tunnel") {
     const o = opts(rest),
-      id = o["tunnel-id"] ?? settingValue("CONVOREL_TUNNEL_ID");
+      id = o["tunnel-id"] ?? preference("tunnel.id");
     if (!id)
       throw new Error(
-        "TUNNEL_ID_MISSING: pass --tunnel-id, or set CONVOREL_TUNNEL_ID with convorel config set tunnel.id",
+        "TUNNEL_ID_MISSING: pass --tunnel-id, or set tunnel.id with convorel config set tunnel.id",
       );
     if (sub === "instructions") {
       print(tunnelInstructions(id, config.workspace, roots));

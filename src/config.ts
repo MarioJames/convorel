@@ -1,5 +1,4 @@
-import { settingValue } from "./env.ts";
-import type { SettingKey } from "./user-config.ts";
+import { preference } from "./user-config.ts";
 import { projectId } from "./chatgpt/organize.ts";
 
 export interface Config {
@@ -14,14 +13,14 @@ export interface Config {
 // Only new bindings read mutable preferences. Existing tasks retain their snapshot.
 export function conversationConfig(
   base: Config,
-  read: typeof settingValue = settingValue,
+  read: typeof preference = preference,
 ): Config {
-  const model = read("CONVOREL_MODEL")?.trim() || undefined;
-  const projectUrl = read("CONVOREL_PROJECT_URL")?.trim() || undefined;
-  const projectName = read("CONVOREL_PROJECT_NAME")?.trim() || undefined;
+  const model = read("model")?.trim() || undefined;
+  const projectUrl = read("project.url")?.trim() || undefined;
+  const projectName = read("project.name")?.trim() || undefined;
   if (!!projectUrl !== !!projectName)
     throw new Error(
-      "PROJECT_CONFIG_INCOMPLETE: set both CONVOREL_PROJECT_URL and CONVOREL_PROJECT_NAME, or leave both empty",
+      "PROJECT_CONFIG_INCOMPLETE: set both project.url and project.name, or leave both empty",
     );
   if (projectUrl) projectId(projectUrl);
   return {

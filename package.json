@@ -13,7 +13,6 @@
     "convorel": "src/cli.ts"
   },
   "files": [
-    ".env.example",
     "setup.ts",
     "install.sh",
     "bun.lock",

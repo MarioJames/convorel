@@ -5,7 +5,7 @@ import { State, processIdentity } from "./state.ts";
 import { Workspace, sha } from "./workspace.ts";
 import { childEnv } from "./command.ts";
 import { WorkspaceAccess } from "./workspace-access.ts";
-import { settingValue } from "./env.ts";
+import { preference } from "./user-config.ts";
 import { selfExec } from "./runtime.ts";
 export const shellQuote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 export function tunnelArgs(
@@ -44,7 +44,7 @@ export function tunnelInstructions(id: string, root: string, roots = [root]) {
     })),
     requires: [
       "official tunnel-client on PATH",
-      "CONVOREL_TUNNEL_API_KEY in the environment or convorel configuration",
+      "tunnel.apiKey in convorel configuration",
       "Platform tunnel associated with target ChatGPT workspace",
       "ChatGPT developer app connected and enabled",
     ],
@@ -92,10 +92,10 @@ export async function runTunnel(
     throw new Error(
       "TUNNEL_CLIENT_MISSING: install official tunnel-client; see tunnel instructions",
     );
-  const apiKey = settingValue("CONVOREL_TUNNEL_API_KEY");
+  const apiKey = preference("tunnel.apiKey");
   if (!apiKey)
     throw new Error(
-      "TUNNEL_CREDENTIAL_MISSING: set CONVOREL_TUNNEL_API_KEY with convorel config set tunnel.apiKey, or in the process environment",
+      "TUNNEL_CREDENTIAL_MISSING: set tunnel.apiKey with convorel config set tunnel.apiKey",
     );
   return registry.locked(async () => {
     const previous = registry.has(key) ? registry.read<any>(key) : null;

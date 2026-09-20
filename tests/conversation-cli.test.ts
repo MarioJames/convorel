@@ -52,6 +52,10 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
         process.execPath,
         "--no-env-file",
         join(import.meta.dir, "../src/cli.ts"),
+        "--state-dir",
+        store.root,
+        "--config-dir",
+        join(root, "prefs"),
         "conversation",
         operation,
         "--id",
@@ -63,8 +67,6 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
       {
         env: {
           ...childEnv(),
-          CONVOREL_HOME: store.root,
-          CONVOREL_MCP_ROOTS: JSON.stringify([workspace]),
         },
         stdout: "pipe",
         stderr: "pipe",

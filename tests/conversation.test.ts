@@ -1,3 +1,4 @@
+import { preference, writePreference } from "../src/user-config.ts";
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -282,7 +283,7 @@ test("draft URL recovery never trusts a different submitted message", async () =
   expect(browser.sends).toBe(1);
   expect(state.read<any>("task-" + first.id).url).toBe("https://chatgpt.com/");
 });
-test("new tasks resolve environment preferences while followups retain their original snapshot", async () => {
+test("new tasks resolve stored preferences while followups retain their original snapshot", async () => {
   const { state, browser } = setup();
   const checks: string[] = [];
   const conversation = new Conversation(
@@ -293,22 +294,18 @@ test("new tasks resolve environment preferences while followups retain their ori
       return { observedModel: opts.model || "8 Pro" };
     },
   );
-  const keys = [
-    "CONVOREL_MODEL",
-    "CONVOREL_PROJECT_URL",
-    "CONVOREL_PROJECT_NAME",
-  ] as const;
-  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  const keys = ["model", "project.url", "project.name"] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, preference(k)]));
   try {
-    process.env.CONVOREL_MODEL = "7 Pro";
-    process.env.CONVOREL_PROJECT_URL = "";
-    process.env.CONVOREL_PROJECT_NAME = "";
+    writePreference("model", "7 Pro");
+    writePreference("project.url", "");
+    writePreference("project.name", "");
     const first = await conversation.start("preferences", "First");
     expect(first.config.model).toBe("7 Pro");
     expect(first.config.projectUrl).toBeUndefined();
     browser.complete();
     await conversation.poll(first.id, first.currentRun);
-    process.env.CONVOREL_MODEL = "";
+    writePreference("model", "");
     const next = await conversation.start(first.id, "Followup", "second", true);
     expect(next.config.model).toBe("7 Pro");
     browser.delayedUrl = true;
@@ -319,8 +316,7 @@ test("new tasks resolve environment preferences while followups retain their ori
     expect(state.read<any>("config").model).toBe("6 Pro");
   } finally {
     for (const key of keys) {
-      if (saved[key] === undefined) delete process.env[key];
-      else process.env[key] = saved[key];
+      writePreference(key, saved[key] ?? "");
     }
   }
 });
@@ -1701,11 +1697,11 @@ test("invalid initial naming stops before creating a browser page", async () => 
 });
 
 test("project starts use only the configured project composer and reject a generic or changed page before send", async () => {
-  const oldUrl = process.env.CONVOREL_PROJECT_URL,
-    oldName = process.env.CONVOREL_PROJECT_NAME;
+  const oldUrl = preference("project.url"),
+    oldName = preference("project.name");
   const projectUrl = "https://chatgpt.com/g/g-p-example-reviews/project";
-  process.env.CONVOREL_PROJECT_URL = projectUrl;
-  process.env.CONVOREL_PROJECT_NAME = "Agent reviews";
+  writePreference("project.url", projectUrl);
+  writePreference("project.name", "Agent reviews");
   try {
     for (const scenario of ["project", "generic", "drift"]) {
       const { state: base, browser } = setup();
@@ -1753,10 +1749,8 @@ test("project starts use only the configured project composer and reject a gener
       }
     }
   } finally {
-    if (oldUrl === undefined) delete process.env.CONVOREL_PROJECT_URL;
-    else process.env.CONVOREL_PROJECT_URL = oldUrl;
-    if (oldName === undefined) delete process.env.CONVOREL_PROJECT_NAME;
-    else process.env.CONVOREL_PROJECT_NAME = oldName;
+    writePreference("project.url", oldUrl ?? "");
+    writePreference("project.name", oldName ?? "");
   }
 });
 
@@ -1890,7 +1884,7 @@ test("a second operation on the same task waits a bounded window then fails clos
   const { browser, conversation } = setup();
   const g = makeGate();
   browser.gate = g.gate;
-  process.env.CONVOREL_TASK_WAIT_MS = "120";
+  writePreference("locks.taskWaitMs", "120");
   g.block("run:fill:target1");
   try {
     const a = conversation.start("same-task", "Review");
@@ -1901,17 +1895,17 @@ test("a second operation on the same task waits a bounded window then fails clos
     g.release("run:fill:target1");
     expect((await a).id).toBe("same-task");
   } finally {
-    delete process.env.CONVOREL_TASK_WAIT_MS;
+    writePreference("locks.taskWaitMs", "");
     g.releaseAll();
   }
 });
 
-test("CONVOREL_SERIAL=1 restores a single global browser lock across different tasks", async () => {
+test("browser.serial restores a single global browser lock across different tasks", async () => {
   const { browser, conversation } = setup();
   const g = makeGate();
   browser.gate = g.gate;
-  process.env.CONVOREL_SERIAL = "1";
-  process.env.CONVOREL_TASK_WAIT_MS = "120";
+  writePreference("browser.serial", "true");
+  writePreference("locks.taskWaitMs", "120");
   g.block("run:fill:target1");
   try {
     const a = conversation.start("serial-a", "Review A");
@@ -1922,8 +1916,8 @@ test("CONVOREL_SERIAL=1 restores a single global browser lock across different t
     g.release("run:fill:target1");
     expect((await a).id).toBe("serial-a");
   } finally {
-    delete process.env.CONVOREL_SERIAL;
-    delete process.env.CONVOREL_TASK_WAIT_MS;
+    writePreference("browser.serial", "");
+    writePreference("locks.taskWaitMs", "");
     g.releaseAll();
   }
 });

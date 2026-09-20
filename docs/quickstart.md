@@ -5,7 +5,7 @@ Runnable v0.1 commands; consult validation.md for the verified environment and r
 ## Prerequisites
 
 - Linux x64 or arm64 (glibc), Git, an installed Google Chrome. A source checkout additionally needs Bun >= 1.3 and Node >= 24 (agent-browser package requirement).
-- Your own ChatGPT account with access to the selected model. The default selects Latest and the Pro endpoint of Power without pinning a version. Override with `CONVOREL_MODEL`; other visible models are verified after manual selection.
+- Your own ChatGPT account with access to the selected model. The default selects Latest and the Pro endpoint of Power without pinning a version. Override with `convorel config set model MODEL`; other visible models are verified after manual selection.
 - For code tools: your own OpenAI tunnel, runtime key and ChatGPT developer app. Browser-only conversation does not need these.
 
 ## Install
@@ -14,7 +14,7 @@ Runnable v0.1 commands; consult validation.md for the verified environment and r
 curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-The installer downloads the release archive for the current architecture, verifies it against that release's `sha256sums.txt`, unpacks it under `~/.local/lib/convorel` and links `convorel` plus its pinned `agent-browser` into `~/.local/bin`. It supports `--version vX.Y.Z`, `--prefix`, `--bin-dir` and `--uninstall`, never uses sudo, and never touches conversation state, preferences or installed skills. Release artifacts carry GitHub build provenance: `gh attestation verify convorel-<version>-linux-x64.tar.gz --repo MarioJames/convorel`. No published npm package is assumed.
+The installer downloads the release archive for the current architecture, verifies it against that release's `sha256sums.txt`, unpacks it under `~/.local/lib/convorel` and links `convorel` plus its pinned `agent-browser` into `~/.local/bin`. Its only installer options are `--version vX.Y.Z`, `--prefix PATH`, `--bin-dir PATH`, `--dist-dir PATH`, `--uninstall` and `--release-base URL`; installer options are not read from environment variables. It never uses sudo or touches conversation state, preferences or installed skills. Release artifacts carry GitHub build provenance: `gh attestation verify convorel-<version>-linux-x64.tar.gz --repo MarioJames/convorel`. No published npm package is assumed.
 
 From a source checkout, `bun --no-env-file setup.ts ...` runs `bun install --frozen-lockfile` before the same initialization. The commands below use the installed `convorel`; in a checkout substitute `bun --no-env-file src/cli.ts`.
 
@@ -35,7 +35,7 @@ Use headed Chrome over CDP and sign in manually. Keep this dedicated profile to 
 convorel setup --workspace /absolute/path/to/repo --cdp 9222
 ```
 
-Configuration and task state live outside the shared repository under the user data directory. `CONVOREL_HOME` selects another private state root; never place it within an MCP-shared workspace. Use a separate state root for another configured workspace.
+Preferences default to `~/.config/convorel/preferences.json`; task state defaults to `~/.local/share/convorel`. Use `convorel [--config-dir PATH] [--state-dir PATH] COMMAND` to select different directories, with global options before the command. Keep both directories outside MCP-shared roots. Configuration comes only from the preferences file, with no environment override. Use separate configuration and state directories for independently configured workspaces.
 
 `setup` initializes private configuration, optionally installs the skill and checks CDP/MCP; the source bootstrap additionally installs locked dependencies. Agent skill installation is described below. Missing CDP produces a nonzero doctor result while preserving configuration. Bun, Git and Chrome remain user-managed prerequisites.
 
@@ -64,7 +64,7 @@ Install the official [tunnel-client](https://github.com/openai/tunnel-client/rel
 bun --no-env-file src/cli.ts tunnel instructions --tunnel-id YOUR_TUNNEL_ID
 ```
 
-Create a key at [Runtime API keys](https://platform.openai.com/settings/organization/api-keys) in the organization owning the tunnel. Its identity needs Tunnels Read + Use. This is not an Admin API key. Store them with `convorel config set tunnel.apiKey KEY` and `convorel config set tunnel.id tunnel_...` (`convorel config path` prints the 0600 preferences file; the key is never echoed back), or export them in the shell; a source checkout can also use `.env` in its installation root. Tunnel commands accept the ID in this order: `--tunnel-id`, environment, installation `.env` (source checkout only), preferences file. Once configured, `--tunnel-id` can be omitted for instructions, doctor, run and recover-lock. An explicit environment value takes precedence, including an empty value. The known tunnel, MCP-root, model and project settings are read from that installation’s `.env`, regardless of the caller’s directory or configured code workspace; `.env.local` variants and variable expansion are not supported. Keep `--no-env-file` on Bun commands: convorel performs this targeted loading itself. `.env` is Git-ignored; use `chmod 600 .env`. The wrapper maps the key to the official client’s `CONTROL_PLANE_API_KEY` only in its child environment. The generated `tunnel doctor` and `tunnel run` commands use fixed stdio arguments and a private single-instance registry; no YAML profile is required. Use `convorel start` to run the client in the background, `convorel status` to inspect local process liveness, `convorel logs --follow` for output, and `convorel stop` or `convorel restart` to manage it. `tunnel run` remains available for foreground use. These commands do not start Chrome or verify cloud connectivity. Do not paste the key into a chat or commit it.
+Create a key at [Runtime API keys](https://platform.openai.com/settings/organization/api-keys) in the organization owning the tunnel. Its identity needs Tunnels Read + Use. This is not an Admin API key. Store it with `convorel config set tunnel.apiKey KEY` and the ID with `convorel config set tunnel.id tunnel_...`; `convorel config path` prints the 0600 preferences file, and config output never echoes the key. Tunnel commands use `--tunnel-id` when supplied, otherwise the configured `tunnel.id`. Once configured, the ID can be omitted for instructions, doctor, run and recover-lock. Keep `--no-env-file` on Bun commands to prevent automatic environment-file loading. The wrapper maps the key to the official client’s `CONTROL_PLANE_API_KEY` only in its child environment. The generated `tunnel doctor` and `tunnel run` commands use fixed stdio arguments and a private single-instance registry; no YAML profile is required. Use `convorel start` for background operation, `convorel status` for local liveness, `convorel logs --follow` for output, and `convorel stop` or `convorel restart` to manage it. `tunnel run` remains available for foreground use. These commands do not start Chrome or verify cloud connectivity. Do not paste the key into a chat or commit it; avoid leaking it into shell history when configuring it.
 
 In [ChatGPT Plugins](https://chatgpt.com/plugins), create a developer app, choose Connection → Tunnel, select your tunnel, and enable that app for the review conversation. Access/organization permissions are separate from Chrome login.
 
@@ -90,7 +90,7 @@ bun --no-env-file src/cli.ts conversation retry --id auth-design --run RUN_ID
 
 ## Multiple read-only directories
 
-Set `CONVOREL_MCP_ROOTS` to a JSON array with `convorel config set mcp.roots '["~/workspaces","~/opensource"]'`, in the process environment, or in a source checkout's installation `.env`. No default-workspace environment variable is needed: give ChatGPT the full project path to review. Without this setting, the root saved by init is the sole allowed directory. Restart the tunnel after changing the allowlist.
+Set `mcp.roots` to a JSON array with `convorel config set mcp.roots '["~/workspaces","~/opensource"]'`. Give ChatGPT the full project path to review. Without this setting, the root saved by init is the sole allowed directory. Restart the tunnel after changing the allowlist.
 
 All MCP tools use full `path` arguments (absolute paths or `~/` paths). `workspace_info` without a path lists the roots; with a path it identifies that directory. The CLI can also serve explicitly with `mcp serve --roots '["/absolute/root-a","/absolute/root-b"]'`. Root selection cannot bypass nested `.convorelignore` or `.gitignore` rules. `.env`, `.env.*` and credential files remain denied. Git worktrees require their gitdir/common-dir/object storage to remain in permitted roots; alternate object stores are unsupported.
 
@@ -116,9 +116,9 @@ bun --no-env-file setup.ts --workspace /absolute/project --cdp 9222 --agent code
 bunx skills add ./skills --skill chatgpt-review -a codex -g
 ```
 
-直接使用 Skills CLI 时保留交互步骤，遇到同名个人技能取消覆盖，不自动替换已有链接或目录。源码发布后可改用 `bunx skills add https://github.com/MarioJames/convorel --skill chatgpt-review -a codex -g`。本步骤仅安装技能；运行时需独立安装，使用 `PATH` 中的 `convorel`（安装脚本默认链接到 `~/.local/bin`）或 Agent 进程中的 `CONVOREL_BIN`。后者指向独立可执行文件时直接执行，指向源码 `src/cli.ts` 时技能以 `bun --no-env-file` 调用；技能不从自身安装目录推断运行时。
+直接使用 Skills CLI 时保留交互步骤，遇到同名个人技能取消覆盖，不自动替换已有链接或目录。源码发布后可改用 `bunx skills add https://github.com/MarioJames/convorel --skill chatgpt-review -a codex -g`。本步骤仅安装技能；运行时需独立安装，技能直接调用 `PATH` 中的 `convorel`（安装脚本默认链接到 `~/.local/bin`）。源码方式可显式调用 `bun --no-env-file /path/to/convorel/src/cli.ts`，不从技能安装目录推断运行时。
 
-用 `convorel config set project.url URL`、`convorel config set project.name NAME` 成对设置目标项目，可选 `convorel config set model MODEL`；也可用同名 `CONVOREL_*` 进程环境变量或源码安装根 `.env`。优先级为进程环境（含空值）> 安装根 `.env`（仅源码）> 偏好文件；不加载代码工作区或调用目录的环境文件。新 task 保存 snapshot，续谈保持原配置。未指定模型默认 Latest + Power 末端 Pro，不锁版本。
+用 `convorel config set project.url URL`、`convorel config set project.name NAME` 成对设置目标项目，可选 `convorel config set model MODEL`。配置只来自偏好文件，不接受环境覆盖。新 task 保存 snapshot，续谈保持原配置；修改配置不会改写旧任务。未指定模型默认 Latest + Power 末端 Pro，不锁版本。全部配置键及目录参数见[使用指南](usage.md#配置文件与目录)。
 
 创建时通过 `start --type DES --topic '具体主题'` 提供命名信息，首条消息与持久化 URL 确认后立即命名，无需等回复完成。URL 延迟时由 `resume`/`wait` 补做；命名失败记录在 `organization.error`，检查后用 `organize` 显式重试，不重发消息。审查技能使用 `MMDD｜TYPE｜Topic`：日期取会话 `createdAt` 转 `Asia/Shanghai`，默认英文 TYPE；用户明确要求中文时给 `start` 或 `organize` 加 `--language zh`。配置项目时直接使用该项目的“新建对话”入口；命名只改标题，归属不符即报错，不移动会话。主题不明保留原标题，不改置顶、归档等状态。组织失败仍保留错误并尝试安全 finish。
 
@@ -126,4 +126,4 @@ Herdr 可选。技能优先复用现有 Herdr 技能或 `herdr --skill`，只有
 
 ## Existing private state
 
-Keep the same `CONVOREL_HOME`, task ID and run when continuing an existing conversation. Installing the skill does not migrate or delete task state, browser profiles, tunnels or historical review records. Use `conversation attach` only when an existing conversation URL and exact submitted user-message identity are verified; attaching sends nothing. Do not replace an existing live binding or duplicate an uncertain submission.
+Keep the same state directory, configuration directory, task ID and run when continuing an existing conversation. Installing the skill does not migrate or delete task state, browser profiles, tunnels or historical review records. Use `conversation attach` only when an existing conversation URL and exact submitted user-message identity are verified; attaching sends nothing. Do not replace an existing live binding or duplicate an uncertain submission.

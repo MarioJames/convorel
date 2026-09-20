@@ -1,3 +1,5 @@
+import { runtimePathArgs } from "./paths.ts";
+import { preference } from "./user-config.ts";
 import { createRequire } from "node:module";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -20,8 +22,14 @@ export function assetPath(...parts: string[]) {
 /** Re-enter this CLI as a child process without assuming it runs under bun. */
 export function selfExec(args: string[]) {
   return COMPILED
-    ? [process.execPath, ...args]
-    : [process.execPath, "--no-env-file", cliScript, ...args];
+    ? [process.execPath, ...runtimePathArgs(), ...args]
+    : [
+        process.execPath,
+        "--no-env-file",
+        cliScript,
+        ...runtimePathArgs(),
+        ...args,
+      ];
 }
 
 function interpret(path: string): string[] {
@@ -30,7 +38,7 @@ function interpret(path: string): string[] {
   const bun = COMPILED ? Bun.which("bun") : process.execPath;
   if (!bun)
     throw new Error(
-      "BUN_REQUIRED: install bun, point CONVOREL_AGENT_BROWSER at the native binary, or add agent-browser to PATH",
+      "BUN_REQUIRED: install bun, configure browser.executable with the native binary, or add agent-browser to PATH",
     );
   return [bun, "--no-env-file", path];
 }
@@ -74,13 +82,13 @@ export function agentBrowserInvocation(): string[] {
     // Without the sidecar check a global agent-browser would outrank the version
     // this package pins, so it only applies to an installed standalone binary.
     const candidates = [
-      process.env.CONVOREL_AGENT_BROWSER,
+      preference("browser.executable"),
       ...(COMPILED ? [sidecar()] : [packaged(), sidecar()]),
       Bun.which("agent-browser") || undefined,
     ].filter((path): path is string => !!path);
     if (!candidates.length)
       throw new Error(
-        "AGENT_BROWSER_UNAVAILABLE: reinstall convorel or set CONVOREL_AGENT_BROWSER",
+        "AGENT_BROWSER_UNAVAILABLE: reinstall convorel or configure browser.executable",
       );
     browser = interpret(candidates[0]);
   }

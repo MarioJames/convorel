@@ -4,13 +4,14 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { COMPILED } from "./runtime.ts";
 import { childEnv } from "./command.ts";
+import { preference } from "./user-config.ts";
 import packageInfo from "../package.json";
 // @ts-expect-error Bun's text loader embeds the shell script in standalone builds.
 import installer from "../install.sh" with { type: "text" };
 
 const releases = () =>
   (
-    process.env.CONVOREL_RELEASE_BASE_URL ||
+    preference("release.baseUrl") ||
     "https://github.com/MarioJames/convorel/releases"
   ).replace(/\/$/, "");
 export function platform() {
@@ -136,9 +137,11 @@ export async function upgrade(requested?: string) {
       layout.installDir,
       "--bin-dir",
       layout.binDir,
+      "--release-base",
+      releases(),
     ],
     {
-      env: { ...childEnv(), CONVOREL_RELEASE_BASE_URL: releases() },
+      env: childEnv(),
       stdin: new TextEncoder().encode(installer),
       stdout: "pipe",
       stderr: "pipe",

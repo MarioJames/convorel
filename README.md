@@ -60,7 +60,7 @@ Convorel 把 ChatGPT 接入本地开发流程。让 Codex 或 Claude Code 带着
 curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-脚本会校验发布的 `sha256sums.txt`，安装到 `~/.local/lib/convorel`，并在 `~/.local/bin` 链接 `convorel`；不使用 sudo。`--version vX.Y.Z` 安装指定版本，`--uninstall` 只移除可执行文件，保留会话状态、偏好和已安装技能。
+脚本会校验发布的 `sha256sums.txt`，安装到 `~/.local/lib/convorel`，并在 `~/.local/bin` 链接 `convorel`；不使用 sudo。安装选项仅通过参数传入：`--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`。卸载只移除可执行文件，保留会话状态、偏好和已安装技能。
 
 安装后可用 `convorel version --check` 检查最新版、`convorel upgrade` 升级，或加 `--version vX.Y.Z` 指定版本；旧版本与用户数据保留。
 
@@ -85,15 +85,11 @@ convorel setup --workspace /absolute/path/to/your-project --cdp 9222 --agent cod
 
 使用 Claude Code 时，将 `codex` 换成 `claude-code`；同时安装用 `codex,claude-code`。已有同名技能时会停止并提示，不会覆盖个人修改。
 
-技能通过 `PATH` 中的 `convorel` 找到运行时。源码方式运行时，在启动 Agent 的终端设置下面的绝对脚本路径，让 Agent 进程继承它：
-
-```bash
-export CONVOREL_BIN=/absolute/path/to/convorel/src/cli.ts
-```
+技能直接使用 `PATH` 中的 `convorel`。源码方式可显式调用 `bun --no-env-file /absolute/path/to/convorel/src/cli.ts`，不从技能安装目录推断运行时。
 
 此时可以讨论由 Agent 提供的上下文。要让 ChatGPT **直接读取本地代码**，还需按[代码连接指南](docs/usage.md#让-chatgpt-读取本地代码)配置官方隧道与 ChatGPT developer app；仅连接浏览器不会开放代码访问。
 
-模型与目标项目用 `convorel config set model|project.url|project.name VALUE` 保存到 `~/.config/convorel/preferences.json`；同名 `CONVOREL_*` 环境变量（源码方式还有安装根 `.env`）优先于该文件。配置项目时直接在该项目中创建会话；首条消息发送成功后按调用方提供的主题命名，不等待回复完成、不移动会话。完整命令、配置和首次讨论示例见[使用指南](docs/usage.md)。
+模型与目标项目用 `convorel config set model|project.url|project.name VALUE` 保存到 `~/.config/convorel/preferences.json`，只从配置文件读取，不接受环境覆盖。状态默认保存在 `~/.local/share/convorel`；入口为 `convorel [--config-dir PATH] [--state-dir PATH] COMMAND`，全局目录参数必须放在命令前。配置项目时直接在该项目中创建会话；首条消息发送成功后按调用方提供的主题命名，不等待回复完成、不移动会话。完整命令、配置和首次讨论示例见[使用指南](docs/usage.md)。
 
 ## 使用边界
 

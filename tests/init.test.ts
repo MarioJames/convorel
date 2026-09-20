@@ -11,37 +11,39 @@ test("initialization needs no model and retains only the workspace/browser bindi
   const state = new State(join(root, "state")),
     workspace = join(root, "workspace");
   mkdirSync(workspace);
-  const run = (args: string[], prefs = {}) =>
-    Bun.spawnSync(
+  const preferences = new State(join(root, "prefs"));
+  const run = (args: string[], values: Record<string, string> = {}) => {
+    preferences.write("preferences", { version: 1, values });
+    return Bun.spawnSync(
       [
         process.execPath,
         "--no-env-file",
         join(import.meta.dir, "../src/cli.ts"),
+        "--state-dir",
+        state.root,
+        "--config-dir",
+        preferences.root,
         "init",
         ...args,
       ],
       {
         env: {
           ...childEnv(),
-          CONVOREL_HOME: state.root,
-          CONVOREL_MODEL: "",
-          CONVOREL_PROJECT_URL: "",
-          CONVOREL_PROJECT_NAME: "",
-          ...prefs,
         },
         stdout: "pipe",
         stderr: "pipe",
       },
     );
+  };
   try {
     const args = ["--workspace", workspace, "--cdp", "9222"];
     const first = run(args);
     expect(first.exitCode, first.stderr.toString()).toBe(0);
     expect(JSON.parse(first.stdout.toString()).modelPolicy).toBe("latest-pro");
     const custom = run(args, {
-      CONVOREL_MODEL: "Custom model",
-      CONVOREL_PROJECT_URL: "https://chatgpt.com/g/g-p-example/project",
-      CONVOREL_PROJECT_NAME: "Example",
+      model: "Custom model",
+      "project.url": "https://chatgpt.com/g/g-p-example/project",
+      "project.name": "Example",
     });
     expect(custom.exitCode, custom.stderr.toString()).toBe(0);
     expect(JSON.parse(custom.stdout.toString()).model).toBe("Custom model");
@@ -51,9 +53,7 @@ test("initialization needs no model and retains only the workspace/browser bindi
       cdp: "http://127.0.0.1:9222",
     });
     expect(run(["--workspace", root, "--cdp", "9222"]).exitCode).toBe(1);
-    expect(run(args, { CONVOREL_PROJECT_NAME: "Missing URL" }).exitCode).toBe(
-      1,
-    );
+    expect(run(args, { "project.name": "Missing URL" }).exitCode).toBe(1);
     expect(state.read<any>("config").workspace).toBe(workspace);
   } finally {
     rmSync(root, { recursive: true, force: true });

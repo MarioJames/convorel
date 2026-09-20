@@ -8,7 +8,7 @@ The CLI only operates the selected target. Task-owned targets may be closed afte
 
 ## Workspace
 
-The MCP process has a fixed allowlist of local roots chosen by its operator through `CONVOREL_MCP_ROOTS` (a JSON array). Without an explicit allowlist, only the directory saved by init is permitted. Remote tool arguments cannot select an arbitrary root, execute commands, modify source or modify the disclosure policy. By default symlinks, non-regular files, `.git`, dependencies, ignored files and common credential filenames are denied. Git results use the same exclusion rules.
+The MCP process has a fixed allowlist of local roots chosen by its operator through the `mcp.roots` configuration key (a JSON array). Without an explicit allowlist, only the directory saved by init is permitted. Remote tool arguments cannot select an arbitrary root, execute commands, modify source or modify the disclosure policy. By default symlinks, non-regular files, `.git`, dependencies, ignored files and common credential filenames are denied. Git results use the same exclusion rules.
 
 Add workspace-specific exclusions in a root `.convorelignore` using gitignore syntax; nested `.gitignore` files are also applied. These rules may narrow access but cannot re-enable a hard-denied credential path. Unreadable policy files fail closed.
 
@@ -20,7 +20,7 @@ Local processes with the same OS account can read or change these files already.
 
 ## Tunnel
 
-Use the official OpenAI tunnel-client. Configure `CONVOREL_TUNNEL_API_KEY` in the shell or in `.env` at the convorel installation root. Explicit shell values take precedence. Tunnel commands read `CONVOREL_TUNNEL_ID` from the same file when no explicit ID is supplied; `--tunnel-id` overrides environment and file values. Only run/doctor consume the API key; root settings are also read explicitly, and unrelated dotenv entries never alter the process environment or child command. The file is Git-ignored and denied by the MCP credential-path policy. The key is mapped to the official client’s `CONTROL_PLANE_API_KEY` in its child environment, never stored in JSON configuration, shell command arguments or logs. Stdout of `mcp serve` is exclusively MCP protocol output; diagnostics go to stderr.
+Use the official OpenAI tunnel-client. Store `tunnel.apiKey` and `tunnel.id` with `convorel config set`; preferences are saved in a private 0600 file, by default `~/.config/convorel/preferences.json`. Convorel reads configuration only from this file, with no environment override. `--tunnel-id` overrides the configured ID for that command. Keep preferences and task state outside every shared MCP root. The key is redacted by config output and mapped to the official client’s `CONTROL_PLANE_API_KEY` only in its child environment; it is not written into prompts, task JSON or logs. Avoid exposing the key through shell history when configuring it. Stdout of `mcp serve` is exclusively MCP protocol output; diagnostics go to stderr.
 
 Tunnels are private developer connections. Distributing this open-source package does not distribute a shared tunnel, shared login or a public ChatGPT plugin. Each operator configures their own endpoint and ChatGPT app.
 

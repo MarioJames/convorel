@@ -4,7 +4,7 @@ Use Bun and the committed lockfile. Run `bun install --frozen-lockfile` and `bun
 
 Tests must use disposable profiles and synthetic repositories. Never use a developer's default Chrome profile, credentials, persistent development database or account for automated CI. Real ChatGPT acceptance is explicit and interactive; do not send unattended test messages to a shared account.
 
-`bun test` pins every `CONVOREL_*` preference to empty through `tests/preload.ts`, because `src/env.ts` otherwise falls back to the installation's own `.env`. Set a preference inside the test that needs one.
+Tests must isolate preferences and persistent state in disposable directories. CLI invocations use `convorel --config-dir PATH --state-dir PATH COMMAND`, with global options before the command; set required preferences with `config set` in that isolated config directory. Keep `--no-env-file` on source CLI invocations (`bun --no-env-file /path/to/convorel/src/cli.ts`) so Bun does not load ambient environment files. Convorel preferences come only from the selected configuration file.
 
 Changes to sending, recovery, ownership or file access need behavioral regression coverage. UI fixture tests do not establish compatibility with the live ChatGPT website. Record the tested browser, agent-browser version and limits in `docs/validation.md`.
 

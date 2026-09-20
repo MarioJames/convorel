@@ -33,7 +33,7 @@ flowchart LR
 curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-安装脚本下载当前架构的 Release 压缩包，按该版本的 `sha256sums.txt` 校验后解压到 `~/.local/lib/convorel`，并把 `convorel` 与固定版本的 `agent-browser` 链接到 `~/.local/bin`；不使用 sudo。支持 `--version vX.Y.Z`、`--prefix`、`--bin-dir`、`--uninstall`，卸载只移除可执行文件，不动会话状态、偏好和已安装技能。产物带 GitHub 构建来源证明，可用 `gh attestation verify 压缩包 --repo MarioJames/convorel` 核验。
+安装脚本下载当前架构的 Release 压缩包，按该版本的 `sha256sums.txt` 校验后解压到 `~/.local/lib/convorel`，并把 `convorel` 与固定版本的 `agent-browser` 链接到 `~/.local/bin`；不使用 sudo。仅支持参数 `--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`，安装选项不接受环境输入。卸载只移除可执行文件，不动会话状态、偏好和已安装技能。产物带 GitHub 构建来源证明，可用 `gh attestation verify 压缩包 --repo MarioJames/convorel` 核验。
 
 从源码运行时：`git clone https://github.com/MarioJames/convorel.git`，以下命令把 `convorel` 换成 `bun --no-env-file src/cli.ts`，初始化改用 `bun --no-env-file setup.ts`（它会先执行 `bun install --frozen-lockfile`）。
 
@@ -56,25 +56,25 @@ google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 
 convorel setup --workspace /absolute/path/to/your-project --cdp 9222
 ```
 
-`setup` 将配置写入 `~/.local/share/convorel/`，并检查 CDP 和本地 MCP（源码方式还会先安装锁定的本地依赖）。模型和项目偏好从 `convorel config` 或环境配置读取，新任务保存当时的配置。
+`setup` 将配置写入 `~/.local/share/convorel/`，并检查 CDP 和本地 MCP（源码方式还会先安装锁定的本地依赖）。模型和项目偏好仅从 `convorel config` 管理的偏好文件读取，新任务保存当时的配置。
 
-`--workspace` 保存默认代码工作区；未配置 `CONVOREL_MCP_ROOTS` 时，它也是唯一允许读取的目录。配置多目录后，对话中直接提供目标项目的完整路径即可，无需设置 `CONVOREL_WORKSPACE`。
+`--workspace` 保存默认代码工作区；未配置 `mcp.roots` 时，它也是唯一允许读取的目录。配置多目录后，对话中直接提供目标项目的完整路径即可。
 
-模型默认选择 **Latest 的 Power 末端 Pro**，不锁定版本；可用 `CONVOREL_MODEL` 明确覆盖，程序每次发送前核验，不静默降级。对于其他可见模型，先在网页中手动选好。所有源码 CLI 命令保留 `--no-env-file`，避免自动加载调用目录或共享工作区的环境文件；Convorel 只按已知配置项读取安装根 `.env`。
+模型默认选择 **Latest 的 Power 末端 Pro**，不锁定版本；可用 `convorel config set model MODEL` 明确覆盖，程序每次发送前核验，不静默降级。对于其他可见模型，先在网页中手动选好。所有源码 CLI 命令保留 `--no-env-file`，避免自动加载调用目录或共享工作区的环境文件；Convorel 自身只读取配置文件，不接受环境覆盖。
 
 ### 4. 发起第一次讨论
 
 直接使用 CLI，先创建一个不含敏感信息的请求文件。文件内容由调用方完整编写：
 
 ```bash
-CONVOREL_PROMPT_FILE=$(mktemp)
-cat > "$CONVOREL_PROMPT_FILE" <<'PROMPT'
+review_prompt_file=$(mktemp)
+cat > "$review_prompt_file" <<'PROMPT'
 请解释内容哈希如何帮助识别文件变化。
 给出一个简短示例。
 PROMPT
 
 bun --no-env-file src/cli.ts conversation start \
-  --id first-question --prompt-file "$CONVOREL_PROMPT_FILE" \
+  --id first-question --prompt-file "$review_prompt_file" \
   --type EXP --topic '内容哈希'
 ```
 
@@ -87,6 +87,33 @@ bun --no-env-file src/cli.ts conversation finish --id first-question --run RUN_I
 ```
 
 先消费、保存回复，再执行 `finish`。它保留会话链接和结果，只关闭经过核验的自有标签页；用户原有标签页不会关闭。
+
+## 配置文件与目录
+
+入口为 `convorel [--config-dir PATH] [--state-dir PATH] COMMAND`。全局目录参数必须放在命令前：
+
+```bash
+convorel --config-dir /private/config --state-dir /private/state config list
+convorel --config-dir /private/config --state-dir /private/state conversation list
+```
+
+默认偏好文件为 `~/.config/convorel/preferences.json`，默认任务状态目录为 `~/.local/share/convorel`。`--config-dir` 选择存放 `preferences.json` 的目录，`--state-dir` 选择持久状态目录；两者均应在 MCP 允许根之外。自定义目录时，后续命令和后台等待进程沿用同一组参数。
+
+配置只从偏好文件读取，不接受环境覆盖。用 `config path` 查看文件位置，`config list`/`config get KEY` 查看配置，`config set KEY VALUE` 写入，`config unset KEY` 删除。配置键如下：
+
+| 配置键                         | 含义                                                   |
+| ------------------------------ | ------------------------------------------------------ |
+| `model`                        | 模型选择；未设置时使用 Latest + Power 末端 Pro         |
+| `project.url` / `project.name` | 目标项目 URL 与名称，必须成对配置                      |
+| `tunnel.id`                    | 默认隧道 ID；单次命令可用 `--tunnel-id` 指定           |
+| `tunnel.apiKey`                | 隧道运行时密钥，配置输出不回显                         |
+| `mcp.roots`                    | 允许读取的目录 JSON 数组                               |
+| `browser.executable`           | agent-browser 控制器的可执行文件路径，不是 Chrome 路径 |
+| `browser.serial`               | `true` 使用全局浏览器操作锁；`false` 按任务并行        |
+| `locks.taskWaitMs`             | 同任务操作锁的最大等待毫秒数，正整数                   |
+| `release.baseUrl`              | 版本检查与升级的发布下载基址，HTTP(S) URL              |
+
+例如 `convorel config set browser.serial true`、`convorel config set locks.taskWaitMs 15000`。新任务读取当前配置并保存 snapshot；已有任务续谈保持原模型、项目等快照，修改配置不会迁移旧任务。
 
 ## 升级与版本检查
 
@@ -120,7 +147,7 @@ bun --no-env-file src/cli.ts skills install --agent claude-code --scope project 
 bunx skills add ./skills --skill chatgpt-review -a codex -g
 ```
 
-`-g` 表示用户范围；直接使用 Skills CLI 时保留交互确认，遇到同名个人技能应取消覆盖；包装入口会预先拒绝此类冲突。源码发布后也可将 `./skills` 换为 `https://github.com/MarioJames/convorel`。安装技能不安装 Convorel 运行时；让 `convorel` 在 `PATH` 中（安装脚本默认链接到 `~/.local/bin`），或在 Agent 进程环境设置 `CONVOREL_BIN`：指向独立可执行文件时直接执行，指向源码 `src/cli.ts` 时技能以 `bun --no-env-file` 执行，即使技能安装到另一个目录也无需相对路径。
+`-g` 表示用户范围；直接使用 Skills CLI 时保留交互确认，遇到同名个人技能应取消覆盖；包装入口会预先拒绝此类冲突。源码发布后也可将 `./skills` 换为 `https://github.com/MarioJames/convorel`。安装技能不安装 Convorel 运行时；技能直接使用 `PATH` 中的 `convorel`（安装脚本默认链接到 `~/.local/bin`），源码方式可显式调用 `bun --no-env-file /path/to/convorel/src/cli.ts`，不从技能目录推断运行时。
 
 审查目标用 `convorel config` 保存到 `~/.config/convorel/preferences.json`（`convorel config path` 显示位置，`config list` 查看来源）：
 
@@ -130,9 +157,7 @@ convorel config set project.name 实际项目名称
 # 可选：convorel config set model '用户明确选择的模型'
 ```
 
-源码安装也可写在安装根 `.env`，`convorel config import-env` 能把已有 `.env` 一次导入偏好文件。
-
-URL 必须来自实际项目页面，URL/name 成对配置。配置项目后直接在该项目的“新建对话”输入框创建；项目入口不匹配则在发送前停止，不在普通会话中创建后移动。标题使用 `MMDD｜TYPE｜Topic`，日期来自会话 `createdAt` 转 `Asia/Shanghai`；默认英文 TYPE，明确要求中文时用 `start --language zh`。创建时通过 `--type`/`--topic` 提供命名信息，首条消息与持久化 URL 确认后立即改名，不等待回复完成；主题不明时省略命名参数，保留原标题。URL 延迟时 `resume`/`wait` 会补做尚未开始的命名。命名失败独立记录在 `organization.error`，检查后用 `organize --id ID --run RUN_ID --type EXP --topic '具体主题'` 显式恢复，不重发消息；命名只改标题，项目归属不符则报错。优先级为同名进程环境变量（含空值）> 安装根 `.env`（仅源码）> 偏好文件。新 task 保存配置 snapshot，续谈保留原模型/项目，修改环境不会改写旧 task。
+URL 必须来自实际项目页面，URL/name 成对配置。配置项目后直接在该项目的“新建对话”输入框创建；项目入口不匹配则在发送前停止，不在普通会话中创建后移动。标题使用 `MMDD｜TYPE｜Topic`，日期来自会话 `createdAt` 转 `Asia/Shanghai`；默认英文 TYPE，明确要求中文时用 `start --language zh`。创建时通过 `--type`/`--topic` 提供命名信息，首条消息与持久化 URL 确认后立即改名，不等待回复完成；主题不明时省略命名参数，保留原标题。URL 延迟时 `resume`/`wait` 会补做尚未开始的命名。命名失败独立记录在 `organization.error`，检查后用 `organize --id ID --run RUN_ID --type EXP --topic '具体主题'` 显式恢复，不重发消息；命名只改标题，项目归属不符则报错。配置仅来自偏好文件。新 task 保存配置 snapshot，续谈保留原模型/项目，修改配置不会改写旧 task。
 
 技能会整理证据、处理意见并清理已完成的自有标签页。等待可以使用宿主后台进程或分段 CLI wait；Herdr 可用时才增强为 service lane，无需安装 Herdr 或记忆服务。
 
@@ -154,13 +179,11 @@ convorel config set tunnel.id tunnel_你的隧道ID
 convorel config set mcp.roots '["~/workspaces","~/opensource"]'
 ```
 
-源码安装也可在安装目录复制 `.env.example` 为 `.env` 填写同名变量（`CONVOREL_TUNNEL_API_KEY`、`CONVOREL_TUNNEL_ID`、`CONVOREL_MCP_ROOTS`）。
+`mcp.roots` 是允许读取的根目录 JSON 数组，支持绝对路径和 `~/`。未设置时使用初始化时指定的目录；根目录不能重复、嵌套或是符号链接。修改读取范围后需重启隧道。
 
-`CONVOREL_MCP_ROOTS` 是允许读取的根目录 JSON 数组，支持绝对路径和 `~/`。未设置时使用初始化时指定的目录；根目录不能重复、嵌套或是符号链接。修改读取范围后需重启隧道。
+隧道 ID 可用 `--tunnel-id` 覆盖配置文件中的 `tunnel.id`。源码命令保留 `--no-env-file`，独立可执行文件已内置该行为。
 
-优先级为同名环境变量（含显式空值）> 安装根 `.env`（仅源码）> 偏好文件；隧道 ID 还可用 `--tunnel-id` 覆盖。无论从哪个目录调用，程序只读取 Convorel 安装目录的 `.env` 与偏好文件，不加载被审查项目的环境文件、`.env.local` 等变体，也不执行变量展开。源码命令保留 `--no-env-file`，独立可执行文件已内置该行为。
-
-`.env` 和 `.env.*` 已被 Git 忽略（保留可提交的 `.env.example` 模板）。可执行 `chmod 600 .env` 限制本机访问。密钥只在启动官方客户端时映射为它需要的 `CONTROL_PLANE_API_KEY`，不写入提示词或任务 JSON。
+密钥保存在私有偏好文件中，只在启动官方客户端时映射为它需要的 `CONTROL_PLANE_API_KEY`，不写入提示词或任务 JSON；配置时注意避免 shell 历史记录泄露密钥。
 
 ### 3. 启动并连接 ChatGPT
 
@@ -287,7 +310,7 @@ bun --no-env-file src/cli.ts conversation retry --id first-question --run RUN_ID
 
 `clear-draft` 只接受首轮尚未发送、没有历史消息的任务自有新建页。文件须逐字匹配当前草稿；命令先持久保存备份，再在页面内核对 URL、历史、附件、生成状态和草稿，触发编辑器删除并重新读取确认。变化后的草稿、借用页、提交中或投递未知轮次均拒绝清理。它不发送，也不会自动调用 retry；删除命令返回成功但未读回空草稿仍视为失败，保留现场。不要用 `fill("")` 的成功回执作为已清空证据。
 
-同一允许范围内切换审查项目，在 prompt 中提供新的完整路径，并为新任务显式指定对应 `--workspace`，无需重新初始化。`CONVOREL_HOME` 用于隔离任务状态、默认项目和 CDP 配置；它不会自动隔离安装目录 `.env` 中的读取范围。确需独立状态时，将它设为允许目录之外的私有目录，再执行 `setup`。不同读取边界的连接应分别配置允许根和独立隧道。
+同一允许范围内切换审查项目，在 prompt 中提供新的完整路径，并为新任务显式指定对应 `--workspace`，无需重新初始化。`--state-dir PATH` 用于隔离任务状态、默认工作区和 CDP 配置；`--config-dir PATH` 选择独立偏好文件，两者必须放在命令前。确需独立配置与状态时，使用 MCP 允许目录之外的持久私有目录，例如 `convorel --config-dir /private/config --state-dir /private/state setup --workspace /absolute/project --cdp 9222`。不同读取边界的连接应分别配置允许根和独立隧道。
 
 完整命令见 `bun --no-env-file src/cli.ts --help`。
 

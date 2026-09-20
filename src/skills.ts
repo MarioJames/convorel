@@ -119,6 +119,6 @@ export async function installSkill(opts: Record<string, string>) {
     files,
     paths: targets,
     runtime: COMPILED ? process.execPath : cliScript,
-    note: "Use convorel on PATH, or set CONVOREL_BIN to this executable. Skill installation does not configure browser login or code access.",
+    note: "Use convorel on PATH, or invoke this CLI file explicitly. Skill installation does not configure browser login or code access.",
   };
 }

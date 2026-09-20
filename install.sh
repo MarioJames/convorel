@@ -6,12 +6,12 @@ set -euo pipefail
 
 owner="MarioJames"
 repository="convorel"
-version="${CONVOREL_VERSION:-latest}"
-install_dir="${CONVOREL_INSTALL_DIR:-$HOME/.local/lib/convorel}"
-bin_dir="${CONVOREL_BIN_DIR:-$HOME/.local/bin}"
+version=latest
+install_dir="$HOME/.local/lib/convorel"
+bin_dir="$HOME/.local/bin"
 # A directory of built artifacts, for an offline install or a release acceptance run.
-dist_dir="${CONVOREL_DIST_DIR:-}"
-release_base="${CONVOREL_RELEASE_BASE_URL:-https://github.com/$owner/$repository/releases}"
+dist_dir=""
+release_base="https://github.com/$owner/$repository/releases"
 action=install
 
 say() { printf '%s\n' "$*"; }
@@ -22,13 +22,13 @@ die() {
 
 usage() {
   cat <<'EOF'
-install.sh [--version TAG] [--prefix DIR] [--bin-dir DIR] [--uninstall]
+install.sh [--version TAG] [--prefix DIR] [--bin-dir DIR] [--release-base URL] [--uninstall]
   --version TAG     install a specific tag, e.g. v0.2.0 (default: latest release)
   --prefix DIR      installation directory (default: ~/.local/lib/convorel)
   --bin-dir DIR     directory to place the convorel and agent-browser links
   --dist-dir DIR    use already built artifacts from DIR instead of downloading
+  --release-base URL  release download base (default: GitHub Releases)
   --uninstall       remove the installed executables only
-Environment: CONVOREL_INSTALL_DIR, CONVOREL_BIN_DIR, CONVOREL_DIST_DIR, CONVOREL_VERSION
 Conversation state, the browser profile and installed skills are never removed.
 EOF
 }
@@ -59,6 +59,17 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --dist-dir=*) dist_dir="${1#*=}"; shift ;;
+    --release-base)
+      [ $# -ge 2 ] && [ -n "$2" ] || die "--release-base requires a value"
+      release_base="${2%/}"
+      shift 2
+      ;;
+    --release-base=*)
+      release_base="${1#*=}"
+      [ -n "$release_base" ] || die "--release-base requires a value"
+      release_base="${release_base%/}"
+      shift
+      ;;
     --uninstall) action=uninstall; shift ;;
     --help | -h) usage; exit 0 ;;
     *)

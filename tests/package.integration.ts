@@ -80,10 +80,6 @@ try {
   await run([process.execPath, "add", "--prefer-offline", archive], consumer);
   const installed = join(consumer, "node_modules", pkg.name),
     cli = join(installed, "src/cli.ts");
-  assert.match(
-    await Bun.file(join(installed, ".env.example")).text(),
-    /^CONVOREL_TUNNEL_API_KEY=$/m,
-  );
   const skillFiles = [
     "SKILL.md",
     "agents/openai.yaml",
@@ -111,7 +107,6 @@ try {
   const skillEnv = {
     ...env,
     HOME: skillHome,
-    CONVOREL_HOME: join(skillHome, "convorel state"),
   };
   const installArgs = [
     process.execPath,
@@ -126,7 +121,7 @@ try {
   const canonicalSkill = join(skillHome, ".agents/skills/chatgpt-review"),
     claudeSkill = join(skillHome, ".claude/skills/chatgpt-review");
   assert.equal(realpathSync(claudeSkill), realpathSync(canonicalSkill));
-  assert.equal(existsSync(skillEnv.CONVOREL_HOME), false);
+  assert.equal(existsSync(join(skillHome, ".local/share/convorel")), false);
   const installedSkillContents = new Map<string, string>();
   for (const file of skillFiles) {
     const expected = await Bun.file(

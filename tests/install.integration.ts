@@ -28,11 +28,16 @@ const home = join(temp, "home"),
   env: Record<string, string> = {
     ...childEnv(),
     HOME: home,
-    CONVOREL_HOME: state,
   };
-// A custom preferences directory also proves childEnv forwards it to a re-entered CLI.
+// A custom preferences directory proves selfExec forwards global path flags.
 const preferences = join(temp, "prefs");
-env.CONVOREL_CONFIG_HOME = preferences;
+const cliArgs = [
+  join(bin, "convorel"),
+  "--config-dir",
+  preferences,
+  "--state-dir",
+  state,
+];
 for (const directory of [home, workspace, shared]) mkdirSync(directory);
 // Prove uninstall never reaches conversation state, preferences or skills.
 mkdirSync(join(home, ".local/share/convorel"), { recursive: true });
@@ -89,11 +94,8 @@ try {
   await run(
     installer("--dist-dir", dist, "--prefix", prefix, "--bin-dir", bin),
   );
-  assert.equal(
-    (await run([join(bin, "convorel"), "--version"])).trim(),
-    pkg.version,
-  );
-  const reported = JSON.parse(await run([join(bin, "convorel"), "version"]));
+  assert.equal((await run([...cliArgs, "--version"])).trim(), pkg.version);
+  const reported = JSON.parse(await run([...cliArgs, "version"]));
   assert.equal(reported.version, pkg.version);
   assert.equal(reported.runtime, "standalone");
   assert.ok(
@@ -111,26 +113,19 @@ try {
   // Preferences resolve for the child the CLI re-enters, and for a standalone
   // MCP server that is given no roots of its own.
   await run([
-    join(bin, "convorel"),
+    ...cliArgs,
     "config",
     "set",
     "mcp.roots",
     JSON.stringify([shared]),
   ]);
   writeFileSync(join(shared, "proof.txt"), "installed artifact evidence\n");
-  await run([join(bin, "convorel"), "config", "set", "model", "6 Pro"]);
+  await run([...cliArgs, "config", "set", "model", "6 Pro"]);
   const initialized = JSON.parse(
-    await run([
-      join(bin, "convorel"),
-      "init",
-      "--workspace",
-      workspace,
-      "--cdp",
-      "9223",
-    ]),
+    await run([...cliArgs, "init", "--workspace", workspace, "--cdp", "9223"]),
   );
   assert.equal(initialized.modelPolicy, "6 Pro");
-  const doctor = await run([join(bin, "convorel"), "doctor"], {
+  const doctor = await run([...cliArgs, "doctor"], {
     failure: true,
   });
   const report = JSON.parse(doctor);
@@ -145,7 +140,7 @@ try {
   assert.equal(report.browser.status, "failed");
   assert.match(doctor, /CDP_UNAVAILABLE/);
 
-  const mcp = Bun.spawn([join(bin, "convorel"), "mcp", "serve"], {
+  const mcp = Bun.spawn([...cliArgs, "mcp", "serve"], {
     env,
     stdin: "pipe",
     stdout: "pipe",
@@ -156,6 +151,7 @@ try {
   );
   const hello = await mcp.stdout.getReader().read();
   mcp.kill("SIGKILL");
+  await mcp.exited;
   assert.match(
     new TextDecoder().decode(hello.value),
     /"serverInfo":\{"name":"convorel"/,
@@ -164,7 +160,7 @@ try {
 
   const skillOutput = JSON.parse(
     await run([
-      join(bin, "convorel"),
+      ...cliArgs,
       "skills",
       "install",
       "--agent",
@@ -186,13 +182,7 @@ try {
 
   const customSkills = join(temp, "custom skills");
   const custom = JSON.parse(
-    await run([
-      join(bin, "convorel"),
-      "skills",
-      "install",
-      "--dir",
-      customSkills,
-    ]),
+    await run([...cliArgs, "skills", "install", "--dir", customSkills]),
   );
   assert.deepEqual(custom.paths, [join(customSkills, "chatgpt-review")]);
   for (const file of custom.files)
@@ -201,10 +191,9 @@ try {
       readFileSync(join(source, "skills/chatgpt-review", file), "utf8"),
     );
   assert.match(
-    await run(
-      [join(bin, "convorel"), "skills", "install", "--dir", customSkills],
-      { failure: true },
-    ),
+    await run([...cliArgs, "skills", "install", "--dir", customSkills], {
+      failure: true,
+    }),
     /SKILL_ALREADY_EXISTS/,
   );
 
@@ -215,13 +204,14 @@ try {
     `#!/bin/sh\ntrap 'exit 0' TERM INT\nprintf 'standalone client ready\\n'\nwhile :; do sleep 1; done\n`,
     { mode: 0o700 },
   );
-  const serviceEnv = {
-    PATH: bin + ":" + env.PATH,
-    CONVOREL_TUNNEL_ID: "tunnel_" + "a".repeat(32),
-    CONVOREL_TUNNEL_API_KEY: "fixture-key",
-  };
+  const preferenceFile = join(preferences, "preferences.json");
+  const stored = JSON.parse(readFileSync(preferenceFile, "utf8"));
+  stored.values["tunnel.id"] = "tunnel_" + "a".repeat(32);
+  stored.values["tunnel.apiKey"] = "fixture-key";
+  writeFileSync(preferenceFile, JSON.stringify(stored));
+  const serviceEnv = { PATH: bin + ":" + env.PATH };
   const service = (action: string) =>
-    run([join(bin, "convorel"), action], { env: serviceEnv });
+    run([...cliArgs, action], { env: serviceEnv });
   try {
     const started = JSON.parse(await service("start"));
     assert.equal(started.running, true);

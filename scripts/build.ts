@@ -46,7 +46,7 @@ for (const target of targets) {
       "--compile-exec-argv=--no-env-file",
       "--asset=skills",
       "--define",
-      `process.env.CONVOREL_BUILD_COMMIT="${commit}"`,
+      `BUILD_COMMIT=${JSON.stringify(commit)}`,
       "src/cli.ts",
       "--outfile",
       join("dist", directory, "bin/convorel"),

@@ -1,3 +1,4 @@
+import { preference } from "./user-config.ts";
 import { randomUUID } from "node:crypto";
 import {
   State,
@@ -128,11 +129,11 @@ const positiveMs = (value: string | undefined, fallback: number) =>
   Number.isSafeInteger(Number(value)) && Number(value) > 0
     ? Number(value)
     : fallback;
-const taskWaitMs = () => positiveMs(process.env.CONVOREL_TASK_WAIT_MS, 15_000);
+const taskWaitMs = () => positiveMs(preference("locks.taskWaitMs"), 15_000);
 const REGISTRY_WAIT_MS = 10_000;
 const TABS_WAIT_MS = 15_000;
 /** Escape hatch for environments whose Chrome/CDP cannot drive parallel sessions. */
-const serialBrowser = () => process.env.CONVOREL_SERIAL === "1";
+const serialBrowser = () => preference("browser.serial") === "true";
 export class Conversation {
   constructor(
     public store: State,
@@ -150,7 +151,7 @@ export class Conversation {
     this.store.write("task-" + t.id, t);
   }
   /** Serializes one task's browser side effects on its own tab, releasing every
-   * session it opened. Different tasks proceed concurrently; CONVOREL_SERIAL=1
+   * session it opened. Different tasks proceed concurrently; config browser.serial=true
    * restores the single global browser lock for environments that cannot. */
   private exclusive<T>(id: string, fn: () => Promise<T>) {
     const name = serialBrowser() ? "operation" : taskLockName(id);

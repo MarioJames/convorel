@@ -1,14 +1,27 @@
 import { afterEach, expect, test } from "bun:test";
 import { releaseManifest, upgrade, versionCheck } from "../src/upgrade.ts";
 import pkg from "../package.json";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { setRuntimePaths } from "../src/paths.ts";
+import { writePreference } from "../src/user-config.ts";
 let server: ReturnType<typeof Bun.serve> | undefined;
-const previous = process.env.CONVOREL_RELEASE_BASE_URL;
+let fixtureRoot: string | undefined;
+let previousPaths: ReturnType<typeof setRuntimePaths> | undefined;
 afterEach(() => {
   server?.stop(true);
-  if (previous === undefined) delete process.env.CONVOREL_RELEASE_BASE_URL;
-  else process.env.CONVOREL_RELEASE_BASE_URL = previous;
+  if (previousPaths) setRuntimePaths(previousPaths);
+  previousPaths = undefined;
+  if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
+  fixtureRoot = undefined;
 });
 function fixture(manifest: string, observe?: (path: string) => void) {
+  server?.stop(true);
+  if (!fixtureRoot) {
+    fixtureRoot = mkdtempSync(join(tmpdir(), "convorel-release-unit-"));
+    previousPaths = setRuntimePaths({ configDir: fixtureRoot });
+  }
   server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -17,9 +30,7 @@ function fixture(manifest: string, observe?: (path: string) => void) {
       return new Response(manifest);
     },
   });
-  process.env.CONVOREL_RELEASE_BASE_URL = server.url
-    .toString()
-    .replace(/\/$/, "");
+  writePreference("release.baseUrl", server.url.toString());
 }
 const platform = `linux-${process.arch === "arm64" ? "arm64" : "x64"}`;
 const entry = (version: string) =>
@@ -27,8 +38,11 @@ const entry = (version: string) =>
 test("manifest resolves latest and normalizes explicit tags", async () => {
   const paths: string[] = [];
   fixture(entry("1.2.3-rc.1"), (path) => paths.push(path));
-  expect((await releaseManifest("1.2.3-rc.1")).version).toBe("1.2.3-rc.1");
-  expect(paths).toEqual(["/download/v1.2.3-rc.1/sha256sums.txt"]);
+  expect((await releaseManifest("v1.2.3-rc.1")).version).toBe("1.2.3-rc.1");
+  expect(paths).toHaveLength(1);
+  expect(paths[0]).toBe("/download/v1.2.3-rc.1/sha256sums.txt");
+  expect((await releaseManifest()).version).toBe("1.2.3-rc.1");
+  expect(paths[1]).toBe("/latest/download/sha256sums.txt");
 });
 test("versionCheck reports current release", async () => {
   fixture(entry(pkg.version));
@@ -40,7 +54,6 @@ test("rejects unsafe tags before fetching and mismatched or ambiguous manifests"
     "VERSION_INVALID",
   );
   await expect(releaseManifest("1.2.4")).rejects.toThrow("VERSION_MISMATCH");
-  server?.stop(true);
   fixture(entry("1.2.3") + entry("1.2.4"));
   await expect(releaseManifest()).rejects.toThrow("MANIFEST_INVALID");
 });

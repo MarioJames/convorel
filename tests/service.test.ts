@@ -25,14 +25,17 @@ test("CLI manages detached clients, concurrent starts, logs, restart and exact p
   const state = new State(join(temp, "state"));
   state.write("config", { version: 1, workspace, cdp: "http://127.0.0.1:1" });
   const registry = new State(join(temp, ".local/share/convorel-tunnels"));
+  const prefs = new State(join(temp, "prefs"));
+  const values = {
+    "tunnel.apiKey": "test-only",
+    "tunnel.id": id,
+    "mcp.roots": JSON.stringify([workspace]),
+  };
+  prefs.write("preferences", { version: 1, values });
+  const globals = ["--state-dir", state.root, "--config-dir", prefs.root];
   const env = {
     ...childEnv(),
     HOME: temp,
-    CONVOREL_HOME: state.root,
-    CONVOREL_CONFIG_HOME: join(temp, "prefs"),
-    CONVOREL_TUNNEL_API_KEY: "test-only",
-    CONVOREL_TUNNEL_ID: id,
-    CONVOREL_MCP_ROOTS: JSON.stringify([workspace]),
     PATH: bin + ":" + process.env.PATH,
   };
   const client = join(bin, "tunnel-client");
@@ -44,13 +47,27 @@ test("CLI manages detached clients, concurrent starts, logs, restart and exact p
   const liveClient = `#!${process.execPath} --no-env-file\nconst child=Bun.spawn([process.execPath,"--no-env-file",${JSON.stringify(descendant)}],{stdio:["ignore","ignore","ignore"]});child.unref();console.log("client ready"); const timer=setInterval(()=>{},1000); process.on("SIGTERM",()=>{console.log("client stopped");clearInterval(timer)});\n`;
   writeFileSync(client, liveClient);
   chmodSync(client, 0o700);
-  async function run(args: string[], expected = 0, extra = {}) {
-    const p = Bun.spawn([process.execPath, "--no-env-file", cli, ...args], {
-      cwd: temp,
-      env: { ...env, ...extra },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+  async function run(
+    args: string[],
+    expected = 0,
+    extra: { stateDir?: string } = {},
+  ) {
+    const p = Bun.spawn(
+      [
+        process.execPath,
+        "--no-env-file",
+        cli,
+        ...globals,
+        ...(extra.stateDir ? ["--state-dir", extra.stateDir] : []),
+        ...args,
+      ],
+      {
+        cwd: temp,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
     const [out, err, code] = await Promise.all([
       new Response(p.stdout).text(),
       new Response(p.stderr).text(),
@@ -85,7 +102,7 @@ test("CLI manages detached clients, concurrent starts, logs, restart and exact p
     expect(await run(["logs", "--lines", "1"])).toBe("client ready\n");
     expect(await run(["logs", "--lines", "0"], 1)).toContain("INVALID_LINES");
     follower = Bun.spawn(
-      [process.execPath, "--no-env-file", cli, "logs", "--follow"],
+      [process.execPath, "--no-env-file", cli, ...globals, "logs", "--follow"],
       { env, stdout: "pipe", stderr: "pipe" },
     );
     const reader = (follower.stdout as ReadableStream<Uint8Array>).getReader();
@@ -113,7 +130,7 @@ test("CLI manages detached clients, concurrent starts, logs, restart and exact p
     reader.releaseLock();
     expect(
       JSON.parse(
-        await run(["stop"], 0, { CONVOREL_HOME: join(temp, "missing-state") }),
+        await run(["stop"], 0, { stateDir: join(temp, "missing-state") }),
       ).stopped,
     ).toBe(true);
     expect(JSON.parse(await run(["stop"])).stopped).toBe(false);
@@ -133,9 +150,11 @@ test("CLI manages detached clients, concurrent starts, logs, restart and exact p
     );
     expect(await run(["start"], 1)).toContain("SERVICE_START_FAILED");
     expect(JSON.parse(await run(["status"])).running).toBe(false);
-    expect(await run(["start"], 1, { CONVOREL_TUNNEL_API_KEY: "" })).toContain(
-      "TUNNEL_CREDENTIAL_MISSING",
-    );
+    prefs.write("preferences", {
+      version: 1,
+      values: { ...values, "tunnel.apiKey": "" },
+    });
+    expect(await run(["start"], 1)).toContain("TUNNEL_CREDENTIAL_MISSING");
     expect(await run(["status", "--tunnel-id", "invalid"], 1)).toContain(
       "INVALID_TUNNEL_ID",
     );

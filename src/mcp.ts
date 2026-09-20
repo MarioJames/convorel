@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { homedir } from "node:os";
+import { stateDirectory } from "./paths.ts";
 import { join } from "node:path";
 import { WorkspaceAccess, fullPath } from "./workspace-access.ts";
 import { MAX_OUT } from "./workspace.ts";
@@ -12,9 +13,7 @@ import packageInfo from "../package.json";
 export function createServer(roots: string[]) {
   const access = new WorkspaceAccess(roots),
     server = new McpServer({ name: "convorel", version: packageInfo.version });
-  access.assertPrivate(
-    process.env.CONVOREL_HOME || join(homedir(), ".local/share/convorel"),
-  );
+  access.assertPrivate(stateDirectory());
   access.assertPrivate(join(homedir(), ".local/share/convorel-tunnels"));
   access.assertPrivate(preferenceDirectory());
   const add = (

@@ -1,53 +1,35 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { configDirectory } from "./paths.ts";
 import { join } from "node:path";
 import { State } from "./state.ts";
 import { fullPath } from "./workspace-access.ts";
 import { projectId } from "./chatgpt/organize.ts";
 
-/** The canonical name of every preference is the environment variable it shadows. */
+/** Config keys are independent of process environment. */
 export const settingKeys = [
-  "CONVOREL_TUNNEL_API_KEY",
-  "CONVOREL_TUNNEL_ID",
-  "CONVOREL_MCP_ROOTS",
-  "CONVOREL_MODEL",
-  "CONVOREL_PROJECT_URL",
-  "CONVOREL_PROJECT_NAME",
+  "tunnel.apiKey",
+  "tunnel.id",
+  "mcp.roots",
+  "model",
+  "project.url",
+  "project.name",
+  "browser.executable",
+  "browser.serial",
+  "locks.taskWaitMs",
+  "release.baseUrl",
 ] as const;
 export type SettingKey = (typeof settingKeys)[number];
-
-/** Never echoed by `config get`, `config list` or any log. */
-const secrets: SettingKey[] = ["CONVOREL_TUNNEL_API_KEY"];
-const aliases: Record<string, SettingKey> = {
-  "tunnel.apiKey": "CONVOREL_TUNNEL_API_KEY",
-  "tunnel.id": "CONVOREL_TUNNEL_ID",
-  "mcp.roots": "CONVOREL_MCP_ROOTS",
-  model: "CONVOREL_MODEL",
-  "project.url": "CONVOREL_PROJECT_URL",
-  "project.name": "CONVOREL_PROJECT_NAME",
-};
+const secrets: SettingKey[] = ["tunnel.apiKey"];
 const document = "preferences";
 
 export function resolveSetting(input: string): SettingKey {
-  const key =
-    aliases[input] ??
-    ((settingKeys as readonly string[]).includes(input)
-      ? (input as SettingKey)
-      : undefined);
-  if (!key)
+  if (!(settingKeys as readonly string[]).includes(input))
     throw new Error(
-      `UNKNOWN_SETTING: ${input}; known settings are ${[...settingKeys].join(", ")} (or ${Object.keys(aliases).join(", ")})`,
+      `UNKNOWN_SETTING: ${input}; known settings are ${settingKeys.join(", ")}`,
     );
-  return key;
+  return input as SettingKey;
 }
-
-// CONVOREL_CONFIG_HOME is forwarded to every child, because a re-entered CLI
-// resolves the preferences a running operation depends on.
-export function preferenceDirectory() {
-  return (
-    process.env.CONVOREL_CONFIG_HOME || join(homedir(), ".config/convorel")
-  );
-}
+export const preferenceDirectory = configDirectory;
 export function preferenceFile() {
   return join(preferenceDirectory(), document + ".json");
 }
@@ -87,10 +69,38 @@ function current(): Partial<Record<SettingKey, string>> {
 function validate(key: SettingKey, value: string) {
   if (/[\r\n\0]/.test(value))
     throw new Error(`INVALID_VALUE: ${key} must not contain a newline or NUL`);
-  if (key === "CONVOREL_TUNNEL_ID" && !/^tunnel_[a-f0-9]{32}$/.test(value))
+  if (key === "browser.serial" && !["true", "false"].includes(value))
+    throw new Error("INVALID_VALUE: browser.serial must be true or false");
+  if (
+    key === "locks.taskWaitMs" &&
+    (!Number.isSafeInteger(Number(value)) || Number(value) <= 0)
+  )
+    throw new Error(
+      "INVALID_VALUE: locks.taskWaitMs must be a positive integer",
+    );
+  if (key === "browser.executable") fullPath(value);
+  if (key === "release.baseUrl") {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error("INVALID_VALUE: release.baseUrl must be an HTTP(S) URL");
+    }
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    )
+      throw new Error(
+        "INVALID_VALUE: release.baseUrl must be an HTTP(S) URL without credentials, query or fragment",
+      );
+  }
+  if (key === "tunnel.id" && !/^tunnel_[a-f0-9]{32}$/.test(value))
     throw new Error("INVALID_TUNNEL_ID: expected tunnel_ plus 32 hex digits");
-  if (key === "CONVOREL_PROJECT_URL") projectId(value);
-  if (key === "CONVOREL_MCP_ROOTS") {
+  if (key === "project.url") projectId(value);
+  if (key === "mcp.roots") {
     let roots: unknown;
     try {
       roots = JSON.parse(value);
@@ -121,22 +131,12 @@ export function preference(key: SettingKey): string | undefined {
 
 /** An empty value removes the preference, since the file has no blank state. */
 export function writePreference(key: SettingKey, value: string) {
+  if (key === "browser.executable" && value) value = fullPath(value);
   const all = { ...current(), [key]: value };
   if (value === "") delete all[key];
   else validate(key, value);
   publish(all);
   return { key, ...mask(key, all[key]) };
-}
-
-/** Validate every pair, then publish in one write so a bad value stores nothing. */
-export function mergePreferences(entries: [SettingKey, string][]) {
-  const all = { ...current() };
-  for (const [key, value] of entries) {
-    validate(key, value);
-    all[key] = value;
-  }
-  publish(all);
-  return entries.map(([key]) => ({ key, ...mask(key, all[key]) }));
 }
 
 function publish(values: Partial<Record<SettingKey, string>>) {

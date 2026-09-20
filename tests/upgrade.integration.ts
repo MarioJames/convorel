@@ -50,10 +50,23 @@ export async function verifyUpgrade(
       return new Response("missing", { status: 404 });
     },
   });
-  const env = {
-    CONVOREL_RELEASE_BASE_URL: server.url.toString().replace(/\/$/, ""),
-  };
+  const config = join(fixture, "config");
+  mkdirSync(config);
+  writeFileSync(
+    join(config, "preferences.json"),
+    JSON.stringify({
+      version: 1,
+      values: { "release.baseUrl": server.url.toString() },
+    }),
+  );
   const cli = join(bin, "convorel");
+  const cliArgs = [
+    cli,
+    "--config-dir",
+    config,
+    "--state-dir",
+    join(fixture, "state"),
+  ];
   const install = () =>
     run([
       "bash",
@@ -68,15 +81,14 @@ export async function verifyUpgrade(
   const original = readlinkSync(cli);
   const before = readdirSync(join(prefix, "versions"));
   try {
-    const check = JSON.parse(await run([cli, "version", "--check"], { env }));
+    const check = JSON.parse(await run([...cliArgs, "version", "--check"]));
     assert.equal(check.latest, pkg.version);
     assert.equal(check.upToDate, true);
-    const noop = JSON.parse(await run([cli, "upgrade"], { env }));
+    const noop = JSON.parse(await run([...cliArgs, "upgrade"]));
     assert.equal(noop.upgraded, false);
     assert.equal(readlinkSync(cli), original);
     assert.match(
-      await run([cli, "upgrade", "--version", "../../escape"], {
-        env,
+      await run([...cliArgs, "upgrade", "--version", "../../escape"], {
         failure: true,
       }),
       /VERSION_INVALID/,
@@ -87,15 +99,19 @@ export async function verifyUpgrade(
           process.execPath,
           "--no-env-file",
           join(source, "src/cli.ts"),
+          "--config-dir",
+          config,
+          "--state-dir",
+          join(fixture, "state"),
           "upgrade",
         ],
-        { env, failure: true },
+        { failure: true },
       ),
       /git pull/,
     );
 
     const upgraded = JSON.parse(
-      await run([cli, "upgrade", "--version", `v${pkg.version}`], { env }),
+      await run([...cliArgs, "upgrade", "--version", `v${pkg.version}`]),
     );
     assert.equal(upgraded.upgraded, true);
     assert.equal(upgraded.to, pkg.version);
@@ -112,18 +128,16 @@ export async function verifyUpgrade(
     const active = readlinkSync(cli);
     manifest = checksums.replace(/^[a-f0-9]{64}/m, "0".repeat(64));
     assert.match(
-      await run([cli, "upgrade", "--version", pkg.version], {
-        env,
+      await run([...cliArgs, "upgrade", "--version", pkg.version], {
         failure: true,
       }),
       /CHECKSUM_MISMATCH/,
     );
     assert.equal(readlinkSync(cli), active);
-    assert.equal((await run([cli, "--version"])).trim(), pkg.version);
+    assert.equal((await run([...cliArgs, "--version"])).trim(), pkg.version);
     manifest = checksums;
     assert.match(
-      await run([cli, "upgrade", "--version", "99.0.0"], {
-        env,
+      await run([...cliArgs, "upgrade", "--version", "99.0.0"], {
         failure: true,
       }),
       /VERSION_MISMATCH/,
@@ -136,7 +150,7 @@ export async function verifyUpgrade(
       JSON.stringify({ version: 1, binDir: "relative" }),
     );
     assert.match(
-      await run([cli, "upgrade"], { env, failure: true }),
+      await run([...cliArgs, "upgrade"], { failure: true }),
       /UPGRADE_LAYOUT_UNKNOWN/,
     );
     writeFileSync(layoutFile, layout);
@@ -145,8 +159,7 @@ export async function verifyUpgrade(
     rmSync(controller);
     symlinkSync("/bin/true", controller);
     assert.match(
-      await run([cli, "upgrade", "--version", pkg.version], {
-        env,
+      await run([...cliArgs, "upgrade", "--version", pkg.version], {
         failure: true,
       }),
       /LINK_NOT_OWNED/,
@@ -177,17 +190,15 @@ export async function verifyUpgrade(
     manifest = `${createHash("sha256")
       .update(readFileSync(join(fixture, directory + ".tar.gz")))
       .digest("hex")}  ${directory}.tar.gz\n`;
-    const available = JSON.parse(
-      await run([cli, "version", "--check"], { env }),
-    );
+    const available = JSON.parse(await run([...cliArgs, "version", "--check"]));
     assert.equal(available.latest, next);
     assert.equal(available.upToDate, false);
-    const latest = JSON.parse(await run([cli, "upgrade"], { env }));
+    const latest = JSON.parse(await run([...cliArgs, "upgrade"]));
     assert.equal(latest.to, next);
-    assert.equal((await run([cli, "--version"])).trim(), next);
+    assert.equal((await run([...cliArgs, "--version"])).trim(), next);
     assert.ok(existsSync(original) && existsSync(active));
     await install();
-    assert.equal((await run([cli, "--version"])).trim(), pkg.version);
+    assert.equal((await run([...cliArgs, "--version"])).trim(), pkg.version);
     assert.ok(existsSync(original) && existsSync(active));
     assert.equal(
       readdirSync(prefix).some(
@@ -214,8 +225,6 @@ if (import.meta.main) {
   const env = {
     ...childEnv(),
     HOME: home,
-    CONVOREL_HOME: join(root, "state"),
-    CONVOREL_CONFIG_HOME: join(root, "config"),
   };
   const run: Run = async (args, options = {}) => {
     const child = Bun.spawn(args, {

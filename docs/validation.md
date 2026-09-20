@@ -1,5 +1,13 @@
 # Validation
 
+## 当前验证：配置文件作为唯一配置来源
+
+已移除 Convorel 运行时环境变量覆盖、安装目录 dotenv 加载及 import-env 命令，配置键统一为 model、project.url、tunnel.id 等语义名称。私有目录改由命令前的 --config-dir/--state-dir 指定，并通过 selfExec 显式传给后台与 MCP 子进程。系统 PATH/HOME、CI 的 GITHUB_SHA 及第三方进程协议所需变量仍按各自用途使用；敏感文件过滤规则保留。
+
+本次 TypeScript 与全部 202 个测试通过；删除的是已废弃配置入口的专属测试，配置验证、密钥遮蔽、会话快照及进程行为覆盖保留。test:package、test:upgrade 和 test:install 均通过，包括 standalone 的自定义配置/状态目录、后台生命周期、MCP 重入、升级失败保护及持久数据保留。技能结构验证、39 个文档 shell 示例语法检查均通过。验收使用临时目录和本地 release fixture，测试进程及目录按归属清理。
+
+下文保留历史版本的验证记录，其中旧环境配置方式与命令名称不代表当前接口；当前使用方式见 usage.md。
+
 ## 2026-09-20：独立可执行文件、偏好文件与发布流水线
 
 `bun run dist` 用 `bun build --compile` 生成 `convorel-0.1.0-linux-x64.tar.gz` 与 `linux-arm64`（x64 主机交叉编译）及 `sha256sums.txt`，每个包含 `bin/convorel`、bun.lock 固定的 `agent-browser` 0.34.0 原生二进制和许可证文件；编译时关闭 dotenv 自动加载并内置 `--no-env-file`。`bun run test:install` 在临时 HOME 下通过：构建→`install.sh --dist-dir` 离线安装→`--version`/`version` 报告 standalone→`config set` 的 `mcp.roots`/`model` 被重入的 MCP 子进程与 `init` 读回→`doctor` 对不可达 CDP 报告 failed 而非崩溃→安装的技能文件与源码逐字节一致→篡改 `sha256sums.txt` 被 `CHECKSUM_MISMATCH` 拒绝→重装与卸载保留状态、偏好和技能。`bun run check` 199 项测试与 `format:check` 通过。
