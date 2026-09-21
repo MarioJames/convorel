@@ -720,7 +720,8 @@ export class Archive {
       ),
       versions: this.all(
         `select version_id, run_id, role, message_key, format, content_hash,
-          source, captured_at, superseded_at, supersedes, length(text) as bytes
+          source, captured_at, superseded_at, supersedes,
+          length(cast(text as blob)) as bytes
         from content_version where task_id = ?
         ${options.runId ? "and run_id = ?" : ""} order by id`,
         ...args,
@@ -738,27 +739,41 @@ export class Archive {
       };
     const remoteId = remoteConversationId(task);
     const stored = this.all(
-      `select content_fingerprint, capture_status, task_file_hash
-       from run_selection where task_id = ?`,
+      `select s.run_id, s.content_fingerprint, s.capture_status,
+         pu.content_hash as prompt_hash, rv.content_hash as markdown_hash,
+         dv.content_hash as rendered_hash
+       from run_selection s
+         left join content_version pu on pu.version_id = s.prompt_version_id
+         left join content_version rv on rv.version_id = s.reply_version_id
+         left join content_version dv on dv.version_id = s.rendered_version_id
+       where s.task_id = ?`,
       task.id,
     );
     const missing: string[] = [];
     const markdownGaps: string[] = [];
+    const promptGaps: string[] = [];
     for (const run of task.runs) {
       const row = stored.find(
         (item: any) =>
+          item.run_id === run.id &&
           item.content_fingerprint ===
-          runContentFingerprint(task.id, remoteId, run),
+            runContentFingerprint(task.id, remoteId, run) &&
+          item.prompt_hash === (run.prompt ? sha(run.prompt) : null) &&
+          item.markdown_hash ===
+            (run.reply?.markdown ? sha(run.reply.markdown) : null) &&
+          item.rendered_hash === (run.reply ? sha(run.reply.text) : null),
       );
       if (!row) missing.push(run.id);
       else if (row.capture_status === "pending") markdownGaps.push(run.id);
+      if (!run.prompt && run.userMessageId) promptGaps.push(run.id);
     }
     return {
-      state: missing.length
-        ? "incomplete"
-        : markdownGaps.length
-          ? "markdown-incomplete"
-          : "current",
+      state:
+        missing.length || promptGaps.length
+          ? "incomplete"
+          : markdownGaps.length
+            ? "markdown-incomplete"
+            : "current",
       scope: "convorel-recorded-runs",
       remoteHistory: "unknown",
       sourceReadable: !!taskFileHash,
@@ -766,6 +781,7 @@ export class Archive {
       archivedRuns: stored.length,
       missingRuns: missing,
       markdownMissingRuns: markdownGaps,
+      promptMissingRuns: promptGaps,
     };
   }
   /** One archived body by its immutable version id, selected or superseded. A citation

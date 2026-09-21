@@ -62,7 +62,7 @@ Convorel 把 ChatGPT 接入本地开发流程。让 Codex 或 Claude Code 带着
 curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-脚本会校验发布的 `sha256sums.txt`，安装到 `~/.local/lib/convorel`，并在 `~/.local/bin` 链接 `convorel`；不使用 sudo。安装选项仅通过参数传入：`--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`。卸载只移除可执行文件，保留会话状态、偏好和已安装技能。
+安装与升级需要 util-linux 提供的 `flock`。脚本会校验发布的 `sha256sums.txt`，安装到 `~/.local/lib/convorel`，并在 `~/.local/bin` 链接 `convorel`；不使用 sudo。安装选项仅通过参数传入：`--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`。卸载只移除可执行文件，保留会话状态、偏好和已安装技能。
 
 安装后可用 `convorel version --check` 检查最新版、`convorel upgrade` 升级，或加 `--version vX.Y.Z` 指定版本；旧版本与用户数据保留。
 

@@ -84,21 +84,27 @@ export function copyMarkdownScript(messageId: string) {
   }
   if (!pending.length) return { ok: false, reason: 'COPY_NOT_CAPTURED' };
   const readEntry = async entry => {
-    if (entry.kind === 'text') return entry.text;
+    if (entry.kind === 'text') return [entry.text];
     const found = [];
     for (const item of entry.items || [])
       for (const type of ['text/markdown', 'text/plain']) {
         if (!item.types || !item.types.includes(type)) continue;
         const text = await (await item.getType(type)).text();
-        if (text && text.trim()) found.push(text);
+        if (text && text.trim()) {
+          found.push(text);
+          // MIME types describe alternative representations of this item. Prefer
+          // Markdown, but retain every item's body for attribution checks below.
+          break;
+        }
       }
-    return found[0] || null;
+    return found;
   };
   const candidates = [];
   for (const entry of pending) {
-    const text = await timed(() => readEntry(entry), 'COPY_PAYLOAD_TIMEOUT');
-    if (text && text.failure) return { ok: false, reason: text.failure };
-    if (typeof text === 'string' && text.trim()) candidates.push(text);
+    const texts = await timed(() => readEntry(entry), 'COPY_PAYLOAD_TIMEOUT');
+    if (texts && texts.failure) return { ok: false, reason: texts.failure };
+    for (const text of texts)
+      if (typeof text === 'string' && text.trim()) candidates.push(text);
   }
   if (!candidates.length) return { ok: false, reason: 'COPY_PAYLOAD_EMPTY' };
   const distinct = Array.from(new Set(candidates));

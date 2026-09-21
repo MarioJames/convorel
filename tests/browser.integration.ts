@@ -18,6 +18,7 @@ import { classify } from "../src/chatgpt/page.ts";
 import { Conversation, type Task } from "../src/conversation.ts";
 import { State } from "../src/state.ts";
 import { sha } from "../src/workspace.ts";
+import { copyMarkdownScript } from "../src/chatgpt/copy.ts";
 
 const chromePath = process.argv[process.argv.indexOf("--chrome") + 1];
 if (!process.argv.includes("--chrome") || !chromePath)
@@ -208,6 +209,46 @@ try {
     [],
     "fixture must not produce browser page errors",
   );
+  // file: is a secure context for the real Clipboard API, unlike data: fixtures.
+  const copyTab = await tabs(
+    "new",
+    new URL("./fixtures/copy-response.html", import.meta.url).href,
+  );
+  const copyPage = await controller.page(copyTab.targetId);
+  await copyPage.run(
+    "eval",
+    "window.originalWrite = navigator.clipboard.write; window.originalWriteText = navigator.clipboard.writeText",
+  );
+  const copied = await copyPage.run("eval", copyMarkdownScript("copy-fixture"));
+  assert.equal(copied.result.ok, true);
+  assert.equal(copied.result.text, "## Reply\n\n**First answer**");
+  await copyPage.run("eval", "window.captureMode = 'items'");
+  const ambiguous = await copyPage.run(
+    "eval",
+    copyMarkdownScript("copy-fixture"),
+  );
+  assert.equal(
+    ambiguous.result.reason,
+    "COPY_AMBIGUOUS",
+    "multiple clipboard items must not silently select the first answer",
+  );
+  await copyPage.run("eval", "window.captureMode = 'rewrite'");
+  assert.equal(
+    (await copyPage.run("eval", copyMarkdownScript("copy-fixture"))).result
+      .reason,
+    "TARGET_CHANGED",
+  );
+  assert.equal(
+    (
+      await copyPage.run(
+        "eval",
+        "navigator.clipboard.write === window.originalWrite && navigator.clipboard.writeText === window.originalWriteText",
+      )
+    ).result,
+    true,
+  );
+  assert.deepEqual((await copyPage.run("errors")).errors, []);
+  await tabs("close", copyTab.targetId);
   // Reduced from the captured failure: ordinary paragraph + Retry, without role=alert
   // or a guaranteed data-message-author-role wrapper on the failed response.
   const failureHtml = readFileSync(
@@ -494,6 +535,7 @@ try {
         "localized structural submit",
         "stop button exclusion",
         "send obstruction",
+        "Markdown copy, clipboard ambiguity, target rewrite and clipboard restoration",
         "current and historical generation errors",
         "generation recovery without resend",
         "completed followup restores without touching another task's target",

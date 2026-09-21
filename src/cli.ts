@@ -82,7 +82,7 @@ conversation content --version UUID [--from PATH]
 conversation export --directory PATH
 doctor --local true
 The archive is a private SQLite store at STATE_DIR/conversations.db: prompts, copied Markdown,
-content versions and gaps. history/search/content/export --from PATH reads an exported archive
+content versions and gaps. history/search/content --from PATH reads an exported archive
 or a renamed snapshot with no config, workspace or browser. Search uses FTS5 trigrams, or a
 literal scan below three characters, and reports only the versions a run currently selects:
 its prompt plus the captured Markdown, or the rendered copy until Markdown exists.
@@ -294,7 +294,7 @@ export async function main(args = process.argv.slice(2)) {
         unreadable: scanned.errors.length > 0,
         summary,
       });
-      return archived.some((item) => item.status === "failed")
+      return opened.notice || archived.some((item) => item.status === "failed")
         ? 1
         : archived.some((item) => item.status === "partial") ||
             scanned.errors.length > 0
@@ -419,9 +419,10 @@ export async function main(args = process.argv.slice(2)) {
     opened.archive?.close();
     // A store that fails its own structure or index check is broken rather than merely
     // incomplete, so it exits 1; 2 means the local record is readable but incomplete.
-    return integrity &&
-      (integrity.integrity_check !== "ok" ||
-        integrity.fts_integrity_check !== "ok")
+    return opened.notice?.status === "failed" ||
+      (integrity &&
+        (integrity.integrity_check !== "ok" ||
+          integrity.fts_integrity_check !== "ok"))
       ? 1
       : scanned.errors.length || opened.notice
         ? 2

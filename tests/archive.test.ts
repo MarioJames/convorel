@@ -108,6 +108,9 @@ test("a regenerated reply appends an immutable version and keeps the old one cit
       (v: any) => v.role === "assistant" && v.format === "rendered-text",
     ).length,
   ).toBe(2);
+  expect(after.versions.find((v: any) => v.version_id === before).bytes).toBe(
+    Buffer.byteLength("## 裁定\n\n**推荐 A**"),
+  );
   a.close();
 });
 
@@ -245,6 +248,47 @@ test("coverage separates current, markdown-incomplete, incomplete and unknown", 
     reason: "task_document_unavailable",
   });
   a.close();
+});
+
+test("coverage detects unpublished Markdown and missing attached prompts", () => {
+  const a = new Archive(root);
+  try {
+    const task = taskDoc();
+    task.runs[0].reply.markdown = "[A](https://example.com/old)";
+    a.publish(task, "fh-1");
+    task.runs[0].reply.markdown = "[A](https://example.com/new)";
+    expect(a.coverage(task, "fh-2")).toMatchObject({
+      state: "incomplete",
+      missingRuns: ["r1"],
+    });
+    a.publish(task, "fh-2");
+    expect(a.coverage(task, "fh-2").state).toBe("current");
+    task.runs[0].requestId = "import";
+    delete task.runs[0].prompt;
+    delete task.runs[0].promptHash;
+    expect(a.publish(task, "fh-3").gaps).toEqual([
+      { runId: "r1", code: "prompt_not_captured" },
+    ]);
+    expect(a.coverage(task, "fh-3")).toMatchObject({
+      state: "incomplete",
+      promptMissingRuns: ["r1"],
+    });
+  } finally {
+    a.close();
+  }
+});
+
+test("archive and local doctor fail when the store cannot be opened", async () => {
+  mkdirSync(root);
+  const foreign = new Database(join(root, "conversations.db"));
+  foreign.exec("create table other_app (value text)");
+  foreign.close();
+  const archived = await cli(["conversation", "archive", "--all", "true"]);
+  expect(JSON.parse(archived.out).summary.status).toBe("failed");
+  expect(archived.code).toBe(1);
+  const doctor = await cli(["doctor", "--local", "true"]);
+  expect(JSON.parse(doctor.out).archive.status).toBe("failed");
+  expect(doctor.code).toBe(1);
 });
 
 test("an exported snapshot stands alone and refuses overwrite or impersonation", () => {
@@ -595,6 +639,40 @@ test("a failed capture records a gap and never becomes a run failure", async () 
   const opened = openArchive(join(base, "failed"));
   expect(opened.archive?.coverage(task, "x").state).toBe("markdown-incomplete");
   opened.archive?.close();
+});
+
+test("failed recapture preserves prior Markdown but reports this attempt's gap", async () => {
+  const { store, browser, conversation } = prepared(root, "T1", pageFor());
+  browser.copyResult = { ok: true, text: "## Original" };
+  await conversation.capture("review");
+  browser.copyResult = { ok: false, reason: "COPY_BUTTON_MISSING" };
+  expect(await conversation.capture("review", "r1")).toMatchObject({
+    captured: [],
+    unchanged: [],
+    gaps: [{ runId: "r1", code: "COPY_BUTTON_MISSING" }],
+  });
+  expect(store.read<any>("task-review").runs[0].reply.markdown).toBe(
+    "## Original",
+  );
+  browser.copyResult = { ok: true, text: "## Original" };
+  expect(await conversation.capture("review", "r1")).toMatchObject({
+    unchanged: ["r1"],
+    gaps: [],
+  });
+  await expect(conversation.capture("review", "missing-run")).rejects.toThrow(
+    "RUN_NOT_FOUND",
+  );
+});
+
+test("recapture requires a visible target even when Markdown was captured before", async () => {
+  const { store, conversation } = prepared(root, "T1", pageFor("Changed"));
+  const task = store.read<any>("task-review");
+  task.runs[0].reply.markdown = "## Original";
+  store.write("task-review", task);
+  expect(await conversation.capture("review", "r1")).toMatchObject({
+    unchanged: [],
+    gaps: [{ runId: "r1", code: "TARGET_NOT_RENDERED" }],
+  });
 });
 
 test("a rewritten page reply is not attributed to the stored run", async () => {

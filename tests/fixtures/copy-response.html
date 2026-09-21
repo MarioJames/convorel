@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>Markdown capture acceptance</title>
+  <main>
+    <h1>Markdown capture acceptance</h1>
+    <article data-testid="conversation-turn-1" data-turn="assistant">
+      <div data-message-author-role="assistant" data-message-id="copy-fixture">
+        <div class="markdown">
+          <h2>Reply</h2>
+          <p>First answer</p>
+        </div>
+      </div>
+      <button data-testid="copy-turn-action-button" aria-label="Copy response">
+        Copy response
+      </button>
+    </article>
+    <p id="status">Ready</p>
+  </main>
+  <script>
+    window.captureMode = "text";
+    document.querySelector("button").onclick = async () => {
+      const source = "## Reply\n\n**First answer**";
+      if (window.captureMode === "items") {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            "text/plain": new Blob([source], { type: "text/plain" }),
+          }),
+          new ClipboardItem({
+            "text/plain": new Blob(["Unrelated answer"], {
+              type: "text/plain",
+            }),
+          }),
+        ]);
+      } else {
+        await navigator.clipboard.writeText(source);
+        if (window.captureMode === "rewrite") {
+          document.querySelector(".markdown p").textContent = "Other answer";
+        }
+      }
+      document.querySelector("#status").textContent = "Copy handled";
+    };
+  </script>
+</html>

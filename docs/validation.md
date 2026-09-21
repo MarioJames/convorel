@@ -1,5 +1,28 @@
 # 验证记录
 
+## 2026-09-21：0.2.0 版本验收修复
+
+验收范围为 `v0.1.0..v0.2.0`（发布基线 `756a4de`）及本轮修复，使用 Linux x64、Bun 1.4.2、Node 24.21.0、agent-browser 0.34.0 与工具缓存中的 Chrome for Testing 151.0.7922.34（Chromium revision 1234）。所有测试使用隔离配置、临时任务和临时安装目录。
+
+本轮复现并修正：
+
+- 同一渲染正文的 Markdown 更新尚未归档时，coverage 仍报 `current`；attach 任务缺少 prompt 时也被报为完整。现在比对所选正文哈希，并报告 `promptMissingRuns`。
+- 再次捕获已有 Markdown 的轮次，即使 Copy 失败或目标已变，仍因旧正文存在而返回 `unchanged`。现在按本次捕获结果报告 gap，保留旧正文；显式选择不存在或未完成的轮次会拒绝执行。
+- `Clipboard.write` 一次提供不同正文的多个 item 时，只取第一份内容。真实 Chromium 复现后，改为核对全部 item，歧义返回 `COPY_AMBIGUOUS`，单个 item 仍优先 Markdown 表示。
+- 空任务目录中的归档库打不开时，`archive --all true` 退出 0，`doctor --local true` 退出 2。现在这两条失败路径均退出 1。
+- `history.versions[].bytes` 把 Unicode 字符数当字节数；现在返回 UTF-8 字节数，与 `content --version` 一致。
+- 帮助和文档错误宣称 `export --from` 可用；已与实际 `search`/`history`/`content --from` 接口对齐。
+- supervisor 意外退出后，客户端 leader 响应 TERM 退出、子进程忽略 TERM，原 stop 会过早成功。现在停止前记录并复核组成员身份，等待这些进程退出，必要时升级到 KILL，未知归属报错。
+- 安装器被 SIGKILL 后，目录锁永久残留，重试一直报 `INSTALL_BUSY`。改为内核管理的 `flock`，进程退出自动释放，安装、升级、卸载共用安装目录旁的稳定锁文件，卸载不删除锁文件，避免 inode 切换竞态；缺少 util-linux 的 `flock` 时明确报错。
+
+最终 `bun run check` 通过 TypeScript 与 228 项测试，`format:check` 和 `bash -n install.sh` 通过。`test:package` 与 `test:install` 通过，后者包含独立二进制升级、失败保留、后台生命周期、技能安装及新增的安装互斥、强制中断重试、并发卸载拒绝和 flock 缺失反馈。重新编译的 Linux x64 二进制另行通过归档导入、doctor、中文 trigram 检索、UTF-8 字节数、导出后改名，以及删除临时源状态后通过快照读取正文和短词检索。未改数据库 schema 或迁移记录。
+
+浏览器验收的实际 `APP_URL` 为 `file:///home/mocha/opensource/convorel/tests/fixtures/copy-response.html`。通过 browser-harness 准备并在同一任务 session/profile 内交互采证：Markdown 原文保留、多个不同剪贴板 item 拒绝、复制中正文被替换拒绝、Clipboard 方法恢复均通过；页面异常、console 消息、XHR/fetch 与 4xx/5xx 均为 0。有效证据位于 `.browser-harness/evidence/20260921T175842/`，已核对 DOM origin 和截图；较早的 `20260921T175812` 因 profile 不一致失效，不计入验收。
+
+补充并发烟测使用 16 个独立进程同时初始化同一临时归档，均成功且 SQLite/FTS 完整性检查通过。它只覆盖初始化与完整性检查，不代表持续并发导入压测。
+
+本轮没有向真实 ChatGPT 账号发送测试消息；本地夹具证明浏览器执行与错误处理，不宣称覆盖线上站点当前的模型选择、项目组织或 Copy DOM 兼容性。也未执行 GitHub 发布、公共下载验签或 arm64 原生运行。测试浏览器和 CDP 已关闭，未启动 dev server；隔离测试数据可丢弃，既有开发数据库、会话、Chrome 登录态和安装配置保留不动。
+
 ## 当前验证：SQLite 内容归档与 Copy 捕获 Markdown
 
 环境：Linux x64（WSL2 6.6.87.2）、Bun 1.4.2、Node 24.21.0、`bun:sqlite` SQLite 3.53.2（含 `ENABLE_FTS5`）、已登录的有头 Google Chrome + loopback CDP、agent-browser 0.34.0。

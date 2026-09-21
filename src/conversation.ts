@@ -968,10 +968,12 @@ export class Conversation {
    */
   private async attemptCapture(t: Task, b: any, r: Run) {
     try {
-      if (!r.reply?.id || r.state !== "complete") return;
+      if (!r.reply?.id || r.state !== "complete")
+        return { ok: false, reason: "RESULT_NOT_COMPLETE" };
       const p: PageState = await b.read();
       this.guard(t);
-      if (!this.captureTargetValid(t, p, r)) return;
+      if (!this.captureTargetValid(t, p, r))
+        return { ok: false, reason: "TARGET_NOT_RENDERED" };
       const observed = (await b.run("eval", copyMarkdownScript(r.reply.id)))
         .result;
       this.guard(t);
@@ -987,16 +989,14 @@ export class Conversation {
       } else
         r.reply.markdownError = String(observed?.reason ?? "COPY_NOT_CAPTURED");
       this.save(t);
+      return r.reply.markdownError
+        ? { ok: false, reason: r.reply.markdownError }
+        : { ok: true };
     } catch {
       // A stale attempt or a page failure leaves the durable reply intact and unarchived.
+      return { ok: false, reason: "CAPTURE_FAILED" };
     }
   }
-  /**
-   * The copy control relabels itself for about a second and a half after a click, which
-   * reads back as a turn that is no longer final. That window is waited out and the exact
-   * same turn is verified again, so the capture cannot be attributed to a replaced reply
-   * and cannot leave the page mid-click for the checks that follow.
-   */
   /**
    * Proves the capture belongs to this run's reply, then waits out the page's own
    * relabel. Clicking the copy control makes it report a different action for a second
@@ -1049,6 +1049,12 @@ export class Conversation {
     return this.exclusive(id, async () => {
       const t = this.get(id);
       this.checkWorkspace(t, workspace);
+      if (run) {
+        const selected = t.runs.find((r) => r.id === run);
+        if (!selected) throw new Error("RUN_NOT_FOUND");
+        if (selected.state !== "complete" || !selected.reply)
+          throw new Error("RESULT_NOT_COMPLETE");
+      }
       const targets = t.runs.filter(
         (r) =>
           r.state === "complete" &&
@@ -1063,14 +1069,16 @@ export class Conversation {
         const b = await this.page(t);
         for (const r of targets) {
           const before = r.reply?.markdown;
-          await this.attemptCapture(t, b, r);
+          const attempt = await this.attemptCapture(t, b, r);
           const after = r.reply?.markdown;
-          if (after && after !== before) captured.push(r.id);
+          if (!attempt.ok)
+            gaps.push({
+              runId: r.id,
+              code: attempt.reason ?? "CAPTURE_FAILED",
+            });
+          else if (after && after !== before) captured.push(r.id);
           // Taking the same bytes again proves the capture path works; it is not a gap.
           else if (after) unchanged.push(r.id);
-          else if (r.reply?.markdownError)
-            gaps.push({ runId: r.id, code: r.reply.markdownError });
-          else gaps.push({ runId: r.id, code: "TARGET_NOT_RENDERED" });
         }
       }
       return {

@@ -7,6 +7,7 @@ import {
   existsSync,
   openSync,
   readFileSync,
+  readdirSync,
   renameSync,
   statSync,
 } from "node:fs";
@@ -43,6 +44,78 @@ function alive(entry?: { pid?: number; identity?: string } | null) {
     if (e.code !== "ENOENT") throw e;
     return false;
   }
+}
+
+type ProcessOwner = { pid: number; identity: string };
+
+/** Capture ownership before TERM can remove the session/group leader. */
+function orphanGroup(leader: ProcessOwner) {
+  const unverified = () =>
+    new Error(
+      "SERVICE_STOP_UNVERIFIED: cannot prove ownership of the remaining client processes",
+    );
+  const inspect = (pid: number) => {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      const identity = processIdentity(pid);
+      if (identity.split(":")[1] !== fields[19]) throw unverified();
+      return {
+        pid,
+        identity,
+        live: !["Z", "X"].includes(fields[0]),
+        group: Number(fields[2]),
+        session: Number(fields[3]),
+      };
+    } catch (error: any) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  };
+  const inGroup = (p: NonNullable<ReturnType<typeof inspect>>) =>
+    p.group === leader.pid && p.session === leader.pid;
+  const scan = () =>
+    readdirSync("/proc")
+      .filter((name) => /^[0-9]+$/.test(name))
+      .map((name) => inspect(Number(name)))
+      .filter((p): p is NonNullable<typeof p> => !!p?.live && inGroup(p));
+  const before = inspect(leader.pid);
+  if (!before?.live || before.identity !== leader.identity || !inGroup(before))
+    throw unverified();
+  const members = scan();
+  if (
+    !alive(leader) ||
+    !members.some((p) => p.pid === leader.pid && p.identity === leader.identity)
+  )
+    throw unverified();
+  const owned = new Map(members.map((p) => [p.pid, p.identity]));
+  const remaining = () => {
+    // Never infer ownership from an old PGID after its leader has exited. A
+    // new member (or recycled PID/PGID) makes the result uncertain, not stopped.
+    const current = scan();
+    if (current.some((p) => owned.get(p.pid) !== p.identity))
+      throw unverified();
+    for (const member of members) {
+      const p = inspect(member.pid);
+      if (p?.live && p.identity === member.identity && !inGroup(p))
+        throw unverified();
+    }
+    return current;
+  };
+  return {
+    alive: () => remaining().length > 0,
+    signal(signal: NodeJS.Signals) {
+      for (const member of remaining()) {
+        const current = inspect(member.pid);
+        if (!current?.live || current.identity !== member.identity) continue;
+        if (!inGroup(current)) throw unverified();
+        try {
+          process.kill(member.pid, signal);
+        } catch (error: any) {
+          if (error.code !== "ESRCH") throw error;
+        }
+      }
+    },
+  };
 }
 
 /** Serialize short lifecycle operations separately from the running client's lock. */
@@ -201,19 +274,7 @@ export async function stopService(id: string) {
     return { stopped: false, ...status };
   const record = registry.read<any>(key);
   const signalled: string[] = [];
-  const group = (
-    entry: { pid: number; identity: string },
-    signal: NodeJS.Signals,
-  ) => {
-    if (!alive(entry)) return;
-    const pid = entry.pid;
-    try {
-      process.kill(-pid, signal);
-    } catch (error: any) {
-      if (error.code !== "ESRCH") throw error;
-      if (alive(entry)) process.kill(pid, signal);
-    }
-  };
+  let orphan: ReturnType<typeof orphanGroup> | undefined;
   if (alive(record.supervisor)) {
     try {
       process.kill(record.supervisor.pid, "SIGTERM");
@@ -222,23 +283,31 @@ export async function stopService(id: string) {
     }
     signalled.push("supervisor:SIGTERM");
   } else {
-    // The supervisor is gone but its client survived; address the group it led.
-    group(record, "SIGTERM");
+    orphan = orphanGroup(record);
+    orphan.signal("SIGTERM");
     signalled.push("client:SIGTERM");
   }
   const settled = () => {
     const s = serviceStatus(id);
-    return !s.supervisor?.alive && !s.client?.alive ? s : undefined;
+    return !s.supervisor?.alive && !s.client?.alive && !orphan?.alive()
+      ? s
+      : undefined;
   };
   const deadline = Date.now() + STOP_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await Bun.sleep(200);
+    if (orphan && !alive(record) && orphan.alive()) {
+      orphan.signal("SIGKILL");
+      if (!signalled.includes("client:SIGKILL"))
+        signalled.push("client:SIGKILL");
+    }
     const s = settled();
     if (s) return { stopped: true, signalled, ...s };
   }
   const late = serviceStatus(id);
   if (!late.supervisor?.alive && late.client?.alive) {
-    group(record, "SIGKILL");
+    orphan ??= orphanGroup(record);
+    orphan.signal("SIGKILL");
     signalled.push("client:SIGKILL");
     await Bun.sleep(500);
     const s = settled();

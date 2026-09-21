@@ -1,6 +1,7 @@
 // Local release server + actual installed standalone CLI; no public network or
 // real user installation is touched. Also reused by test:install.
 import { strict as assert } from "node:assert";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -22,12 +23,101 @@ type Run = (
   args: string[],
   options?: { env?: Record<string, string>; failure?: boolean; cwd?: string },
 ) => Promise<string>;
+export async function verifyInstallerLock() {
+  const root = mkdtempSync(join(tmpdir(), "convorel-install-lock-"));
+  for (const name of ["home", "tools", "tmp", "dist"])
+    mkdirSync(join(root, name));
+  const marker = join(root, "fetch-started");
+  writeFileSync(
+    join(root, "tools/curl"),
+    `#!/bin/sh\nprintf ready > '${marker}'\nexec sleep 30\n`,
+    { mode: 0o700 },
+  );
+  const env = {
+    ...childEnv(),
+    HOME: join(root, "home"),
+    TMPDIR: join(root, "tmp"),
+    PATH: join(root, "tools") + ":" + process.env.PATH,
+  };
+  const args = [
+    join(source, "install.sh"),
+    "--prefix",
+    join(root, "prefix"),
+    "--bin-dir",
+    join(root, "bin"),
+    "--release-base",
+    "http://127.0.0.1:1/releases",
+  ];
+  const noFlock = join(root, "no-flock");
+  mkdirSync(noFlock);
+  symlinkSync(Bun.which("realpath")!, join(noFlock, "realpath"));
+  assert.match(
+    Bun.spawnSync([Bun.which("bash")!, ...args], {
+      env: { ...env, PATH: noFlock },
+      stdout: "pipe",
+      stderr: "pipe",
+    }).stderr.toString(),
+    /INSTALL_LOCK_UNAVAILABLE/,
+  );
+  const installer = spawn("bash", args, {
+    env,
+    detached: true,
+    stdio: "ignore",
+  });
+  const exited = new Promise<void>((resolve, reject) => {
+    installer.once("exit", () => resolve());
+    installer.once("error", reject);
+  });
+  const retry = () =>
+    Bun.spawnSync(["bash", ...args, "--dist-dir", join(root, "dist")], {
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  try {
+    for (let i = 0; i < 250 && !existsSync(marker); i++) await Bun.sleep(20);
+    assert.ok(
+      existsSync(marker),
+      "installer reached the isolated download fixture",
+    );
+    assert.match(retry().stderr.toString(), /INSTALL_BUSY/);
+    const uninstall = Bun.spawnSync(["bash", ...args, "--uninstall"], {
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    assert.match(
+      uninstall.stderr.toString(),
+      /INSTALL_BUSY/,
+      "uninstall must respect an active installation",
+    );
+    assert.ok(existsSync(join(root, "prefix")));
+    process.kill(-installer.pid!, "SIGKILL");
+    await exited;
+    const resumed = retry();
+    assert.match(
+      resumed.stderr.toString(),
+      /CHECKSUMS_MISSING/,
+      "a dead installer must not retain the lock",
+    );
+    assert.doesNotMatch(resumed.stderr.toString(), /INSTALL_BUSY/);
+  } finally {
+    try {
+      process.kill(-installer.pid!, "SIGKILL");
+    } catch (error: any) {
+      if (error.code !== "ESRCH") throw error;
+    }
+    await exited;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 export async function verifyUpgrade(
   run: Run,
   prefix: string,
   bin: string,
   dist: string,
 ) {
+  await verifyInstallerLock();
   const artifact = readdirSync(dist).find((name) =>
     name.endsWith(`linux-${process.arch}.tar.gz`),
   )!;

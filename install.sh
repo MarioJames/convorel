@@ -93,6 +93,13 @@ if [ "$version" != latest ]; then
   valid_version "$version" || die "VERSION_INVALID: expected a release version"
 fi
 
+command -v flock >/dev/null || die "INSTALL_LOCK_UNAVAILABLE: install util-linux (flock)"
+# Keep the same inode outside the removable installation tree. The kernel
+# releases ownership on exit (including SIGKILL); never unlink a flock file.
+mkdir -p "$(dirname "$install_dir")"
+exec 9>"$install_dir.install.lock"
+flock -n 9 || die "INSTALL_BUSY: another install or uninstall is in progress"
+
 owned_link() {
   # Only touch a link this installer created, never a package manager's or a hand-made one.
   [ -L "$1" ] || return 1
@@ -155,7 +162,6 @@ for name in convorel agent-browser; do
     owned_link "$link" || die "LINK_NOT_OWNED: refusing to replace $link"
   fi
 done
-mkdir "$install_dir/.install-lock" 2>/dev/null || die "INSTALL_BUSY: another install is in progress"
 staging=""
 source_dir=""
 target=""
@@ -187,7 +193,6 @@ cleanup() {
   [ -z "$link_staging" ] || rm -rf -- "$link_staging"
   [ -z "$staging" ] || rm -rf -- "$staging"
   if [ -z "$dist_dir" ] && [ -n "$source_dir" ]; then rm -rf -- "$source_dir"; fi
-  rmdir "$install_dir/.install-lock"
   exit "$status"
 }
 trap cleanup EXIT
