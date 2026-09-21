@@ -87,9 +87,27 @@ TYPE 默认英文代码；仅用户明确要求中文时为 `start` 或 `organiz
 
 单独释放任务自有等待进程/lane，记录保留对象和原因。提示词、run 映射、意见和回复留在 Convorel 私有状态或已有任务交付记录，不进入技能源码，不新增平行注册表。
 
+## 取回历史内容
+
+回读既往结论不要重新打开网页。轮次完成时，Convorel 已把 prompt 原文和该回复自带的 Markdown 复制件写入私有内容库（`STATE_DIR/conversations.db`），并按不可变版本保留：
+
+```bash
+convorel conversation search --query '关键词' --limit 20
+convorel conversation search --query '关键词' --task ID --role assistant
+convorel conversation history --id ID --run RUN_ID
+convorel conversation content --version VERSION_UUID
+convorel conversation archive --id ID
+convorel conversation archive --all true
+convorel conversation capture --id ID --run RUN_ID
+convorel conversation export --directory /private/snapshot
+convorel doctor --local true
+```
+
+少于三个字符的查询退化为字面量扫描；检索命中只反映每轮当前选中的正文，命中里的 `format` 说明它是 Copy 得到的 Markdown 还是页面渲染副本。历史轮次可能只留有渲染文本而没有 Markdown：此时 `history` 的 `reply` 为空、`capture_status` 为 `pending`（coverage 为 `markdown-incomplete`），引用时必须说明这一缺口，不能把 `reply_rendered` 当作原文。`content --version` 可按版本 ID 读回任意正文，含已被取代的版本，用来核对旧引用。`capture` 只在原提交消息与目标回复都仍挂载、回复仍呈最终态且渲染 hash 与保存值一致时补齐，点击后还会再读一次页面按正文 hash 复核归属，内容变了就记 `TARGET_CHANGED` 而不归档；复制控件自身约两秒的换标签会被有界等待，不影响已按正文确认的归属。`--from PATH` 让 `search`/`history`/`content` 读取导出的快照（目录或改名后的文件均可），不依赖偏好文件、工作区或 Chrome；导出即全部已归档内容的副本，按敏感数据管理，不放进 MCP 允许根。内容库缺失或写入失败只影响可检索性，不改变投递状态，也不构成重发依据；`archive`/`capture` 用退出码 1 表示归档失败、2 表示存在缺口。
+
 ## 接续已有会话
 
-优先复用已有 Convorel task。只有历史记录明确提供同一需求的会话 URL 和精确 user message ID，且没有旧监视者仍处理该轮时，才可绑定：
+优先复用已有 Convorel task。只需要旧内容时用 `search`/`history` 读回，不绑定也不打开会话。只有历史记录明确提供同一需求的会话 URL 和精确 user message ID，且没有旧监视者仍处理该轮时，才可绑定：
 
 ```bash
 convorel conversation attach --id ID --url VERIFIED_URL --user-message VERIFIED_MESSAGE_ID

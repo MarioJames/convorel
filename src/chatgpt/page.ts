@@ -6,6 +6,9 @@ export interface Message {
   final: boolean;
   model?: string;
   error?: string;
+  // Page-produced Markdown held until the archive commits it. Verification stays on `text`.
+  markdown?: string;
+  markdownError?: string;
 }
 export interface PageState {
   url: string;

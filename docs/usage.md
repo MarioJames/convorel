@@ -8,6 +8,7 @@
 flowchart LR
   Agent[本地编码 Agent] --> CLI[Convorel CLI]
   CLI --> State[本地持久状态]
+  CLI --> Archive[私有 SQLite 内容归档]
   CLI --> Browser[agent-browser / CDP]
   Browser --> ChatGPT[已登录的 ChatGPT 网页]
   ChatGPT -->|代码工具调用| Tunnel[OpenAI Secure MCP Tunnel]
@@ -314,6 +315,30 @@ bun --no-env-file src/cli.ts conversation retry --id first-question --run RUN_ID
 
 完整命令见 `bun --no-env-file src/cli.ts --help`。
 
+## 会话内容归档与检索
+
+任务 JSON 仍是运行真值；`STATE_DIR/conversations.db` 是内容归档，保存 prompt 原文、由回复自带「复制」按钮取得的 Markdown、每条内容的不可变版本、每轮选中的版本指针以及捕获缺口。轮次完成时自动写入，也可以显式操作：
+
+```bash
+bun --no-env-file src/cli.ts conversation archive --all true            # 从任务文档补齐投影
+bun --no-env-file src/cli.ts conversation archive --id first-question
+bun --no-env-file src/cli.ts conversation capture --id first-question --run RUN_ID
+bun --no-env-file src/cli.ts conversation history --id first-question --run RUN_ID
+bun --no-env-file src/cli.ts conversation search --query '防枚举' --role assistant --limit 5
+bun --no-env-file src/cli.ts conversation content --version VERSION_UUID
+bun --no-env-file src/cli.ts conversation export --directory /private/snapshot
+bun --no-env-file src/cli.ts doctor --local true
+```
+
+- 归档不影响运行状态：磁盘写满、SQL 拒绝、页面没有复制按钮都只出现在 `archive`/`capture` 回执的 `status`/`gaps` 里，不会把已确认投递变成失败，也不授权重发。`archive` 与 `capture` 退出码为归档失败 → 1，有缺口或 `partial` → 2，其余 0；`doctor --local true` 在库自身完整性检查失败时退出 1，本地记录可读但不完整时退出 2。
+- 内容只增不改。重新生成的回复、重新捕获的 Markdown 都追加为新的 `content_version`，轮次通过指针选择当前版本。`history` 给出每轮选中的正文和该轮全部版本元数据，`content --version UUID` 按版本 ID 读回任意一条正文（含已被取代的旧版本），这样旧引用今天仍可核对。
+- 回复正文只认 Markdown：没有捕获到 Markdown 时 `history` 的 `reply` 为空、`capture_status` 为 `pending`，页面渲染文本单独保留在 `reply_rendered`，只用于追溯，不会被当作回复正文。检索覆盖每轮当前选定的 prompt 与「当前最佳正文」——已捕获时用 Markdown，未捕获时用渲染副本，命中结果的 `format` 字段披露是哪一种。
+- 检索使用 FTS5 的 `trigram` 分词，中文子串可以直接命中；少于三个字符无法构成三元组时自动退化为 `instr` 字面量扫描。查询文本始终按字面量处理，FTS 语法字符不改变匹配语义；已被取代的旧版本不会混进命中，`--task`、`--role`、`--limit`（默认 20，上限 100）用于收窄，`--task` 时附带该任务的 coverage。
+- `capture` 要求页面仍是同一会话、提交消息与目标回复都仍挂载、目标回复仍是最终态且渲染文本 hash 与保存的 `replyHash` 一致；点击复制后会再次读取页面并按渲染文本 hash 复核归属，正文变了记 `TARGET_CHANGED`，一次捕获窗口内出现多份不同正文记 `COPY_AMBIGUOUS`。复制控件点下去会短暂换成别的标签，使该轮在约两秒内被读成「非最终态」而正文不变，因此归属按正文判定，最终态只作有界等待（最多约 2.25 秒），不让下一次操作接手半途的页面。其他缺口原因码（例如 `COPY_BUTTON_MISSING`、`COPY_PAYLOAD_EMPTY`、`TARGET_NOT_RENDERED`）同样留在轮次上，`coverage` 汇总为 `current` / `markdown-incomplete` / `incomplete` / `unknown`；对已捕获且正文没变的轮次再执行一次会记为 `unchanged`，不算缺口。
+- `export` 用 `VACUUM INTO` 产出一份独立、已通过 `integrity_check` 的一致性快照（直接复制活动文件会漏掉仍在 WAL 里已提交的字节）：写入过程关在本调用自建的 0700 暂存目录内，发布出的文件为 0600，返回路径、字节数和与系统 `sha256sum` 一致的 SHA-256，并拒绝覆盖已有目标、拒绝落在状态目录或 MCP 允许根内。**导出即扩散**：那份文件包含全部已归档的 prompt 与回复，按敏感数据管理。
+- `history`/`search`/`content`/`export --from PATH` 读取指定路径（导出目录或改名后的快照文件），不读偏好、不要求工作区或浏览器；这些命令在 CLI 中先于配置与浏览器初始化派发，因此代码目录被删除、Chrome 已停止时仍能读回内容。写入类命令仍会先确认状态目录不在共享根内。
+- 归档是任务文档的投影，可用 `archive --all true` 重建；Markdown 同时保存在任务文档中，所以两侧丢任意一侧，另一侧仍保有内容。重复导入相同文档不会新增版本，但会照实报告文档里仍缺的东西——「没写新内容」不等于「已经完整」。数据库和快照都留在私有状态目录，不进入 MCP 允许根，也不上传；当前没有提供按轮次删除内容的命令，清理方式是删除私有状态目录中的数据库文件（会丢弃全部已归档内容）。
+
 ## 开发完成后的结果校验
 
 功能完成且必要本地验证通过后，可以让 `chatgpt-review` 对照原目标、架构约束与实际交付，判断是否合理、有无偏移。提供最终行为、模块职责或数据流、主动调整及理由、关键文档/入口和验证摘要即可；不默认发送完整日志或深入逐文件审计。只有影响判断的具体疑点才通过只读 MCP 查看实现。
@@ -326,6 +351,7 @@ bun --no-env-file src/cli.ts conversation retry --id first-question --run RUN_ID
 - 项目继承祖先目录的 `.convorelignore` 和 `.gitignore` 限制，子目录不能重新放行上层拒绝的路径；文件名规则不能识别写在普通源码里的所有秘密。
 - 同一连接的授权客户端共享配置中允许目录的读取范围；任务 ID 和工作区 hash 不承担远端鉴权。
 - 文件实时读取，hash 用于标识观察到的内容，不承诺跨文件不可变快照。
+- 内容归档只写入私有状态目录，MCP 允许根不读取它；`conversation export` 会把全部已归档内容复制到你指定的目录，导出路径的选择由使用者负责。
 - 网页 DOM、登录状态和平台权限可能变化；遇到验证挑战、草稿或不确定状态需要检查现场。
 
 这是独立社区项目，不是 OpenAI 官方产品。分发源码不包含共享账号、隧道或公开 ChatGPT 插件。详细边界见[安全说明](security.md)。

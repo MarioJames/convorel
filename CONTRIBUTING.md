@@ -1,6 +1,6 @@
 # Contributing
 
-Use Bun and the committed lockfile. Run `bun install --frozen-lockfile` and `bun run check`. Keep browser/provider code, task state and MCP access policy separate. New providers need actual acceptance evidence before they are advertised.
+Use Bun and the committed lockfile. Run `bun install --frozen-lockfile` and `bun run check`. Keep browser/provider code, task state and MCP access policy separate. New providers need actual acceptance evidence before they are advertised. The SQLite content archive stays a projection of task state: archive or capture outcomes surface as notices and gaps and must never change delivery, completion or retry authorization.
 
 Tests must use disposable profiles and synthetic repositories. Never use a developer's default Chrome profile, credentials, persistent development database or account for automated CI. Real ChatGPT acceptance is explicit and interactive; do not send unattended test messages to a shared account.
 

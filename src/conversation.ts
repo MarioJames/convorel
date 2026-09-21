@@ -25,6 +25,8 @@ import {
   verifyProjectComposer,
 } from "./chatgpt/project.ts";
 import { conversationTitle, organizeConversation } from "./chatgpt/organize.ts";
+import { copyMarkdownScript } from "./chatgpt/copy.ts";
+import { publishSafely } from "./post-archive.ts";
 import { conversationConfig, type Config } from "./config.ts";
 export type { Config } from "./config.ts";
 export interface RejectedSendRecovery {
@@ -36,7 +38,7 @@ export interface RejectedSendRecovery {
   rejectedAt: number;
   confirmCloudflareChallenge: boolean;
 }
-interface Run {
+export interface Run {
   id: string;
   requestId: string;
   inputHash: string;
@@ -419,6 +421,10 @@ export class Conversation {
         .map((m) => m.id);
     }
     this.save(t);
+    if (outcome.state === "complete" && !r.reply?.markdown) {
+      await this.attemptCapture(t, b, r);
+      publishSafely(this.store.root, t);
+    }
     if (
       t.naming &&
       !t.organization &&
@@ -954,6 +960,127 @@ export class Conversation {
       userMessageId: r.userMessageId,
       branch: r.branch,
     };
+  }
+  /**
+   * Takes the reply's Markdown through the page's own copy control. This is a copy
+   * path only: it never changes delivery state, the stored rendered text, or the
+   * authorization to send again, and it never throws into the operation that called it.
+   */
+  private async attemptCapture(t: Task, b: any, r: Run) {
+    try {
+      if (!r.reply?.id || r.state !== "complete") return;
+      const p: PageState = await b.read();
+      this.guard(t);
+      if (!this.captureTargetValid(t, p, r)) return;
+      const observed = (await b.run("eval", copyMarkdownScript(r.reply.id)))
+        .result;
+      this.guard(t);
+      if (
+        observed?.ok === true &&
+        typeof observed.text === "string" &&
+        observed.text.trim()
+      ) {
+        if (await this.captureStillAttributable(t, b, r)) {
+          r.reply.markdown = observed.text;
+          delete r.reply.markdownError;
+        } else r.reply.markdownError = "TARGET_CHANGED";
+      } else
+        r.reply.markdownError = String(observed?.reason ?? "COPY_NOT_CAPTURED");
+      this.save(t);
+    } catch {
+      // A stale attempt or a page failure leaves the durable reply intact and unarchived.
+    }
+  }
+  /**
+   * The copy control relabels itself for about a second and a half after a click, which
+   * reads back as a turn that is no longer final. That window is waited out and the exact
+   * same turn is verified again, so the capture cannot be attributed to a replaced reply
+   * and cannot leave the page mid-click for the checks that follow.
+   */
+  /**
+   * Proves the capture belongs to this run's reply, then waits out the page's own
+   * relabel. Clicking the copy control makes it report a different action for a second
+   * or two, which reads back as a turn that is no longer final, while the rendered bytes
+   * stay identical. Attribution is therefore measured on the bytes, and finality is only
+   * waited for so the next operation does not inherit a page still mid-click.
+   */
+  private async captureStillAttributable(
+    t: Task,
+    b: { read: () => Promise<PageState> },
+    r: Run,
+  ) {
+    let settled = false;
+    for (let attempt = 0; attempt < 4 && !settled; attempt++) {
+      if (attempt) await Bun.sleep(750);
+      const page = await b.read();
+      this.guard(t);
+      if (!this.captureAttributionValid(t, page, r)) return false;
+      settled = !!page.messages.find((m) => m.id === r.reply?.id)?.final;
+    }
+    return true;
+  }
+  /** The reply this run submitted, still mounted after its own user message, still the
+   * stored bytes. Later completed turns are allowed; a missing anchor is not "no later
+   * turn" but a reply that cannot be tied to this run. */
+  private captureAttributionValid(t: Task, p: PageState, r: Run) {
+    try {
+      if (!t.url || conversationId(p.url) !== conversationId(t.url))
+        return false;
+    } catch {
+      return false;
+    }
+    const index = p.messages.findIndex((m) => m.id === r.reply?.id);
+    if (index < 0) return false;
+    const target = p.messages[index];
+    if (target.role !== "assistant") return false;
+    const anchor = r.userMessageId
+      ? p.messages.findIndex((m) => m.id === r.userMessageId)
+      : -1;
+    if (anchor < 0 || anchor > index) return false;
+    return sha(target.text) === r.replyHash;
+  }
+  /** Before the click the turn must also still present itself as completed. */
+  private captureTargetValid(t: Task, p: PageState, r: Run) {
+    if (!this.captureAttributionValid(t, p, r)) return false;
+    return !!p.messages.find((m) => m.id === r.reply?.id)?.final;
+  }
+  /** Backfill path: capture and archive completed runs of one task on demand. */
+  capture(id: string, run?: string, workspace?: string) {
+    return this.exclusive(id, async () => {
+      const t = this.get(id);
+      this.checkWorkspace(t, workspace);
+      const targets = t.runs.filter(
+        (r) =>
+          r.state === "complete" &&
+          r.reply &&
+          (!run || r.id === run) &&
+          (!r.reply.markdown || (run && r.id === run)),
+      );
+      const captured: string[] = [];
+      const unchanged: string[] = [];
+      const gaps: { runId: string; code: string }[] = [];
+      if (targets.length) {
+        const b = await this.page(t);
+        for (const r of targets) {
+          const before = r.reply?.markdown;
+          await this.attemptCapture(t, b, r);
+          const after = r.reply?.markdown;
+          if (after && after !== before) captured.push(r.id);
+          // Taking the same bytes again proves the capture path works; it is not a gap.
+          else if (after) unchanged.push(r.id);
+          else if (r.reply?.markdownError)
+            gaps.push({ runId: r.id, code: r.reply.markdownError });
+          else gaps.push({ runId: r.id, code: "TARGET_NOT_RENDERED" });
+        }
+      }
+      return {
+        taskId: id,
+        captured,
+        unchanged,
+        gaps,
+        archive: publishSafely(this.store.root, this.get(id)),
+      };
+    });
   }
   private safeCompleted(t: Task, p: PageState, r = this.current(t)) {
     if (r.state !== "complete" || !r.reply || !t.url || !r.userMessageId)

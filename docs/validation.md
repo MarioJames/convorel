@@ -1,6 +1,42 @@
-# Validation
+# 验证记录
 
-## 当前验证：配置文件作为唯一配置来源
+## 当前验证：SQLite 内容归档与 Copy 捕获 Markdown
+
+环境：Linux x64（WSL2 6.6.87.2）、Bun 1.4.2、Node 24.21.0、`bun:sqlite` SQLite 3.53.2（含 `ENABLE_FTS5`）、已登录的有头 Google Chrome + loopback CDP、agent-browser 0.34.0。
+
+`bun run check` 通过 TypeScript 与 222 个测试（202 项既有全部保留 + `tests/archive.test.ts` 20 项新增），`bun run format:check` 通过。离线回归覆盖（20 项）：publish 幂等且生命周期改动 不产生内容漂移；重新生成回复追加不可变版本、旧版本仍可完整读回；rendered 副本不被选为回复正文；同一 rendered 轮次重新捕获到不同 Markdown 时仍会归档；正文未变时 run 元数据仍刷新；重复导入不写新内容但照实报告缺口；中文 trigram 命中、两字符退化为字面量扫描、恶意查询按字面量处理、非法 role/limit/版本 ID 拒绝；search 只覆盖每轮选定正文且不含被取代版本；coverage 四种状态；export 独立可读、发布文件 0600、暂存目录自清、checksum 等于原始字节 SHA-256、拒绝覆盖、拒绝只读库、拒绝 foreign 库（读写与只读两条路径）、拒绝符号链接；`--from` 读取改名后的快照文件；损坏任务文档被逐条报告而 `State.tasks()` 仍严格失败；archive/search/history/content/doctor 在无配置、无浏览器时可用以及 `--all false` 不扩大导入范围；Copy 页面脚本可被解析且拒绝越界消息 ID；`Conversation.capture` 的成功、仅记缺口、点击前页面被改写、点击后正文被替换、点击后仅控件换标签（等待后仍归档）、标签迟迟不恢复（按正文保留归属）、提交消息已不在页面等多种行为。
+
+### 开发完成后的结果校验
+
+以结果校验视角把交付交给 ChatGPT 复核（同一会话续谈，read-only MCP 读工作树，基线 `aa5344b`），裁定「存在偏移」：P1 架构、完成边界位置、中文检索、FULL/VACUUM 取舍和离线分派方向成立，但下列实现细节被确认偏移。全部按最小修正处理并补测试：
+
+1. 缺 Markdown 时把 `rendered-text` 选成回复正文 → 选择器只认 Markdown，缺口显式为 `reply: null` + `pending`。
+2. Copy 结果归属不足（仅比较渲染长度、多候选取最长、点击后不再复核、user 锚点缺失时 `-1 > index` 仍放行）→ 页面侧改为内容指纹比较、多份不同正文报 `COPY_AMBIGUOUS`、整个捕获共享一个截止时间；宿主侧点击后再读一次页面复核，提交消息必须仍挂载且早于目标回复。
+   这一项的第一版修正被真实页面驳回：把「点击后再读」实现为再次要求 `final` 与整轮文本逐字节相等，而复制控件点下去会把自己换成另一个动作标签约两秒，使该轮在 `PAGE_SCRIPT` 里读成非最终态、正文却完全不变（实测 `final` 在点击后 0/500ms 为 false、1500ms 起恢复，渲染文本始终 8921 字符、hash 与保存值一致）。结果是每一次真实捕获都被误判为 `TARGET_CHANGED`。最终分层为：点击前用完整就绪条件（含 `final` 与逐字节 hash），点击后的归属只按正文 hash 判定，`final` 只做最多约 2.25 秒的有界等待，以便后续命令不接手半途页面；同时成功捕获会清除上一轮留下的 `markdownError`，避免旧错误被当成本轮缺口重复上报。
+3. `content_fingerprint` 快路径连 Markdown 与 run 元数据一起跳过 → 去掉逐轮提前返回，靠 `addVersion` 按 hash 去重。
+4. 回执契约不闭合（unchanged 报空 gaps 让 partial 变 stored、`capture` 恒退出 0、doctor 忽略 integrity、search 把 stats 命名为 coverage、旧版本正文无法读回、检索含被取代的 user 版本）→ 逐项修正，新增 `content --version`。
+5. `fileHash` 先 latin1 解码再按 UTF-8 哈希，且 `scanTasks` 两次读文件可能配对不同内容 → 单次读取、按原始字节哈希。
+6. `--from` 实际读的是该目录下的固定文件名、`verify()` 只看 `dbKind` 键是否存在、只读入口不校验版本、提前分派绕过共享根断言、`--all false` 会导入全部任务 → 精确文件路径、比对值并在读写两侧校验版本、写入类命令补 `assertPrivate`（读取类仍不依赖目录存在）、`--all` 严格布尔化；导出改为在自建的 0700 暂存目录内完成 `VACUUM INTO` 再以 0600 发布。
+7. `observation` 把导入时间与保存的 branch 记成一次页面观测 → 该表在首次发布前删除，避免记录比证据更完整的观测历史；本地既有归档按 `archive --all true` 从任务文档重建（Markdown 本就同时存在任务文档里，重建前后 `markdownVersions` 与 integrity 一致）。`derived` 作为二次派生的占位保留，尚无写入方。
+
+未采纳：把 Markdown 从任务 JSON 中移走（保留是为了捕获成功而导入失败时可补发布，且文档仍是唯一真值）；为「零依赖」再拆一层通用模型；本轮引入向量化、worker 或全页采集。自动完成路径未把归档 notice 打进命令输出，回执以库内 gap 与 `doctor`/`archive` 报告为准，不改既有命令输出结构。
+
+### 实测证据
+
+- FTS5 默认 `unicode61` 对中文子串 `防枚举` 命中 0 条，改用 `trigram` 后同时命中 user 与 assistant 两侧；不足三个码点的查询走 `instr` 扫描，仍返回结果。
+- 同一条真实回复：Copy 按钮取得的 Markdown 14030 字节，页面 innerText 11123 字节，前者保留代码围栏、表格与行内结构，因此存储来源改为 Copy，DOM→Markdown 序列化器删除。
+- 一个 8 轮会话的页面只渲染 5 条消息，证明 DOM 不是完整内容来源，也证明历史回填只能覆盖当前可见部分。
+- 从既有任务文档导入 27 tasks / 64 runs / 23 conversations，0 失败；本轮另有 3 条真实回复由完成边界自动 Copy 捕获入库，最后一条（结果校验回复）为 `capture_status: captured`、`reply_format: markdown`，其渲染副本 8921 字符与 Markdown 11557 字符同时归档。`doctor --local true` 报告 5 个任务 `current`、其余 `markdown-incomplete`（历史轮次只有渲染文本），因缺口退出 2，两项完整性自检 `ok`。
+- 真实页面上对 `capture` 回填路径做了两次端到端复核：修正前一次把已捕获的轮次误报为 `TARGET_CHANGED`（即上面那条回归），修正后同一调用返回 `unchanged` 且没有缺口，任务文档里的陈旧 `markdownError` 被清除，归档 `status: stored`、退出码 0。
+- 用与发布流水线相同的 `bun build --compile` 参数产出 standalone 二进制，对 `VACUUM INTO` 导出后**改名**的快照执行 `conversation search --from`、`history`、`content --version`：`防枚举` 走 trigram、`会话` 走 literal-scan、旧版本正文可完整读回，全程使用空 `--config-dir`/`--state-dir` 且不接触 Chrome。
+- 导出回执的 `sha256` 与系统 `sha256sum` 逐字符一致，文件模式 0600，导出目录内不残留暂存文件。
+- 归档失败与捕获失败只产生 notice/gap：真实数据上 `conversation archive --all true` 因历史缺口退出 2、`conversation archive --id 不存在` 退出 1，`result()` 与投递状态未受影响。
+
+限制：多进程并发写同一归档只由 `BEGIN IMMEDIATE` + `busy_timeout` 语义与单进程测试覆盖，未做真实并发压测；Copy 页面脚本的长度指纹与歧义分支只在测试中构造，未在真实页面注入竞态；OpenAI 平台改版后复制按钮选择器的稳定性只验证了当前页面；worker 常驻监听、把任务台账迁入数据库（P2）、按轮次删除归档内容均未实现。验收产物（导出快照、改名副本与临时编译二进制）保留在私有状态目录 `validation-standalone-20260921/`，不属于 MCP 允许根；改造前的旧 schema 归档改名为 `conversations-schema-v1.db` 保留在同一目录；共享 Chrome、登录态与既有任务数据未改动。
+
+下文保留历史版本的验证记录，其中旧环境配置方式与命令名称不代表当前接口；当前使用方式见 usage.md。
+
+## 2026-09-20：配置文件作为唯一配置来源
 
 已移除 Convorel 运行时环境变量覆盖、安装目录 dotenv 加载及 import-env 命令，配置键统一为 model、project.url、tunnel.id 等语义名称。私有目录改由命令前的 --config-dir/--state-dir 指定，并通过 selfExec 显式传给后台与 MCP 子进程。系统 PATH/HOME、CI 的 GITHUB_SHA 及第三方进程协议所需变量仍按各自用途使用；敏感文件过滤规则保留。
 
