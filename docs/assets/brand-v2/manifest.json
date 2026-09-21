@@ -1,0 +1,502 @@
+{
+  "generator": "built-in image_gen",
+  "export": "Pillow LANCZOS, proportional downscaling only",
+  "assets": [
+    {
+      "file": "icons/convorel-mark-dark-1024x1024.png",
+      "width": 1024,
+      "height": 1024,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 650017,
+      "sha256": "7f3759f546c6691a58012dfa69ae11a2ab53015dc8888ebc3d1f270943e75b0d"
+    },
+    {
+      "file": "icons/convorel-mark-dark-128x128.png",
+      "width": 128,
+      "height": 128,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 13474,
+      "sha256": "add0f5e739d7edc5980bc3de20198785abfecdc833e930531fbffa593a9ee8fe"
+    },
+    {
+      "file": "icons/convorel-mark-dark-16x16.png",
+      "width": 16,
+      "height": 16,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 691,
+      "sha256": "b191cf0bd72fa65a5c0ad2f63e79092f486fc338f9e0d4539112923e5d5d9726"
+    },
+    {
+      "file": "icons/convorel-mark-dark-180x180.png",
+      "width": 180,
+      "height": 180,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 24964,
+      "sha256": "d3b758ec73e673be92cd8f814bf215191a1a88b6c60b7e53e6b2e2e49f65f207"
+    },
+    {
+      "file": "icons/convorel-mark-dark-192x192.png",
+      "width": 192,
+      "height": 192,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 28077,
+      "sha256": "9d603dfb3eb75cf2e8ad0ca168547442cf000241b3f60bb07175c945f2b5cdf9"
+    },
+    {
+      "file": "icons/convorel-mark-dark-24x24.png",
+      "width": 24,
+      "height": 24,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 1177,
+      "sha256": "65e9f7d02d24a0752dc8c1f302573c1917b2dee5e7327b935e13ebebd674955f"
+    },
+    {
+      "file": "icons/convorel-mark-dark-256x256.png",
+      "width": 256,
+      "height": 256,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 49742,
+      "sha256": "b9cfac878edb83b7bcbd37e90d925ae8b976cc07ba343d9def7ed8534a09ad0d"
+    },
+    {
+      "file": "icons/convorel-mark-dark-32x32.png",
+      "width": 32,
+      "height": 32,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 1765,
+      "sha256": "fbf233516bf2c7ac9634ea5994ef6dc41c31ecd59292d46e5c6a85d5f8defc6d"
+    },
+    {
+      "file": "icons/convorel-mark-dark-48x48.png",
+      "width": 48,
+      "height": 48,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 3029,
+      "sha256": "29130e6cfb103dbc6722f695ea581181c35e5784cb5849a876c64d4d9e24ae01"
+    },
+    {
+      "file": "icons/convorel-mark-dark-512x512.png",
+      "width": 512,
+      "height": 512,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 190471,
+      "sha256": "0e01f79f1989982b1702fce785a8c9045d782a5356bd454443154210e8c78a7a"
+    },
+    {
+      "file": "icons/convorel-mark-dark-64x64.png",
+      "width": 64,
+      "height": 64,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 4478,
+      "sha256": "35fdffc551c87912580557392808c6dfb660d3a36355b8790f48878cd34028df"
+    },
+    {
+      "file": "icons/convorel-mark-light-1024x1024.png",
+      "width": 1024,
+      "height": 1024,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 555376,
+      "sha256": "3caf0684930b2db42ebe521a05f7465798b04d9e55eee017af156d58e034352e"
+    },
+    {
+      "file": "icons/convorel-mark-light-128x128.png",
+      "width": 128,
+      "height": 128,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 13605,
+      "sha256": "bb5e9b66e7e8119922d543145bc6471008b109c4af4469d54a346fd631878b7a"
+    },
+    {
+      "file": "icons/convorel-mark-light-16x16.png",
+      "width": 16,
+      "height": 16,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 665,
+      "sha256": "d6e5b5ff466a19b9bd8c6de29df565c304fa24797ffc2f1e6f4fbe96d39b2002"
+    },
+    {
+      "file": "icons/convorel-mark-light-180x180.png",
+      "width": 180,
+      "height": 180,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 25607,
+      "sha256": "9a196af0549b2da052da71bae52fe10f02c04a3e28fc6e58726ff2714d6dd726"
+    },
+    {
+      "file": "icons/convorel-mark-light-192x192.png",
+      "width": 192,
+      "height": 192,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 28573,
+      "sha256": "5f3488cfd89c6bde2ba99837d05ecc3b2312efd6a6f433c4421deaabb8146d10"
+    },
+    {
+      "file": "icons/convorel-mark-light-24x24.png",
+      "width": 24,
+      "height": 24,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 1123,
+      "sha256": "ad9508481e07ef45895815b7cf5f0a218fdc227ee3745a18ba3073a5d9c84f88"
+    },
+    {
+      "file": "icons/convorel-mark-light-256x256.png",
+      "width": 256,
+      "height": 256,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 48648,
+      "sha256": "5ee39700bb363633a286ba9284642f81b08ef086c0d8e1a50f5493973a4d4001"
+    },
+    {
+      "file": "icons/convorel-mark-light-32x32.png",
+      "width": 32,
+      "height": 32,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 1692,
+      "sha256": "ddf5d2152e5467efe210a58a5c0fdea88e1b1ba6f984d517f216dad972ab2592"
+    },
+    {
+      "file": "icons/convorel-mark-light-48x48.png",
+      "width": 48,
+      "height": 48,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 2896,
+      "sha256": "b8072a7f2a802646f338d69ae4a608ab531528d04d4b5d13090ec1233b2cd087"
+    },
+    {
+      "file": "icons/convorel-mark-light-512x512.png",
+      "width": 512,
+      "height": 512,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 177353,
+      "sha256": "57a744a27718f07dea521b4b90dd7082f79a9e7eece6f9b9bbf39126f8e7dba9"
+    },
+    {
+      "file": "icons/convorel-mark-light-64x64.png",
+      "width": 64,
+      "height": 64,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 4380,
+      "sha256": "3b87f1cacba80bedb9693fe2ee1f8755713993ca93af0dd2e609f11efa9706e2"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-1024x1024.png",
+      "width": 1024,
+      "height": 1024,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 301917,
+      "sha256": "56c039efbb4d1fa46f7485485c5443f75fc6b81e236ff1014ccde66351c1905c"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-128x128.png",
+      "width": 128,
+      "height": 128,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 9533,
+      "sha256": "7bb5bf1c0f44a765f5cd935a5295d320773e90d9d3d9c2b3d60157f043056aa8"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-16x16.png",
+      "width": 16,
+      "height": 16,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 732,
+      "sha256": "2bb111d2f514b2ebf12ecb3914a295439ce3ffb69f6677b773021ebe1878f794"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-180x180.png",
+      "width": 180,
+      "height": 180,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 15564,
+      "sha256": "e1e88c117508461ab4c664347a8ea7896d1b558607bf41e5aeff44a64f696a9f"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-192x192.png",
+      "width": 192,
+      "height": 192,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 17033,
+      "sha256": "36d0bbe642add664a1cb7614d619e487952ba33cefa76f6e4a7dbf3128dcfec3"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-24x24.png",
+      "width": 24,
+      "height": 24,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 1265,
+      "sha256": "a94027b6c460c815becd3492c462ed3979eea194601b945ab5a3832faac4fa32"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-256x256.png",
+      "width": 256,
+      "height": 256,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 27276,
+      "sha256": "da4ff7cc0bb4b1d4e97e9f65c3547e22595624049bc961e4569e30fefd26e398"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-32x32.png",
+      "width": 32,
+      "height": 32,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 1799,
+      "sha256": "f8c2f1daae271ca9b813ac2df795acce271594b2095aef56dc5cbf1984b88f4f"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-48x48.png",
+      "width": 48,
+      "height": 48,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 2853,
+      "sha256": "26c6bd2a6838c2b04e52a8ea3371258ad49ffcd3504f01526cc2d1beb88623c8"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-512x512.png",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 89764,
+      "sha256": "998d878af36418bfffdb0b4523097ba46596bc7b84a1764b441d3cad7f9a506f"
+    },
+    {
+      "file": "icons/convorel-mark-transparent-64x64.png",
+      "width": 64,
+      "height": 64,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 4059,
+      "sha256": "96a5621865e7fbb2dba7d9c5b77bb128032635a6b7c4ddca917a253f7711562e"
+    },
+    {
+      "file": "lockups/convorel-lockup-dark-1536x512.png",
+      "width": 1536,
+      "height": 512,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 521977,
+      "sha256": "aa4f99424dce1c7f21e0e3484617f3a87f348480acae78f49e1628a092f31b8d"
+    },
+    {
+      "file": "lockups/convorel-lockup-dark-192x64.png",
+      "width": 192,
+      "height": 64,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 13185,
+      "sha256": "80c92fa07b4e4a6ea4941ecb9610629e92f251276ac95a270ef44981ba8bddd3"
+    },
+    {
+      "file": "lockups/convorel-lockup-dark-384x128.png",
+      "width": 384,
+      "height": 128,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 44392,
+      "sha256": "a15bade072dfe3ec43b57cb51951f6c925b53c7d817d49aca05805e0dc9f0d05"
+    },
+    {
+      "file": "lockups/convorel-lockup-dark-768x256.png",
+      "width": 768,
+      "height": 256,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 155385,
+      "sha256": "3cd4aa3d6b6ca2caae3ec5b9e92b7dce61a5cdccc346cda566fa59f4a9e64246"
+    },
+    {
+      "file": "lockups/convorel-lockup-light-1536x512.png",
+      "width": 1536,
+      "height": 512,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 474090,
+      "sha256": "1d26e757d64c689c841c39c1c680814ff2a21bdfe8141fa103ff3d6a387287c8"
+    },
+    {
+      "file": "lockups/convorel-lockup-light-192x64.png",
+      "width": 192,
+      "height": 64,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 11911,
+      "sha256": "3d0de796d1335d1e29514d9b72b9438e459712448a368526a27975ae04d7994c"
+    },
+    {
+      "file": "lockups/convorel-lockup-light-384x128.png",
+      "width": 384,
+      "height": 128,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 41967,
+      "sha256": "854c14dd57f1ec89f7de0a303ad6435c3c9a91c659363c4d8021858772886c65"
+    },
+    {
+      "file": "lockups/convorel-lockup-light-768x256.png",
+      "width": 768,
+      "height": 256,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 143333,
+      "sha256": "4ea9e5e3fe672661498a7583785d41c96533254ac0d5f39f1e783642bc2ac85c"
+    },
+    {
+      "file": "lockups/convorel-lockup-transparent-1536x512.png",
+      "width": 1536,
+      "height": 512,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 196148,
+      "sha256": "257e63c62f0ac3050cece4ed951fb3ecd59b591eca404e6d99e6d452421159f4"
+    },
+    {
+      "file": "lockups/convorel-lockup-transparent-192x64.png",
+      "width": 192,
+      "height": 64,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 8739,
+      "sha256": "abf30916d4aafa15bf52f4ed32aa2cf7e8fdd7ef19a851eb0acbd1efa804ab2f"
+    },
+    {
+      "file": "lockups/convorel-lockup-transparent-384x128.png",
+      "width": 384,
+      "height": 128,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 22493,
+      "sha256": "f93f7f7039b212a2cebb550109f7690b2d5d79b62326d3b79c55c2b4a0ec21d6"
+    },
+    {
+      "file": "lockups/convorel-lockup-transparent-768x256.png",
+      "width": 768,
+      "height": 256,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 62374,
+      "sha256": "0a77aae6ef8b2864d2e8e3aaffd926d6cb9e7f0173c18bfbc965075d5bfd877b"
+    },
+    {
+      "file": "masters/convorel-cover.png",
+      "width": 1774,
+      "height": 887,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 1082372,
+      "sha256": "d355105cecd74ecc0b554b28e08b48b026fee364cc65f206e95e61ae947cb756"
+    },
+    {
+      "file": "masters/convorel-lockup-dark.png",
+      "width": 2172,
+      "height": 724,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 988358,
+      "sha256": "3b461b5794252a2e8c92456995877c6aee8205e0d393ad0dc9fcd91e55d873d3"
+    },
+    {
+      "file": "masters/convorel-lockup-light.png",
+      "width": 2172,
+      "height": 724,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 873527,
+      "sha256": "ebaa3d642802b605b3729a13c1e06bda44831796c253167562eb294c3500cbee"
+    },
+    {
+      "file": "masters/convorel-lockup-transparent.png",
+      "width": 2172,
+      "height": 724,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 357562,
+      "sha256": "ba4b565b62a417802a51e2c7f0ee06cd2ce4fe6b7aab235e9a27a310e91489ef"
+    },
+    {
+      "file": "masters/convorel-mark-dark.png",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 974320,
+      "sha256": "059ce48a733ac4c0965cbe047c21c61c1402e6ad167441ed8729ea61ea38eed3"
+    },
+    {
+      "file": "masters/convorel-mark-light.png",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 825401,
+      "sha256": "b5a45cf2936b0715f9e0c50e5e8777da10f477253f3097d855928cfcf9d16bc2"
+    },
+    {
+      "file": "masters/convorel-mark-transparent.png",
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "transparent": true,
+      "bytes": 446965,
+      "sha256": "18835f2e058a426117f0e7f4f230894a39d43fe018ab3569772e9362996e51b1"
+    },
+    {
+      "file": "social/convorel-cover-1200x600.png",
+      "width": 1200,
+      "height": 600,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 524527,
+      "sha256": "67a6819f9e505e81ac48696efe52f840ffcaa998fce98deaeda326f8873dfb05"
+    },
+    {
+      "file": "social/convorel-cover-1280x640.png",
+      "width": 1280,
+      "height": 640,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 586145,
+      "sha256": "c5f332a0f124c572a45cd55fdd2e5cdec702f18bf93db961dbd8123e8f932c10"
+    },
+    {
+      "file": "social/convorel-cover-1600x800.png",
+      "width": 1600,
+      "height": 800,
+      "mode": "RGB",
+      "transparent": false,
+      "bytes": 856701,
+      "sha256": "cfd6f5421c62a6bfc9fcde0e79fa1c56674dadc0a7b1f8d944e72fecd2d3a6bd"
+    }
+  ],
+  "favicon_sizes": [16, 32, 48, 64]
+}
