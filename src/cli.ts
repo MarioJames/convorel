@@ -1,5 +1,5 @@
 #!/usr/bin/env -S bun --no-env-file
-import { consumeRuntimeArgs } from "./paths.ts";
+import { consumeRuntimeArgs, stateDirectory } from "./paths.ts";
 declare const BUILD_COMMIT: string;
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { resolve } from "node:path";
@@ -22,7 +22,7 @@ import { agentBrowserLocation, COMPILED, selfExec } from "./runtime.ts";
 import { conversationConfig } from "./config.ts";
 import { configCommand } from "./config-command.ts";
 import { preferenceDirectory } from "./user-config.ts";
-import { installSkill } from "./skills.ts";
+import { installSkill, checkSkill, updateSkill } from "./skills.ts";
 import { manageService, serviceLogs, serviceStatus } from "./service.ts";
 import { upgrade, versionCheck } from "./upgrade.ts";
 import { waitForConversation, watcherLockName } from "./wait.ts";
@@ -56,6 +56,8 @@ setup --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claud
 init --workspace PATH --cdp PORT_OR_HTTP
 skills install --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH]
 skills install --dir PATH
+skills check|update --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH] [--baseline-dir OLD_SKILL]
+skills check|update --dir PATH [--baseline-dir OLD_SKILL]
 start|stop|restart|status [--tunnel-id ID]
 logs [--tunnel-id ID] [--lines NUMBER] [--follow]
 upgrade [--version TAG]
@@ -211,20 +213,35 @@ export async function main(args = process.argv.slice(2)) {
     return main(["doctor"]);
   }
   if (area === "skills") {
-    if (sub !== "install") throw new Error("UNKNOWN_SKILLS_COMMAND");
-    print(await installSkill(opts(rest)));
-    return 0;
+    if (sub === "install") {
+      print(await installSkill(opts(rest)));
+      return 0;
+    }
+    if (sub === "check") {
+      const report = await checkSkill(opts(rest));
+      print(report);
+      return report.status === "current" ? 0 : 2;
+    }
+    if (sub === "update") {
+      const report = await updateSkill(opts(rest));
+      print(report);
+      return report.updated || report.status === "current" ? 0 : 2;
+    }
+    throw new Error("UNKNOWN_SKILLS_COMMAND");
   }
   if (area === "config") {
     print(configCommand(sub, rest));
     return 0;
   }
-  const store = new State();
+  // Reads of an independent snapshot must not create, chmod or require live state.
+  const stateRoot = stateDirectory();
+  let initializedStore: State | undefined;
+  const getStore = () => (initializedStore ??= new State());
   const sharedRoots = (): string[] => {
     const roots = preference("mcp.roots");
     if (roots) return parseRoots(roots);
     try {
-      return [store.read<Config>("config").workspace];
+      return [getStore().read<Config>("config").workspace];
     } catch {
       return [];
     }
@@ -266,8 +283,8 @@ export async function main(args = process.argv.slice(2)) {
       const all = o.all === "true";
       if (all === !!o.id)
         throw new Error("ARCHIVE_SCOPE_REQUIRED: pass --id ID or --all true");
-      assertOutsideSharedRoots(store.root);
-      const scanned = scanTasks(store.root);
+      assertOutsideSharedRoots(stateRoot);
+      const scanned = scanTasks(stateRoot);
       const selected = all
         ? scanned.found
         : scanned.found.filter((item) => item.taskId === o.id);
@@ -279,12 +296,14 @@ export async function main(args = process.argv.slice(2)) {
             ? "TASK_UNREADABLE: inspect sourceErrors"
             : "TASK_NOT_FOUND",
         );
-      const archived = selected.map((item) => ({
-        taskId: item.taskId,
-        runs: item.task.runs.length,
-        ...publishTask(store.root, item.task, item.hash),
-      }));
-      const opened = openArchive(store.root, { write: true });
+      const archived = [];
+      for (const item of selected) {
+        archived.push({
+          taskId: item.taskId,
+          ...(await publishTask(stateRoot, item.taskId)),
+        });
+      }
+      const opened = openArchive(stateRoot, { write: true });
       const summary = opened.archive ? opened.archive.stats() : opened.notice;
       opened.archive?.close();
       print({
@@ -305,11 +324,11 @@ export async function main(args = process.argv.slice(2)) {
       const directory = required(o, "directory");
       // An export carries every archived prompt and reply, so it neither lands inside a
       // directory the connected assistant can already read nor replaces the state store.
-      assertOutsideSharedRoots(store.root);
-      if (resolve(directory) === resolve(store.root))
+      assertOutsideSharedRoots(stateRoot);
+      if (resolve(directory) === resolve(stateRoot))
         throw new Error("EXPORT_TARGET_IS_STATE_DIRECTORY");
       assertOutsideSharedRoots(directory);
-      const opened = openArchive(store.root, { write: true });
+      const opened = openArchive(stateRoot, { write: true });
       if (opened.notice || !opened.archive) {
         print({
           notice: opened.notice ?? {
@@ -329,7 +348,7 @@ export async function main(args = process.argv.slice(2)) {
       }
       return 0;
     }
-    const opened: OpenedArchive = openArchive(store.root, { from: o.from });
+    const opened: OpenedArchive = openArchive(stateRoot, { from: o.from });
     if (opened.notice || !opened.archive) {
       print({
         notice: opened.notice ?? {
@@ -342,11 +361,12 @@ export async function main(args = process.argv.slice(2)) {
     const archive = opened.archive!;
     try {
       if (sub === "search") {
-        const source = o.task
-          ? scanTasks(store.root).found.find((item) => item.taskId === o.task)
-          : undefined;
+        const source =
+          o.task && !o.from
+            ? scanTasks(stateRoot).found.find((item) => item.taskId === o.task)
+            : undefined;
         print({
-          source: o.from ?? store.root,
+          source: o.from ?? stateRoot,
           query: required(o, "query"),
           hits: archive.search({
             query: o.query!,
@@ -365,18 +385,19 @@ export async function main(args = process.argv.slice(2)) {
       }
       if (sub === "content") {
         print({
-          source: o.from ?? store.root,
+          source: o.from ?? stateRoot,
           version: archive.contentVersion(required(o, "version")),
         });
         return 0;
       }
       const id = required(o, "id");
       const view = archive.history(id, { runId: o.run });
-      const source = scanTasks(store.root).found.find(
-        (item) => item.taskId === id,
-      );
+      const source =
+        !o.from && o.coverage !== "false"
+          ? scanTasks(stateRoot).found.find((item) => item.taskId === id)
+          : undefined;
       print({
-        source: o.from ?? store.root,
+        source: o.from ?? stateRoot,
         ...view,
         coverage:
           o.coverage === "false"
@@ -391,9 +412,9 @@ export async function main(args = process.argv.slice(2)) {
   if (area === "doctor" && opts(args.slice(1)).local === "true") {
     for (const key of Object.keys(opts(args.slice(1))))
       if (key !== "local") throw new Error("Unknown doctor option --" + key);
-    assertOutsideSharedRoots(store.root);
-    const scanned = scanTasks(store.root);
-    const opened = openArchive(store.root, { write: true });
+    assertOutsideSharedRoots(stateRoot);
+    const scanned = scanTasks(stateRoot);
+    const opened = openArchive(stateRoot, { write: true });
     const coverage = opened.archive
       ? scanned.found.map((item) => ({
           taskId: item.taskId,
@@ -402,7 +423,7 @@ export async function main(args = process.argv.slice(2)) {
       : [];
     const integrity = opened.archive?.integrity();
     print({
-      stateDirectory: store.root,
+      stateDirectory: stateRoot,
       sources: {
         readable: scanned.found.length,
         errors: scanned.errors,
@@ -430,6 +451,7 @@ export async function main(args = process.argv.slice(2)) {
           ? 2
           : 0;
   }
+  const store = getStore();
   if (area === "recover-lock") {
     const o = opts(args.slice(1));
     const name = o["watch-task"]
@@ -731,7 +753,8 @@ export async function main(args = process.argv.slice(2)) {
     }
   }
   if (sub === "result") {
-    print(conversation.result(id, o.run));
+    const result = conversation.result(id, o.run);
+    print({ ...result, archive: await publishTask(store.root, id) });
     return 0;
   }
   if (sub === "finish") {

@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" />
+  <title>Localized control contracts</title>
+  <style>
+    [hidden],
+    [inert] {
+      display: none !important;
+    }
+    body {
+      font: 16px sans-serif;
+      margin: 32px;
+    }
+    button,
+    [role="menuitem"],
+    [role="menuitemradio"] {
+      padding: 8px;
+      border: 1px solid #bbb;
+      cursor: pointer;
+    }
+    #picker {
+      margin: 16px;
+      max-width: 400px;
+    }
+    #prompt-textarea {
+      min-height: 60px;
+      border: 1px solid #888;
+    }
+  </style>
+  <aside>
+    <a data-sidebar-item href="/c/review-a"
+      ><button
+        id="options"
+        data-conversation-options-trigger="review-a"
+        aria-haspopup="menu"
+      >
+        Options
+      </button></a
+    >
+  </aside>
+  <div role="menu" aria-labelledby="options" id="conversation-menu" hidden>
+    <div role="menuitem" id="rename">
+      <svg>
+        <path
+          d="M11.6258 3.30375C13.0516 1.88123 15.3202 1.91012 16.6805 3.29496C18.0834 4.64996 18.1292 6.92825 16.6893 8.36821L9.68929 15.3682L9.68832 15.3672C8.9762 16.1131 8.0665 16.6184 7.11605 16.8389L7.11507 16.8399L3.24789 17.7276L3.24691 17.7256C3.08016 17.7653 2.74207 17.799 2.4725 17.5303C2.20162 17.2601 2.23613 16.9199 2.27621 16.753H2.27425L3.1639 12.8956C3.38813 11.8986 3.89924 11.028 4.6014 10.3272L11.6258 3.30375ZM5.54183 11.2686C5.00143 11.8078 4.62462 12.4592 4.46078 13.1905L4.4598 13.1944L3.7557 16.2461L6.81722 15.543C7.52306 15.3789 8.20539 15.0001 8.73617 14.4405L14.3944 8.78129L11.2118 5.5977L5.54183 11.2686ZM15.742 4.23637C14.9045 3.37296 13.4757 3.3368 12.5653 4.24516L12.1522 4.65727L15.3348 7.84086L15.7489 7.42778C16.6655 6.51112 16.6228 5.08792 15.7577 4.252L15.742 4.23637Z"
+        ></path></svg
+      ><span>重命名</span>
+    </div>
+  </div>
+  <input name="title-editor" value="Existing title" hidden />
+  <main>
+    <h1>Agent reviews</h1>
+    <article data-turn="user">
+      <div data-message-author-role="user" data-message-id="u1">Request</div>
+    </article>
+    <article data-turn="assistant" data-testid="conversation-turn-1">
+      <div data-message-author-role="assistant" data-message-id="a1">
+        <div class="markdown">Stable reply</div>
+      </div>
+      <button data-testid="copy-turn-action-button" aria-label="复制回答">
+        复制回答
+      </button>
+    </article>
+    <form onsubmit="event.preventDefault()">
+      <div
+        contenteditable="true"
+        role="textbox"
+        id="prompt-textarea"
+        aria-label="Agent reviews中的新聊天"
+      ></div>
+      <button
+        type="button"
+        id="composer-plus-btn"
+        aria-haspopup="menu"
+        data-testid="composer-plus-btn"
+      >
+        +
+      </button>
+      <button
+        type="button"
+        id="model"
+        aria-haspopup="menu"
+        aria-expanded="false"
+      >
+        6 Pro
+      </button>
+      <button type="button" data-testid="stop-button" aria-label="中止">
+        中止
+      </button>
+    </form>
+  </main>
+  <div id="picker" role="menu" aria-labelledby="model" hidden>
+    <div data-testid="composer-intelligence-picker-content">
+      <div
+        role="menuitem"
+        aria-expanded="false"
+        aria-label="选择模型"
+        id="select"
+      >
+        6 Pro
+      </div>
+      <div data-testid="composer-model-picker-slider-simple-view">
+        <div
+          role="menuitem"
+          tabindex="0"
+          aria-label="能力"
+          aria-describedby="power-description"
+          id="power"
+        >
+          <div data-model-reasoning-effort-slider>
+            <span
+              role="slider"
+              aria-valuemin="0"
+              aria-valuemax="4"
+              aria-valuenow="4"
+            ></span>
+          </div>
+        </div>
+        <span id="power-description">Pro，第5项。</span>
+      </div>
+      <div data-testid="composer-model-picker-slider-advanced-view" inert>
+        <div role="group">
+          <div role="menuitemradio" aria-checked="true" tabindex="0">最新</div>
+          <div role="menuitemradio" aria-checked="false" tabindex="0">
+            GPT-5.6 Sol
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const picker = document.querySelector("#picker"),
+      model = document.querySelector("#model"),
+      select = document.querySelector("#select"),
+      simple = document.querySelector(
+        '[data-testid="composer-model-picker-slider-simple-view"]',
+      ),
+      advanced = document.querySelector(
+        '[data-testid="composer-model-picker-slider-advanced-view"]',
+      );
+    model.onclick = () => {
+      picker.hidden = false;
+      model.setAttribute("aria-expanded", "true");
+    };
+    select.onclick = () => {
+      simple.inert = true;
+      advanced.inert = false;
+      select.setAttribute("aria-expanded", "true");
+    };
+    for (const item of advanced.querySelectorAll('[role="menuitemradio"]'))
+      item.onclick = () => {
+        for (const other of advanced.querySelectorAll('[role="menuitemradio"]'))
+          other.setAttribute("aria-checked", String(other === item));
+        simple.inert = false;
+        advanced.inert = true;
+        select.setAttribute("aria-expanded", "false");
+      };
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        picker.hidden = true;
+        model.setAttribute("aria-expanded", "false");
+        simple.inert = false;
+        advanced.inert = true;
+        select.setAttribute("aria-expanded", "false");
+      }
+    });
+    document.querySelector('[data-testid="copy-turn-action-button"]').onclick =
+      () => navigator.clipboard.writeText("**Stable reply**");
+    document.querySelector("#options").onclick = (event) => {
+      event.preventDefault();
+      document.querySelector("#conversation-menu").hidden = false;
+    };
+    document.querySelector("#rename").onclick = () => {
+      document.querySelector("#conversation-menu").hidden = true;
+      document.querySelector('[name="title-editor"]').hidden = false;
+    };
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape")
+        document.querySelector('[name="title-editor"]').hidden = true;
+    });
+    window.setLocale = (locale) => {
+      document.querySelector("#rename span").textContent =
+        locale === "zh-CN" ? "重命名" : locale === "fr" ? "Renommer" : "Rename";
+      document.documentElement.lang = locale;
+      const words =
+        locale === "zh-CN"
+          ? ["复制回答", "选择模型", "能力", "最新", "中止"]
+          : locale === "fr"
+            ? [
+                "Copier la réponse",
+                "Choisir le modèle",
+                "Puissance",
+                "Le plus récent",
+                "Arrêter",
+              ]
+            : [
+                "Copy response",
+                "Select model",
+                "Power",
+                "Latest",
+                "Stop answering",
+              ];
+      for (const [element, text] of [
+        [
+          document.querySelector('[data-testid="copy-turn-action-button"]'),
+          words[0],
+        ],
+        [select, words[1]],
+        [document.querySelector("#power"), words[2]],
+        [document.querySelector('[data-testid="stop-button"]'), words[4]],
+      ])
+        element.setAttribute("aria-label", text);
+      advanced.querySelector('[role="menuitemradio"]').textContent = words[3];
+    };
+  </script>
+</html>

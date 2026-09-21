@@ -64,7 +64,7 @@ curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh
 
 安装与升级需要 util-linux 提供的 `flock`。脚本会校验发布的 `sha256sums.txt`，安装到 `~/.local/lib/convorel`，并在 `~/.local/bin` 链接 `convorel`；不使用 sudo。安装选项仅通过参数传入：`--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`。卸载只移除可执行文件，保留会话状态、偏好和已安装技能。
 
-安装后可用 `convorel version --check` 检查最新版、`convorel upgrade` 升级，或加 `--version vX.Y.Z` 指定版本；旧版本与用户数据保留。
+安装后可用 `convorel version --check` 检查最新版、`convorel upgrade` 升级，或加 `--version vX.Y.Z` 指定版本；旧版本与用户数据保留。升级不会自动同步已安装技能，需对原安装目标显式运行 `convorel skills check` / `convorel skills update`（沿用 `--agent`/`--scope` 或 `--dir`）；更新保留本地定制，有冲突或旧安装缺基线时停止，详见[技能安装与更新](docs/usage.md#安装与更新审查技能)。
 
 也可以从源码运行（需要 Bun ≥ 1.3、Node ≥ 24）：`git clone https://github.com/MarioJames/convorel.git`，下文命令把 `convorel` 换成 `bun --no-env-file src/cli.ts`，初始化改用 `bun --no-env-file setup.ts`。
 

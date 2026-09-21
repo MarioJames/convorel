@@ -1,5 +1,11 @@
 // Adapted from MarioJames/skill-foundry 19f0122 (Apache-2.0); modified for standalone use.
 import { required } from "../command.ts";
+import {
+  MODEL_SELECT,
+  MODEL_POWER,
+  MODEL_LATEST,
+  STOP_SELECTOR,
+} from "./controls.ts";
 
 interface Control {
   selector: string;
@@ -29,13 +35,13 @@ interface Browser {
   session: string;
   run: (...args: string[]) => Promise<any>;
 }
-const POWER = '[role="menuitem"][aria-label="Power"]';
-const SELECT = '[role="menuitem"][aria-label="Select model"]';
+const POWER = MODEL_POWER;
+const SELECT = MODEL_SELECT;
 
 // Read only UI state. Never expose prompts, account data, tokens or request headers.
 export const MODEL_SCRIPT = `(() => {
   const visible = e => !!e && e.getClientRects().length > 0
-    && !e.closest('[aria-hidden="true"]') && getComputedStyle(e).visibility !== 'hidden';
+    && !e.closest('[aria-hidden="true"], [inert]') && getComputedStyle(e).visibility !== 'hidden';
   const label = e => (e?.innerText || '').replace(/\\s+/g, ' ').trim();
   const disabled = e => !!e && (e.disabled || e.getAttribute('aria-disabled') === 'true'
     || !!e.querySelector('[aria-disabled="true"], [data-locked="true"]'));
@@ -54,15 +60,15 @@ export const MODEL_SCRIPT = `(() => {
   const select = menu && Array.from(menu.querySelectorAll('${SELECT}')).find(visible);
   const power = menu && Array.from(menu.querySelectorAll('${POWER}')).find(visible);
   const slider = power?.querySelector('[role="slider"]');
-  const latest = menu && Array.from(menu.querySelectorAll('[role="menuitemradio"]'))
-    .find(e => visible(e) && label(e) === 'Latest');
+  const defaults = menu && Array.from(menu.querySelectorAll('${MODEL_LATEST}')).filter(visible);
+  const latest = defaults?.length === 1 ? defaults[0] : null;
   const buttons = Array.from(document.querySelectorAll('button')).filter(visible);
   const buttonLabel = e => e.getAttribute('aria-label') || label(e);
   const login = location.hostname === 'auth.openai.com' || buttons.some(e => /^(Log in|登录)$/.test(buttonLabel(e)));
   const challenge = /^(Just a moment|Security Verification)/i.test(document.title)
     || Array.from(document.querySelectorAll('iframe')).some(e => /cloudflare security challenge/i.test(e.title));
   return { url: location.href, blocked: challenge ? 'Human verification required' : login ? 'Login required' : null,
-    generating: buttons.some(e => /^(Stop answering|Stop generating|停止回答|停止生成)$/.test(buttonLabel(e))),
+    generating: buttons.some(e => e.matches(${JSON.stringify(STOP_SELECTOR)})),
     hasComposer: visible(composer),
     control: control ? { selector: '#' + CSS.escape(control.id), label: label(control),
       disabled: disabled(control), expanded: control.getAttribute('aria-expanded') === 'true' } : null,
@@ -173,15 +179,7 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     state = await wait((s) => !!s.latest, "Latest model option unavailable");
     if (state.latest!.disabled) throw new Error("Latest model option disabled");
     changed = !state.latest!.checked;
-    await act(
-      "find",
-      "role",
-      "menuitemradio",
-      "click",
-      "--name",
-      "Latest",
-      "--exact",
-    );
+    await act("click", MODEL_LATEST);
     state = await wait(
       (s) => !!s.power && s.menuLabel !== null,
       "Power menu unavailable after model selection",
@@ -192,15 +190,7 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     if (!state.latest!.checked || state.latest!.disabled)
       throw new Error("Latest selection did not persist");
     latestVerified = true;
-    await act(
-      "find",
-      "role",
-      "menuitemradio",
-      "click",
-      "--name",
-      "Latest",
-      "--exact",
-    );
+    await act("click", MODEL_LATEST);
     state = await wait(
       (s) => !!s.power && s.menuLabel !== null,
       "Power menu unavailable after Latest verification",

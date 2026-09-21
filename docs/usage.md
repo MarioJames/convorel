@@ -124,9 +124,9 @@ convorel upgrade
 convorel upgrade --version vX.Y.Z
 ```
 
-`version --check` 返回当前版本、`latest` 和 `upToDate`。独立安装的 `upgrade` 复用内嵌安装脚本，下载并验证 checksum 和可执行文件版本后切换安装链接，保留旧版本、会话、偏好与技能。自定义安装目录由安装器的 `layout.json` 记录；无法识别布局时提示重新运行安装器。源码方式提示在仓库执行 `git pull` 和 `bun install --frozen-lockfile`。升级不自动重启已有后台进程，需要使用新版时运行 `convorel restart`。
+`version --check` 返回当前版本、`latest` 和 `upToDate`。独立安装的 `upgrade` 复用内嵌安装脚本，下载并验证 checksum 和可执行文件版本后切换安装链接，保留旧版本、会话、偏好与技能。自定义安装目录由安装器的 `layout.json` 记录；无法识别布局时提示重新运行安装器。源码方式提示在仓库执行 `git pull` 和 `bun install --frozen-lockfile`。升级不自动重启已有后台进程，需要使用新版时运行 `convorel restart`。`upgrade` 的 `skills.status=check-required` 提示只表示需显式检查技能，不代表已扫描或同步安装；运行时已是最新版时也返回此提示。
 
-## 安装审查技能
+## 安装与更新审查技能
 
 Convorel 内置技能安装命令，支持 Codex 和 Claude Code，也可用 `--agent codex,claude-code` 同时安装。此入口无需先初始化浏览器或任务配置，`--scope` 默认 `user`：
 
@@ -141,6 +141,26 @@ bun --no-env-file src/cli.ts skills install --agent claude-code --scope project 
 安装入口直接复制本安装包内置的完整技能资源；预检公共 `.agents/skills` 及所选 Agent 的目标路径（包含旧 `.codex/skills`），发现同名目录或链接就拒绝覆盖，安装后核验技能入口。也可在初始化时增加 `--agent codex`，例如 `bun --no-env-file setup.ts --workspace /absolute/path/to/project --cdp 9222 --agent codex`：初始化后安装技能，再执行 doctor。省略 `--agent` 不安装技能。
 
 `--dir` 与 `--agent`、`--scope`、`--cwd` 互斥，同样拒绝覆盖已有技能，不创建 Agent 专用链接。
+
+运行时升级后，使用新版 CLI 和原安装目标显式同步；不会自动扫描其他用户目录或项目：
+
+```bash
+convorel skills check --agent codex --scope user
+convorel skills update --agent codex --scope user
+convorel skills check --dir /absolute/custom-skills
+convorel skills update --dir /absolute/custom-skills
+# legacy 安装：提供真实旧版本的 bundled skill 目录，先检查再更新
+convorel skills check --agent codex --scope user --baseline-dir /private/old-release/skills/chatgpt-review
+convorel skills update --agent codex --scope user --baseline-dir /private/old-release/skills/chatgpt-review
+```
+
+`check` 只读，不建立配置、状态或安装目录。输出 `status`（`current` / `update-available` / `conflict` / `unmanaged` / `missing`）、`baselineVersion`、`bundleVersion`、`changes`、`localChanges` 与 `conflicts`。`current` 表示安装基线与当前内置资源一致，可仍保留本地定制；检查非 current 退出 2。`update` 更新或已 current 退出 0，有冲突/无基线/未安装退出 2，参数或操作异常退出 1。
+
+新安装在技能内记录 `.convorel-skill.json`（版本和各文件 SHA-256），不建立另一套全局配置。按旧基线、本地和新版进行文件级比较：仅上游修改应用，仅本地修改保留，双方修改同一文件且内容不同时整次拒绝。删除与文件/目录转换也参与冲突检查，额外个人文件保留。先备份并人工协调 `conflicts`，再执行 update；没有强制覆盖参数。不要删 manifest 绕过保护。所有选定 Agent 的链接必须仍指向同一 canonical 技能；异常链接或树内符号链接会停止更新，不跟随到其他目录。
+
+无 manifest 的旧安装若完整匹配当前内置资源，可直接 update 记录基线；否则需 `--baseline-dir` 指向可信旧版源码/发布包中的 **chatgpt-review 技能目录本身**，不可用当前定制目录或猜测版本充当基线。该选项仅用于无 manifest 的旧安装。旧版不可确认时，保留现有目录，用独立临时安装导出新版人工比对。
+
+更新沿用安装器的暂存、切换、失败回滚模式，技能全树准备完成后再切换目录，普通切换错误恢复旧目录及基线。切换有两次 rename 之间的短暂路径空窗，应避开其他 Agent 同时加载或编辑技能。崩溃/回滚失败会保留目标旁 `.chatgpt-review.convorel-lock` 的 `owner.json`、`previous` 和 `staged`，后续操作报 `SKILL_UPDATE_LOCKED`。先确认属主进程已结束并保存现场；目标缺失且 previous 完整时恢复 previous 为原目标，目标存在时先核验 manifest/内容，不能直接覆盖。恢复核验后才精确清理该次锁目录，不删除唯一恢复副本。已加载旧技能的 Agent 需要重新加载或新建会话。
 
 在 Convorel 源码目录中也可使用现有 Skills CLI：
 
@@ -330,14 +350,15 @@ bun --no-env-file src/cli.ts conversation export --directory /private/snapshot
 bun --no-env-file src/cli.ts doctor --local true
 ```
 
-- 归档不影响运行状态：磁盘写满、SQL 拒绝、页面没有复制按钮都只出现在 `archive`/`capture` 回执的 `status`/`gaps` 里，不会把已确认投递变成失败，也不授权重发。`archive` 与 `capture` 退出码为归档失败 → 1，有缺口或 `partial` → 2，其余 0；`doctor --local true` 在库自身完整性检查失败时退出 1，本地记录可读但不完整时退出 2。
+- 完成、捕获和归档是独立结果：`state=complete` 不保证已有 Markdown 或数据库写入成功。完成路径返回 `task.archive`，本次 summary/wait 透传 `archive`，CLI `result` 补写本地归档后也返回 `archive`；`stored` / `partial` / `failed` / `unavailable` 与 `error`、`gaps` 独立披露归档结果。notice 不写 task JSON，纯读取 status 不隐式写档；不能把缺省 notice 当作成功。磁盘写满、SQL 拒绝或缺少 Copy 均不改变已完成状态、`nextAction=result` 或完成命令的成功退出码，也不授权重发。`archive` 与 `capture` 退出码为归档失败 → 1，有缺口或 `partial` → 2，其余 0；`doctor --local true` 在库自身完整性检查失败时退出 1，本地记录可读但不完整时退出 2。
 - 内容只增不改。重新生成的回复、重新捕获的 Markdown 都追加为新的 `content_version`，轮次通过指针选择当前版本。`history` 给出每轮选中的正文和该轮全部版本元数据，`content --version UUID` 按版本 ID 读回任意一条正文（含已被取代的旧版本），这样旧引用今天仍可核对。
 - 回复正文只认 Markdown：没有捕获到 Markdown 时 `history` 的 `reply` 为空、`capture_status` 为 `pending`，页面渲染文本单独保留在 `reply_rendered`，只用于追溯，不会被当作回复正文。检索覆盖每轮当前选定的 prompt 与「当前最佳正文」——已捕获时用 Markdown，未捕获时用渲染副本，命中结果的 `format` 字段披露是哪一种。
 - 检索使用 FTS5 的 `trigram` 分词，中文子串可以直接命中；少于三个字符无法构成三元组时自动退化为 `instr` 字面量扫描。查询文本始终按字面量处理，FTS 语法字符不改变匹配语义；已被取代的旧版本不会混进命中，`--task`、`--role`、`--limit`（默认 20，上限 100）用于收窄，`--task` 时附带该任务的 coverage。
 - `capture` 要求页面仍是同一会话、提交消息与目标回复都仍挂载、目标回复仍是最终态且渲染文本 hash 与保存的 `replyHash` 一致；点击复制后会再次读取页面并按渲染文本 hash 复核归属，正文变了记 `TARGET_CHANGED`，一次捕获窗口内出现多份不同正文记 `COPY_AMBIGUOUS`。复制控件点下去会短暂换成别的标签，使该轮在约两秒内被读成「非最终态」而正文不变，因此归属按正文判定，最终态只作有界等待（最多约 2.25 秒），不让下一次操作接手半途的页面。其他缺口原因码（例如 `COPY_BUTTON_MISSING`、`COPY_PAYLOAD_EMPTY`、`TARGET_NOT_RENDERED`）同样留在轮次上，`coverage` 汇总为 `current` / `markdown-incomplete` / `incomplete` / `unknown`；对已捕获且正文没变的轮次再执行一次会记为 `unchanged`，不算缺口。
 - `export` 用 `VACUUM INTO` 产出一份独立、已通过 `integrity_check` 的一致性快照（直接复制活动文件会漏掉仍在 WAL 里已提交的字节）：写入过程关在本调用自建的 0700 暂存目录内，发布出的文件为 0600，返回路径、字节数和与系统 `sha256sum` 一致的 SHA-256，并拒绝覆盖已有目标、拒绝落在状态目录或 MCP 允许根内。**导出即扩散**：那份文件包含全部已归档的 prompt 与回复，按敏感数据管理。
 - `history`/`search`/`content --from PATH` 读取指定路径（导出目录或改名后的快照文件），不读偏好、不要求工作区或浏览器；这些命令在 CLI 中先于配置与浏览器初始化派发，因此代码目录被删除、Chrome 已停止时仍能读回内容。写入类命令仍会先确认状态目录不在共享根内。
-- 归档是任务文档的投影，可用 `archive --all true` 重建；Markdown 同时保存在任务文档中，所以两侧丢任意一侧，另一侧仍保有内容。重复导入相同文档不会新增版本，但会照实报告文档里仍缺的东西——「没写新内容」不等于「已经完整」。数据库和快照都留在私有状态目录，不进入 MCP 允许根，也不上传；当前没有提供按轮次删除内容的命令，清理方式是删除私有状态目录中的数据库文件（会丢弃全部已归档内容）。
+- 归档写入失败时先解决存储问题，再对同一轮 resume 或显式 archive。已完成且无待命名操作的 poll/resume 完全在本地补档；待命名时仍访问页面恢复组织并核验，但不重新 Copy 或替换已存回复。缺 Markdown 则需显式 capture，archive 不能生成缺失原文。
+- 归档是任务文档的投影，可用 `archive --all true` 重建；Markdown 同时保存在任务文档中，所以两侧丢任意一侧，另一侧仍保有内容。重复导入相同文档不会新增版本，但会照实报告文档里仍缺的东西——「没写新内容」不等于「已经完整」。数据库和快照都留在私有状态目录，不进入 MCP 允许根，也不上传；当前没有提供按轮次删除内容的命令；不通过删库排障或处理捕获缺口。删除数据库会丢弃全部已归档内容和不可变版本，需要单独明确授权。
 
 ## 开发完成后的结果校验
 

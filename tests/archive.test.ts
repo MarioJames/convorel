@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -14,12 +15,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { Archive } from "../src/archive.ts";
-import { openArchive, publishTask, scanTasks } from "../src/post-archive.ts";
+import {
+  openArchive,
+  publishTask,
+  scanTasks,
+  taskFileHash,
+} from "../src/post-archive.ts";
+import {
+  conversationStatus,
+  conversationExitCode,
+} from "../src/conversation-status.ts";
+import { writePreference } from "../src/user-config.ts";
 import { State } from "../src/state.ts";
 import { Conversation } from "../src/conversation.ts";
 import { sha } from "../src/workspace.ts";
 import { childEnv } from "../src/command.ts";
 import { copyMarkdownScript } from "../src/chatgpt/copy.ts";
+import { waitForConversation } from "../src/wait.ts";
 
 let base: string, root: string;
 beforeEach(() => {
@@ -114,7 +126,7 @@ test("a regenerated reply appends an immutable version and keeps the old one cit
   a.close();
 });
 
-test("rendered text is retained but never selected as the reply body", () => {
+test("rendered text is retained but never selected as the reply body", async () => {
   const a = new Archive(root);
   a.publish(taskDoc(), "fh-1");
   const turn = a.history("review").turns[0];
@@ -135,7 +147,8 @@ test("rendered text is retained but never selected as the reply body", () => {
     unchanged: true,
     gaps: [{ runId: "r1", code: "markdown_missing" }],
   });
-  expect(publishTask(root, taskDoc(), "fh-1").status).toBe("partial");
+  new State(root).write("task-review", taskDoc());
+  expect((await publishTask(root, "review")).status).toBe("partial");
   a.close();
 });
 
@@ -349,7 +362,7 @@ test("an exported snapshot stands alone and refuses overwrite or impersonation",
   expect(() => new Archive(linked)).toThrow("ARCHIVE_PATH_UNSAFE");
 });
 
-test("a corrupt task document is reported without blocking the others", () => {
+test("a corrupt task document is reported without blocking the others", async () => {
   const store = new State(root);
   store.write("config", {
     version: 1,
@@ -365,9 +378,10 @@ test("a corrupt task document is reported without blocking the others", () => {
     "task-half.json",
     "task-truncated.json",
   ]);
-  expect(
-    publishTask(root, scanned.found[0].task, scanned.found[0].hash),
-  ).toMatchObject({ status: "partial", versions: 2 });
+  expect(await publishTask(root, scanned.found[0].taskId)).toMatchObject({
+    status: "partial",
+    versions: 2,
+  });
   // State.tasks() stays strict: it participates in the runtime conflict check, so a
   // bad document must fail loudly there instead of quietly disappearing.
   expect(() => store.tasks()).toThrow();
@@ -596,6 +610,238 @@ const prepared = (
     conversation: new Conversation(store, browser as any),
   };
 };
+
+test("automatic archive failures reach status and completed resume repairs the projection offline", async () => {
+  const { store, browser, conversation } = prepared(root, "T1", pageFor());
+  const task = store.read<any>("task-review");
+  delete task.naming;
+  task.runs[0].state = "waiting";
+  delete task.runs[0].reply;
+  store.write("task-review", task);
+  browser.copyResult = { ok: true, text: "## Captured" };
+  mkdirSync(join(root, "conversations.db"));
+
+  const completed = await conversation.poll("review");
+  expect(completed.runs[0].state).toBe("complete");
+  expect(completed.runs[0].reply?.markdown).toBe("## Captured");
+  expect(conversationStatus(completed)).toMatchObject({
+    archive: {
+      status: "failed",
+      error: expect.stringContaining("ARCHIVE_PATH_UNSAFE"),
+    },
+    state: "complete",
+    nextAction: "result",
+    error: null,
+  });
+  expect(conversationExitCode(completed, "resume")).toBe(0);
+  expect(store.read<any>("task-review").archive).toBeUndefined();
+  expect(browser.evals.length).toBe(1);
+
+  renameSync(join(root, "conversations.db"), join(root, "unavailable-db"));
+  browser.page = async () => {
+    throw new Error("BROWSER_OFFLINE");
+  };
+  const resumed = await conversation.resume("review");
+  expect(conversationStatus(resumed)).toMatchObject({
+    archive: { status: "stored" },
+  });
+  expect(browser.evals.length).toBe(1);
+  expect(store.read<any>("task-review").archive).toBeUndefined();
+  const reports: any[] = [];
+  expect(
+    await waitForConversation(
+      store,
+      conversation,
+      "review",
+      "r1",
+      1,
+      new AbortController().signal,
+      (value) => reports.push(value),
+    ),
+  ).toBe(0);
+  expect(reports).toMatchObject([
+    { state: "complete", archive: { status: "stored" } },
+  ]);
+  const archive = new Archive(root);
+  expect(archive.history("review").turns[0].reply).toBe("## Captured");
+  expect(
+    archive.coverage(store.read("task-review"), taskFileHash(root, "review"))
+      .state,
+  ).toBe("current");
+  archive.close();
+});
+
+test("automatic copy gaps stay separate from successful delivery", async () => {
+  const { store, browser, conversation } = prepared(root, "T1", pageFor());
+  const task = store.read<any>("task-review");
+  delete task.naming;
+  task.runs[0].state = "waiting";
+  delete task.runs[0].reply;
+  store.write("task-review", task);
+  browser.copyResult = { ok: false, reason: "COPY_BUTTON_MISSING" };
+  const completed = await conversation.poll("review");
+  expect(conversationStatus(completed)).toMatchObject({
+    state: "complete",
+    error: null,
+    archive: {
+      status: "partial",
+      gaps: [{ runId: "r1", code: "markdown_capture_failed" }],
+    },
+  });
+});
+
+for (const changed of [false, true]) {
+  test(`pending naming preserves the durable completed reply with page changed=${changed}`, async () => {
+    const { store, browser } = prepared(
+      root,
+      "T1",
+      pageFor(changed ? "Changed reply" : RENDERED),
+    );
+    const task = store.read<any>("task-review");
+    task.runs[0].reply.markdown = "## Already captured";
+    store.write("task-review", task);
+    await publishTask(root, task.id);
+    const prior = structuredClone(task.runs[0]);
+    browser.copyResult = { ok: false, reason: "COPY_BUTTON_MISSING" };
+    let organized = 0;
+    const conversation = new Conversation(
+      store,
+      browser as any,
+      undefined,
+      async () => {
+        organized++;
+        return { verified: true } as any;
+      },
+    );
+    const result = await conversation.poll("review");
+    expect(result.runs[0]).toMatchObject({
+      state: "complete",
+      reply: prior.reply,
+      replyHash: prior.replyHash,
+      branch: prior.branch,
+    });
+    expect(store.read<any>("task-review").runs[0].reply).toEqual(prior.reply);
+    expect(result.organization.verified).toBe(!changed);
+    expect(organized).toBe(changed ? 0 : 1);
+    expect(browser.evals).toEqual([]);
+    expect(conversationStatus(result)).toMatchObject({
+      archive: { status: "stored" },
+    });
+    const archive = new Archive(root);
+    expect(archive.history("review").turns[0].reply).toBe(
+      "## Already captured",
+    );
+    archive.close();
+  });
+}
+
+test("publishing an earlier scan uses current source JSON after a newer capture", async () => {
+  const { browser, conversation } = prepared(root, "T1", pageFor());
+  const stale = scanTasks(root).found[0];
+  expect(stale.task.runs[0].reply?.markdown).toBeUndefined();
+  browser.copyResult = { ok: true, text: "## Latest captured" };
+  await conversation.capture("review");
+  expect(await publishTask(root, stale.taskId)).toMatchObject({
+    status: "stored",
+  });
+  const archive = new Archive(root);
+  expect(archive.history("review").turns[0].reply).toBe("## Latest captured");
+  const current = scanTasks(root).found[0];
+  expect(archive.coverage(current.task, current.hash).state).toBe("current");
+  archive.close();
+});
+
+for (const serial of [false, true]) {
+  test(`archive waits for the source writer before reading JSON (serial=${serial})`, async () => {
+    const { store, browser, conversation } = prepared(root, "T1", pageFor());
+    const stale = scanTasks(root).found[0];
+    writePreference("browser.serial", String(serial));
+    let copied!: () => void;
+    let release!: () => void;
+    const copying = new Promise<void>((resolve) => {
+      copied = resolve;
+    });
+    const resumeCopy = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const page = await browser.page();
+    browser.page = async () => ({
+      ...page,
+      run: async () => {
+        copied();
+        await resumeCopy;
+        return { result: { ok: true, text: "## Concurrent capture" } };
+      },
+    });
+    let capture: Promise<unknown> | undefined;
+    let publish: Promise<unknown> | undefined;
+    try {
+      capture = conversation.capture("review");
+      await copying;
+      let published = false;
+      publish = publishTask(root, stale.taskId).then((result) => {
+        published = true;
+        return result;
+      });
+      await Bun.sleep(60);
+      expect(published).toBe(false);
+      release();
+      await capture;
+      expect(await publish).toMatchObject({ status: "stored" });
+      const archive = new Archive(root);
+      expect(archive.history("review").turns[0].reply).toBe(
+        "## Concurrent capture",
+      );
+      expect(
+        archive.coverage(
+          store.read("task-review"),
+          taskFileHash(root, "review"),
+        ).state,
+      ).toBe("current");
+      archive.close();
+    } finally {
+      release();
+      await Promise.allSettled([capture, publish]);
+      writePreference("browser.serial", "");
+    }
+  });
+}
+
+test("archive lock timeout is reported separately and never steals the writer lock", async () => {
+  const store = new State(root);
+  store.write("task-review", taskDoc());
+  writePreference("locks.taskWaitMs", "50");
+  try {
+    await store.locked(async () => {
+      const before = readFileSync(store.path("lock-task-review"), "utf8");
+      expect(await publishTask(root, "review")).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("LOCK_BUSY"),
+      });
+      expect(readFileSync(store.path("lock-task-review"), "utf8")).toBe(before);
+      expect(Archive.available(root)).toBe(false);
+    }, "task-review");
+    expect((await publishTask(root, "review")).status).toBe("partial");
+  } finally {
+    writePreference("locks.taskWaitMs", "");
+  }
+});
+
+test("an unreadable current source cannot replace the archive with an earlier scan", async () => {
+  const store = new State(root);
+  const task = taskDoc();
+  task.runs[0].reply.markdown = "## Retained";
+  store.write("task-review", task);
+  const stale = scanTasks(root).found[0];
+  expect((await publishTask(root, "review")).status).toBe("stored");
+  writeFileSync(store.path("task-review"), "{");
+  expect(await publishTask(root, stale.taskId)).toMatchObject({
+    status: "failed",
+  });
+  const archive = new Archive(root);
+  expect(archive.history("review").turns[0].reply).toBe("## Retained");
+  archive.close();
+});
 
 test("capture stores copied Markdown without touching run state", async () => {
   const { store, browser, conversation } = prepared(

@@ -89,7 +89,13 @@ TYPE 默认英文代码；仅用户明确要求中文时为 `start` 或 `organiz
 
 ## 取回历史内容
 
-回读既往结论不要重新打开网页。轮次完成时，Convorel 已把 prompt 原文和该回复自带的 Markdown 复制件写入私有内容库（`STATE_DIR/conversations.db`），并按不可变版本保留：
+回读既往结论先查本地内容库，不为取回旧内容重新发送。区分三层结果：
+
+- **轮次完成**：`state=complete` 表示已确认该轮回复完成；不保证 Copy 成功，也不保证 SQLite 写入成功。
+- **Markdown 捕获**：`result` 中的 `reply.markdown` 是 Copy 得到的正文；没有 Markdown 时仅有渲染副本，不能冒充原文。缺失原因看 `reply.markdownError` 或 capture 的 `gaps`。
+- **归档写入**：完成路径在返回的 `task.archive` 中提供 `ArchiveNotice`，本次 `summary`/wait 同步透传 `archive`；CLI `result` 也会补写本地归档并返回 `archive`。`stored` 表示本次写入无缺口，`partial` 表示有缺口，`failed`/`unavailable` 表示写入失败或不可用；查看 `error`、`gaps`（含 `runId`/`code`）和可用的统计字段。notice 不写入任务 JSON；纯本地 status 不能凭缺省字段证明刚刚重试过归档。
+
+归档失败或不完整不改变 `state=complete`、`nextAction=result` 或完成命令的成功退出码；不能只看退出码判断资料完整。成功归档的 prompt、Markdown 和渲染副本在私有内容库（`STATE_DIR/conversations.db`）按不可变版本保留：
 
 ```bash
 convorel conversation search --query '关键词' --limit 20
@@ -103,7 +109,14 @@ convorel conversation export --directory /private/snapshot
 convorel doctor --local true
 ```
 
-少于三个字符的查询退化为字面量扫描；检索命中只反映每轮当前选中的正文，命中里的 `format` 说明它是 Copy 得到的 Markdown 还是页面渲染副本。历史轮次可能只留有渲染文本而没有 Markdown：此时 `history` 的 `reply` 为空、`capture_status` 为 `pending`（coverage 为 `markdown-incomplete`），引用时必须说明这一缺口，不能把 `reply_rendered` 当作原文。`content --version` 可按版本 ID 读回任意正文，含已被取代的版本，用来核对旧引用。`capture` 只在原提交消息与目标回复都仍挂载、回复仍呈最终态且渲染 hash 与保存值一致时补齐，点击后还会再读一次页面按正文 hash 复核归属，内容变了就记 `TARGET_CHANGED` 而不归档；复制控件自身约两秒的换标签会被有界等待，不影响已按正文确认的归属。`--from PATH` 让 `search`/`history`/`content` 读取导出的快照（目录或改名后的文件均可），不依赖偏好文件、工作区或 Chrome；导出即全部已归档内容的副本，按敏感数据管理，不放进 MCP 允许根。内容库缺失或写入失败只影响可检索性，不改变投递状态，也不构成重发依据；`archive`/`capture` 用退出码 1 表示归档失败、2 表示存在缺口。
+少于三个字符的查询退化为字面量扫描；检索命中只反映每轮当前选中的正文，命中里的 `format` 说明它是 Copy 得到的 Markdown 还是页面渲染副本。历史轮次可能只留有渲染文本而没有 Markdown：此时 `history` 的 `reply` 为空、`capture_status` 为 `pending`（coverage 为 `markdown-incomplete`），引用时必须说明这一缺口，不能把 `reply_rendered` 当作原文。`content --version` 可按版本 ID 读回任意正文，含已被取代的版本，用来核对旧引用。`capture` 只在原提交消息与目标回复都仍挂载、回复仍呈最终态且渲染 hash 与保存值一致时补齐，点击后还会再读一次页面按正文 hash 复核归属，内容变了就记 `TARGET_CHANGED` 而不归档；复制控件自身约两秒的换标签会被有界等待，不影响已按正文确认的归属。`--from PATH` 让 `search`/`history`/`content` 读取导出的快照（目录或改名后的文件均可），不依赖偏好文件、工作区或 Chrome；导出即全部已归档内容的副本，按敏感数据管理，不放进 MCP 允许根。内容库缺失或写入失败只影响可检索性，不改变投递状态，也不构成重发依据；显式 `archive`/`capture` 用退出码 1 表示归档失败、2 表示存在缺口。
+
+恢复时保留原 task、run、状态根和已保存正文：
+
+- `archive.failed/unavailable`：先解决所报告的目录权限、空间或 SQLite 问题，再执行同一 run 的 `resume` 或 `conversation archive --id ID`。已完成且无待处理命名的轮次，poll/resume 完全在本地重试归档；仍待命名时会访问原页面恢复组织操作并核验安全完成条件，但不重新 Copy、不替换已存回复。读回 `history`/coverage 核验结果；不要删库或改任务 JSON 排障。
+- 缺 Markdown：`archive` 只能重建本地已有内容，不能补出未捕获的正文；确需原文时用同一 run 的 `capture`，它会严格核验原消息与回复。页面缺失、目标变更或 Copy 失败时保留缺口和渲染副本，不将最新网页答案冒认为该轮回复，也不重新发送问题。
+- 当前选择缺正文但已有版本 ID：先 `content --version VERSION_UUID` 读取不可变版本，保留证据；不要因为 `history.reply` 为空就认定原文已删除。`archive` 补写后再核对当前选择。
+- 页面入口或模型核验失败：`doctor` 成功只证明本地 CDP/MCP，不能代替真实项目入口、模型或远端 MCP 访问核验。仅 `prepared` 且原目标仍可验证时按上文 retry；投递未知或原 target 丢失时不猜测替代页、不新建 ID 绕过保护。
 
 ## 接续已有会话
 
@@ -114,3 +127,23 @@ convorel conversation attach --id ID --url VERIFIED_URL --user-message VERIFIED_
 ```
 
 attach 不发送；保存其新 run ID 后走正常流程。不能从“最近可见答案”推断 message ID，不能复制旧私有 JSON 充当 Convorel 状态。保留历史档案；已打开的页面视为借用，缺少身份或提交结果证据时报告缺口，不创建替代会话。
+
+## 运行时与技能版本同步
+
+`convorel upgrade` 只升级运行时并提示检查技能，不自动同步已安装副本。用**升级后的可执行文件**、原安装目标显式检查：
+
+```bash
+convorel skills check --agent codex --scope user
+convorel skills update --agent codex --scope user
+# 自定义安装根目录（其中包含 chatgpt-review）
+convorel skills check --dir /absolute/custom-skills
+convorel skills update --dir /absolute/custom-skills
+```
+
+项目范围沿用 `--scope project --cwd /absolute/project`；多 Agent 沿用原 `--agent codex,claude-code`。每个安装根分别检查，不扫描或改动其他项目。`check` 只读，返回基线与内置版本、文件差异、本地修改和冲突；`current` 表示已接收当前内置版本，可仍有已保留的本地定制。`check` 非 current 退出 2；`update` 有冲突/无基线/未安装时退出 2，操作异常退出 1。
+
+新安装的 `.convorel-skill.json` 记录内置版本和文件 SHA-256，更新按旧基线、本地文件、新内置文件比较：仅本地改动保留，仅上游改动应用，双方改动同一文件且结果不同时整次拒绝更新。先读取 `conflicts`，保留定制副本，再人工协调；没有强制覆盖参数，不删 manifest 规避冲突。
+
+旧安装没有基线且并非完整匹配当前内置资源时，返回 `unmanaged`，不会猜测差异来源。取得可信的**真实旧版本 bundled skill 目录**后，用 `--baseline-dir /private/old-release/skills/chatgpt-review` 加到 check/update 命令，审核结果再更新。该路径直接指技能目录；不可拿当前定制目录充当旧基线。若旧版本不可确定，保留原安装，在独立临时目录用 `skills install --dir PATH` 导出新版供人工比对；不能把它冒充旧版本。
+
+更新在目标旁暂存完整目录，再切换目录；普通切换失败会回滚旧树。崩溃或回滚失败会留下 `.chatgpt-review.convorel-lock`，后续命令停止并给出路径。先读 `owner.json` 并确认原进程已结束，保留 `previous`/`staged` 与当前安装供核对：目标不存在且 previous 完整时可把 previous 恢复为原 canonical；目标仍存在时先核验其 manifest 与内容，不覆盖它。人工恢复并核验完毕后才清理该次锁目录，不因超时清锁，不删除唯一恢复副本。两次目录 rename 之间存在短暂路径空窗；更新期间避免其他 Agent 读取或编辑该技能，已加载旧指引的会话需要重新加载技能或开新会话。

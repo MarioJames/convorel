@@ -1713,16 +1713,13 @@ test("project starts use only the configured project composer and reject a gener
         return {
           ...page,
           run: async (...args: string[]) => {
-            if (
-              args[0] === "eval" &&
-              args[1].includes("getAttribute('aria-label')")
-            )
+            if (args[0] === "eval" && args[1].includes("composerCount"))
               return {
                 result: {
-                  label:
-                    scenario === "generic"
-                      ? "Message ChatGPT"
-                      : "New chat in Agent reviews",
+                  url: projectUrl,
+                  composerCount: 1,
+                  editable: true,
+                  projectName: scenario === "generic" ? null : "Agent reviews",
                 },
               };
             return page.run(...args);

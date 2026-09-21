@@ -53,7 +53,6 @@ function fixture(
     url: "https://chatgpt.com/backend-api/conversations/review-a",
   });
   snapshots.set("initial", { ...saved });
-  const item = (text: string) => ({ text, label: text, disabled: false });
   const savedRequest = (action: string, status = 200) =>
     requests.push({
       requestId: "save" + ++sequence,
@@ -99,9 +98,9 @@ function fixture(
         return {
           result: {
             options: "#options",
-            chats: null,
+            expand: null,
             titleInput: editing ? "#title" : null,
-            items: menu === "options" ? [item("Rename")] : [],
+            rename: menu === "options" ? "#rename" : null,
           },
         };
       if (args[0] === "reload") {
@@ -129,12 +128,9 @@ function fixture(
         !editing
       )
         menu = "options";
-      else if (args[0] === "find") {
-        const name = args[args.indexOf("--name") + 1];
-        if (name === "Rename") {
-          editing = true;
-          menu = "";
-        } else throw new Error("Unexpected menu action");
+      else if (args[0] === "click" && args[1] === "#rename") {
+        editing = true;
+        menu = "";
       } else if (args[0] === "fill") {
         pending = args[2];
         focused = "#title";

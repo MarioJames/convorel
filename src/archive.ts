@@ -441,6 +441,8 @@ export class Archive {
     return { versionId, created: true };
   }
   /**
+   * Low-level projection of an already serialized source snapshot. Live imports must
+   * hold the task/operation lock and read the source under it (see post-archive.ts).
    * Imports one task document in a single short transaction. Browser work stays outside,
    * because no transaction may span a page interaction. Gaps are judged from the document
    * being archived, so re-importing an unchanged task still reports the same incompleteness

@@ -54,6 +54,7 @@ export function conversationStatus(task: Task) {
     lastObservedAt: run.lastObservedAt ?? null,
     observationError: run.observationError ?? null,
     error: run.error ?? null,
+    ...(task.archive ? { archive: task.archive } : {}),
   };
 }
 

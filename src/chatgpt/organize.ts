@@ -1,4 +1,5 @@
 // Adapted from MarioJames/skill-foundry 19f0122 (Apache-2.0); modified for standalone use.
+import { RENAME_ICON } from "./controls.ts";
 import { conversationId } from "./page.ts";
 
 export interface OrganizationPreferences {
@@ -127,17 +128,20 @@ export function organizationUiScript(id: string) {
     const links = Array.from(document.querySelectorAll('a[data-sidebar-item]')).filter(e => {
       try { return new URL(e.href).pathname.endsWith('/c/' + ${JSON.stringify(id)}); } catch { return false; }
     });
-    const buttons = links.flatMap(e => Array.from(e.querySelectorAll('button[aria-haspopup="menu"]'))).filter(visible);
+    const options = 'button[data-conversation-options-trigger=' + JSON.stringify(${JSON.stringify(id)}) + ']';
+    const buttons = Array.from(document.querySelectorAll(options)).filter(visible);
     const button = buttons.length === 1 ? buttons[0] : null;
-    const chats = Array.from(document.querySelectorAll('button')).find(e => visible(e) && /^(Chats|聊天)$/.test(e.innerText.trim()));
-    const input = Array.from(document.querySelectorAll('input[aria-label="Chat title"],input[aria-label="聊天标题"]')).find(visible);
-    const items = Array.from(document.querySelectorAll('[role="menuitem"]')).filter(visible).map(e => {
-      return { label: e.getAttribute('aria-label') || e.innerText.trim(), text: e.innerText.trim(),
-        disabled: e.getAttribute('aria-disabled') === 'true' };
-    });
-    return { options: button ? 'a[data-sidebar-item][href$="/c/' + ${JSON.stringify(id)} + '"] button[aria-haspopup="menu"]' : null,
-      chats: chats ? { label: chats.innerText.trim(), expanded: chats.getAttribute('aria-expanded') === 'true' } : null,
-      titleInput: input ? 'input[aria-label=' + JSON.stringify(input.getAttribute('aria-label')) + ']' : null, items };
+    const panel = links.length === 1 ? links[0].closest('[id]') : null;
+    const expanders = panel ? Array.from(document.querySelectorAll('[aria-controls]')).filter(e => visible(e) && e.getAttribute('aria-controls') === panel.id && e.getAttribute('aria-expanded') === 'false') : [];
+    const expand = expanders.length === 1 ? '[aria-controls=' + JSON.stringify(panel.id) + ']' : null;
+    const menuSelector = button?.id ? '[role="menu"][aria-labelledby=' + JSON.stringify(button.id) + ']' : null;
+    const menus = menuSelector ? Array.from(document.querySelectorAll(menuSelector)).filter(visible) : [];
+    const renameSelector = menuSelector ? menuSelector + ' [role="menuitem"]:has(svg path[d=' + JSON.stringify(${JSON.stringify(RENAME_ICON)}) + '])' : null;
+    const actions = menus.length === 1 ? Array.from(document.querySelectorAll(renameSelector)).filter(visible) : [];
+    const rename = actions.length === 1 && actions[0].getAttribute('aria-disabled') !== 'true' ? renameSelector : null;
+    const inputs = Array.from(document.querySelectorAll('input[name="title-editor"]')).filter(visible);
+    return { options: button ? options : null, expand, rename,
+      titleInput: inputs.length === 1 ? 'input[name="title-editor"]' : null };
   })()`;
 }
 
@@ -285,16 +289,8 @@ export async function organizeConversation(
   };
   const openOptions = async () => {
     let state = await ui();
-    if (!state.options && state.chats && !state.chats.expanded) {
-      await act(
-        "find",
-        "role",
-        "button",
-        "click",
-        "--name",
-        state.chats.label,
-        "--exact",
-      );
+    if (!state.options && state.expand) {
+      await act("click", state.expand);
       state = await waitUi(
         (s) => !!s.options,
         "Target conversation not visible in sidebar; open its project/history before retrying",
@@ -308,24 +304,6 @@ export async function organizeConversation(
     // Keyboard activation also avoids clicking moving sidebar coordinates during expansion.
     await act("focus", state.options);
     await act("press", "Enter");
-  };
-  const menuItem = async (names: string[]) => {
-    const state = await waitUi(
-      (s) => s.items.some((i: any) => names.includes(i.text)),
-      "Conversation menu action unavailable",
-    );
-    const matches = state.items.filter((i: any) => names.includes(i.text));
-    if (matches.length !== 1 || matches[0].disabled)
-      throw new Error("Conversation menu action unavailable or ambiguous");
-    await act(
-      "find",
-      "role",
-      "menuitem",
-      "click",
-      "--name",
-      matches[0].label,
-      "--exact",
-    );
   };
   const before = await freshMetadata(false);
   // An absent destination preserves placement, including an existing user project.
@@ -361,7 +339,11 @@ export async function organizeConversation(
   };
   if (current.title !== title) {
     await openOptions();
-    await menuItem(["Rename", "重命名"]);
+    const menu = await waitUi(
+      (s) => !!s.rename,
+      "Conversation rename action unavailable or ambiguous",
+    );
+    await act("click", menu.rename);
     const state = await waitUi(
       (s) => !!s.titleInput,
       "Chat title input unavailable",

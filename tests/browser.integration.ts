@@ -18,6 +18,10 @@ import { classify } from "../src/chatgpt/page.ts";
 import { Conversation, type Task } from "../src/conversation.ts";
 import { State } from "../src/state.ts";
 import { sha } from "../src/workspace.ts";
+import { MODEL_SCRIPT } from "../src/chatgpt/model.ts";
+import { MODEL_SELECT, MODEL_LATEST } from "../src/chatgpt/controls.ts";
+import { organizationUiScript } from "../src/chatgpt/organize.ts";
+import { projectComposerScript } from "../src/chatgpt/project.ts";
 import { copyMarkdownScript } from "../src/chatgpt/copy.ts";
 
 const chromePath = process.argv[process.argv.indexOf("--chrome") + 1];
@@ -88,7 +92,7 @@ try {
   const html =
     '<main><div data-message-author-role="user" data-message-id="u1">Review</div>' +
     '<div data-turn="assistant"><div data-message-author-role="assistant" data-message-id="a1">Done</div>' +
-    '<button aria-label="Copy response">Copy</button></div><form onsubmit="event.preventDefault();window.sends=(window.sends||0)+1"><textarea id="prompt-textarea"></textarea>' +
+    '<button data-testid="copy-turn-action-button" aria-label="Copy response">Copy</button></div><form onsubmit="event.preventDefault();window.sends=(window.sends||0)+1"><textarea id="prompt-textarea"></textarea>' +
     '<button id="composer-submit-button" data-testid="send-button" type="submit" aria-label="发送消息">发送</button></form></main>';
   const url = "data:text/html," + encodeURIComponent(html);
   const created = await tabs("new", url);
@@ -209,6 +213,92 @@ try {
     [],
     "fixture must not produce browser page errors",
   );
+  const localizedTab = await tabs(
+    "new",
+    new URL("./fixtures/localized-controls.html", import.meta.url).href,
+  );
+  const localizedPage = await controller.page(localizedTab.targetId);
+  for (const locale of ["zh-CN", "fr", "en"]) {
+    await localizedPage.run(
+      "eval",
+      `window.setLocale(${JSON.stringify(locale)})`,
+    );
+    const localized = await localizedPage.read();
+    assert.equal(localized.generating, true, locale + " stop identity");
+    assert.equal(
+      localized.messages.at(-1)?.final,
+      true,
+      locale + " copy identity",
+    );
+    assert.equal(localized.messages.at(-1)?.text, "Stable reply");
+    const project = (await localizedPage.run("eval", projectComposerScript()))
+      .result;
+    assert.equal(project.projectName, "Agent reviews");
+    assert.equal(project.composerCount, 1);
+    assert.equal(project.editable, true);
+    await localizedPage.run("click", "#model");
+    const menu = (await localizedPage.run("eval", MODEL_SCRIPT)).result;
+    assert.equal(menu.menuLabel, "6 Pro");
+    assert.equal(menu.power.value, 4);
+    assert.equal(menu.latest, null, "inert defaults cannot be clicked");
+    await localizedPage.run("click", MODEL_SELECT);
+    assert.equal(
+      (await localizedPage.run("eval", MODEL_SCRIPT)).result.latest.checked,
+      true,
+    );
+    await localizedPage.run("click", MODEL_LATEST);
+    await localizedPage.run("press", "Escape");
+    let organization = (
+      await localizedPage.run("eval", organizationUiScript("review-a"))
+    ).result;
+    assert.ok(organization.options);
+    await localizedPage.run("click", organization.options);
+    organization = (
+      await localizedPage.run("eval", organizationUiScript("review-a"))
+    ).result;
+    assert.ok(organization.rename, locale + " bound rename identity");
+    await localizedPage.run("click", organization.rename);
+    organization = (
+      await localizedPage.run("eval", organizationUiScript("review-a"))
+    ).result;
+    assert.equal(organization.titleInput, 'input[name="title-editor"]');
+    await localizedPage.run("press", "Escape");
+    const copied = (await localizedPage.run("eval", copyMarkdownScript("a1")))
+      .result;
+    assert.equal(copied.ok, true, locale + " Markdown capture");
+    assert.equal(copied.text, "**Stable reply**");
+  }
+  await localizedPage.run(
+    "eval",
+    `document.querySelector('[data-testid="stop-button"]').remove()`,
+  );
+  assert.equal((await localizedPage.read()).generating, false);
+  await localizedPage.run(
+    "eval",
+    `const c=document.querySelector('[data-testid="copy-turn-action-button"]');c.removeAttribute('data-testid');c.setAttribute('aria-label','Copy response')`,
+  );
+  assert.equal(
+    (await localizedPage.read()).messages.at(-1)?.final,
+    false,
+    "matching words cannot impersonate a copy action",
+  );
+  assert.equal(
+    (await localizedPage.run("eval", copyMarkdownScript("a1"))).result.reason,
+    "COPY_BUTTON_MISSING",
+  );
+  assert.deepEqual((await localizedPage.run("errors")).errors, []);
+  await localizedPage.run("click", "#options");
+  await localizedPage.run(
+    "eval",
+    `document.querySelector('#rename path').setAttribute('d','M0 0');document.querySelector('#rename span').textContent='Rename'`,
+  );
+  assert.equal(
+    (await localizedPage.run("eval", organizationUiScript("review-a"))).result
+      .rename,
+    null,
+    "unknown icon fails closed even with a matching label",
+  );
+  await tabs("close", localizedTab.targetId);
   // file: is a secure context for the real Clipboard API, unlike data: fixtures.
   const copyTab = await tabs(
     "new",
@@ -280,7 +370,7 @@ try {
   );
   await failurePage.run(
     "eval",
-    `document.querySelector('#failed-response').removeAttribute('data-message-author-role'); document.querySelector('#failed-response').removeAttribute('data-message-id'); document.querySelector('#failed-response').insertAdjacentHTML('beforebegin', '<article data-turn="assistant" id="failed-turn"><div data-message-author-role="assistant" data-message-id="a1">Partial response</div><button aria-label="Copy response">Copy</button></article>'); document.querySelector('#failed-turn').append(document.querySelector('#failed-response'))`,
+    `document.querySelector('#failed-response').removeAttribute('data-message-author-role'); document.querySelector('#failed-response').removeAttribute('data-message-id'); document.querySelector('#failed-response').insertAdjacentHTML('beforebegin', '<article data-turn="assistant" id="failed-turn"><div data-message-author-role="assistant" data-message-id="a1">Partial response</div><button data-testid="copy-turn-action-button" aria-label="Copy response">Copy</button></article>'); document.querySelector('#failed-turn').append(document.querySelector('#failed-response'))`,
   );
   assert.equal(
     (await outcome()).state,
@@ -293,7 +383,7 @@ try {
   );
   await failurePage.run(
     "eval",
-    `document.querySelector('main').insertAdjacentHTML('beforeend', '<button aria-label="Stop answering">Stop</button>')`,
+    `document.querySelector('main').insertAdjacentHTML('beforeend', '<button data-testid="stop-button" aria-label="Stop answering">Stop</button>')`,
   );
   assert.equal(
     (await outcome()).state,
@@ -302,7 +392,7 @@ try {
   );
   await failurePage.run(
     "eval",
-    `document.querySelector('[aria-label="Stop answering"]').remove(); document.querySelector('main').insertAdjacentHTML('beforeend', '<div data-turn="assistant"><div data-message-author-role="assistant" data-message-id="a2">Recovered</div><button aria-label="Copy response">Copy</button></div>')`,
+    `document.querySelector('[aria-label="Stop answering"]').remove(); document.querySelector('main').insertAdjacentHTML('beforeend', '<div data-turn="assistant"><div data-message-author-role="assistant" data-message-id="a2">Recovered</div><button data-testid="copy-turn-action-button" aria-label="Copy response">Copy</button></div>')`,
   );
   assert.equal(
     (await outcome()).state,
@@ -533,6 +623,7 @@ try {
         "authorized draft clearing and input event",
         "stale authorization and focus race protection",
         "localized structural submit",
+        "Chinese, French and English project/model/copy/stop DOM contracts",
         "stop button exclusion",
         "send obstruction",
         "Markdown copy, clipboard ambiguity, target rewrite and clipboard restoration",

@@ -2,6 +2,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Archive, archivePath, fileHash } from "./archive.ts";
 import { sha } from "./workspace.ts";
+import { State, taskLockName } from "./state.ts";
+import { preference } from "./user-config.ts";
 import type { Task } from "./conversation.ts";
 
 /**
@@ -29,6 +31,32 @@ function notice(error: unknown): ArchiveNotice {
   };
 }
 
+/** Both browser mutations and explicit imports use this same source lock. The
+ * serial-browser escape hatch must serialize imports too. Lock order is source
+ * (task/operation), then SQLite; never wait for a source lock with SQLite open. */
+export function withTaskStateLock<T>(
+  store: State,
+  taskId: string,
+  fn: () => Promise<T>,
+) {
+  const taskName = taskLockName(taskId);
+  const name = preference("browser.serial") === "true" ? "operation" : taskName;
+  const configured = Number(preference("locks.taskWaitMs"));
+  const waitMs =
+    Number.isSafeInteger(configured) && configured > 0 ? configured : 15_000;
+  return store.locked(fn, name, waitMs);
+}
+
+function readTask(root: string, taskId: string) {
+  taskLockName(taskId);
+  const bytes = readFileSync(join(root, "task-" + taskId + ".json"));
+  const task = JSON.parse(bytes.toString("utf8")) as Task;
+  if (task.version !== 1) throw new Error("TASK_VERSION_UNSUPPORTED");
+  if (task.id !== taskId) throw new Error("TASK_ID_MISMATCH");
+  if (!Array.isArray(task.runs)) throw new Error("TASK_RUNS_MISSING");
+  return { task, hash: sha(bytes) };
+}
+
 /** Reads task documents one by one. State.tasks() stays strict, because it participates
  * in the runtime conflict check; a corrupt file must be an item, not a total failure. */
 export function scanTasks(root: string) {
@@ -43,17 +71,9 @@ export function scanTasks(root: string) {
   }
   for (const name of names.sort()) {
     if (!name.startsWith("task-") || !name.endsWith(".json")) continue;
-    const file = join(root, name);
     try {
-      // One read per document: hashing a second copy could pair content A with the
-      // fingerprint of a newer content B.
-      const bytes = readFileSync(file);
-      const task = JSON.parse(bytes.toString("utf8")) as Task;
       const taskId = name.slice(5, -5);
-      if (task.version !== 1) throw new Error("TASK_VERSION_UNSUPPORTED");
-      if (task.id !== taskId) throw new Error("TASK_ID_MISMATCH");
-      if (!Array.isArray(task.runs)) throw new Error("TASK_RUNS_MISSING");
-      found.push({ taskId, task, hash: sha(bytes) });
+      found.push({ taskId, ...readTask(root, taskId) });
     } catch (e) {
       errors.push({ file: name, error: String(e) });
     }
@@ -65,16 +85,31 @@ export function taskFileHash(root: string, taskId: string) {
   return fileHash(join(root, "task-" + taskId + ".json"));
 }
 
-/** Imports one task. Every failure stays inside this call. */
-export function publishTask(
+/** Imports the current source document, not a snapshot taken before acquiring
+ * its writer lock. Every failure, including lock contention, is an archive notice. */
+export async function publishTask(
   root: string,
-  task: Task,
-  sourceHash: string,
-): ArchiveNotice {
+  taskId: string,
+): Promise<ArchiveNotice> {
+  try {
+    taskLockName(taskId);
+    return await withTaskStateLock(new State(root), taskId, async () =>
+      publishSafely(root, taskId),
+    );
+  } catch (e) {
+    return notice(e);
+  }
+}
+
+/** Caller must already hold withTaskStateLock. Re-read and hash the same durable
+ * bytes inside that lock, then project them in one short SQLite transaction.
+ * Browser boundaries report failure without turning it into a delivery failure. */
+export function publishSafely(root: string, taskId: string): ArchiveNotice {
   let archive: Archive | undefined;
   try {
+    const { task, hash } = readTask(root, taskId);
     archive = new Archive(root);
-    const result = archive.publish(task, sourceHash);
+    const result = archive.publish(task, hash);
     const stats = archive.stats();
     archive.close();
     return {
@@ -88,15 +123,6 @@ export function publishTask(
     try {
       archive?.close();
     } catch {}
-    return notice(e);
-  }
-}
-
-/** For a browser boundary that must not fail: reports instead of throwing. */
-export function publishSafely(root: string, task: Task) {
-  try {
-    return publishTask(root, task, taskFileHash(root, task.id));
-  } catch (e) {
     return notice(e);
   }
 }

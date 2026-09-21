@@ -1,10 +1,12 @@
+import { COPY_SELECTOR } from "./controls.ts";
 /**
  * A completed reply is archived as Markdown, not as rendered text. The page's own
  * "Copy response" control is what yields the source the model produced, so the capture
  * drives that control and takes what it hands to the clipboard.
  *
  * The clipboard methods are replaced only until the click has produced its payload,
- * then restored from inside the page, and the user's real clipboard is never written.
+ * then restored from inside the page. Synchronous clipboard writes are intercepted;
+ * the page may still schedule writes after this bounded observation has ended.
  */
 export function copyMarkdownScript(messageId: string) {
   if (!/^[A-Za-z0-9_-]{1,120}$/.test(messageId))
@@ -30,7 +32,6 @@ export function copyMarkdownScript(messageId: string) {
       clearTimeout(timer);
     }
   };
-  const label = e => (e.getAttribute('aria-label') || e.textContent || '').trim();
   const find = () => Array.from(document.querySelectorAll('[data-message-author-role]'))
     .find(e => e.getAttribute('data-message-id') === wanted);
   // The turn's own action bar sits inside the message element and its label changes on
@@ -58,8 +59,7 @@ export function copyMarkdownScript(messageId: string) {
   const turn = message.closest('[data-testid^="conversation-turn-"]')
     || message.closest('[data-turn="assistant"]');
   if (!turn) return { ok: false, reason: 'TURN_NOT_FOUND' };
-  const buttons = Array.from(turn.querySelectorAll('button[data-testid="copy-turn-action-button"]'))
-    .filter(b => /^(Copy response|复制回复)$/.test(label(b)));
+  const buttons = Array.from(turn.querySelectorAll(${JSON.stringify(COPY_SELECTOR)}));
   if (buttons.length !== 1)
     return { ok: false, reason: buttons.length ? 'COPY_BUTTON_AMBIGUOUS' : 'COPY_BUTTON_MISSING' };
   const clipboard = navigator.clipboard;

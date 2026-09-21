@@ -121,11 +121,21 @@ export function installLayout() {
   }
 }
 
+const skillsNotice = {
+  status: "check-required",
+  note: "Runtime upgrade does not synchronize installed skills. Run the new executable's skills check, then skills update with the same --agent/--scope/--cwd or --dir used to install. Local customizations are preserved; legacy installs require a trusted previous bundled skill via --baseline-dir.",
+};
+
 export async function upgrade(requested?: string) {
   const layout = installLayout();
   const manifest = await releaseManifest(requested);
   if (!requested && manifest.version === packageInfo.version)
-    return { upgraded: false, upToDate: true, version: packageInfo.version };
+    return {
+      upgraded: false,
+      upToDate: true,
+      version: packageInfo.version,
+      skills: skillsNotice,
+    };
   const process_ = Bun.spawn(
     [
       "bash",
@@ -159,5 +169,6 @@ export async function upgrade(requested?: string) {
     to: manifest.version,
     executable: join(layout.binDir, "convorel"),
     retained: layout.current,
+    skills: skillsNotice,
   };
 }

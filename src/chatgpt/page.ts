@@ -1,4 +1,5 @@
 // Adapted from MarioJames/skill-foundry 19f0122 (Apache-2.0); modified for standalone use.
+import { COPY_SELECTOR, STOP_SELECTOR } from "./controls.ts";
 export interface Message {
   id: string;
   role: string;
@@ -103,10 +104,10 @@ export const PAGE_SCRIPT = `(() => {
     const turn = e.closest('[data-turn="assistant"], [data-testid^="conversation-turn-"]');
     const actions = turn ? Array.from(turn.querySelectorAll('button')) : [];
     return { id: e.getAttribute('data-message-id') || '', role: e.getAttribute('data-message-author-role') || 'assistant',
-      text: e.innerText,
+      text: (e.querySelector('.markdown') || e).innerText,
       error: failures.get(e),
       model: e.getAttribute('data-message-model-slug') || undefined,
-      final: actions.some(b => /^(Copy response|复制回复)$/.test(label(b))) };
+      final: actions.some(b => b.matches(${JSON.stringify(COPY_SELECTOR)})) };
   });
   const challenge = /^(Just a moment|Security Verification)/i.test(document.title)
     || Array.from(document.querySelectorAll('iframe')).some(e => /cloudflare security challenge/i.test(e.title));
@@ -126,7 +127,7 @@ export const PAGE_SCRIPT = `(() => {
     ? Array.from(composer.children).map(e => Array.from(e.childNodes).filter(n => !(n.nodeType === 1 && n.classList?.contains('ProseMirror-trailingBreak'))).map(n => n.nodeName === 'BR' ? '\\n' : n.textContent).join('')).join('\\n')
     : composer?.innerText || '');
   return { url:location.href, title:document.title, messages,
-    generating:buttons.some(e => /^(Stop answering|Stop generating|停止回答|停止生成)$/.test(label(e))),
+    generating:buttons.some(e => e.matches(${JSON.stringify(STOP_SELECTOR)})),
     draft, sendReady,
     attachments: Array.from(document.querySelectorAll('button')).some(e => visible(e) && /remove (file|attachment)|移除附件|删除附件/i.test(label(e))),
     hasComposer:!!document.querySelector('[contenteditable="true"][role="textbox"], #prompt-textarea'),

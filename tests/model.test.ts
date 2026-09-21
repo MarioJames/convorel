@@ -1,5 +1,10 @@
 // Reused from skill-foundry 19f0122 (Apache-2.0).
 import { describe, expect, test } from "bun:test";
+import {
+  MODEL_SELECT,
+  MODEL_POWER,
+  MODEL_LATEST,
+} from "../src/chatgpt/controls.ts";
 import { ensureModel, type ModelState } from "../src/chatgpt/model.ts";
 
 const opts = { url: "https://chatgpt.com/", target: "TASK-TAB" };
@@ -87,13 +92,11 @@ function fixture(
         expanded = true;
         if (initial.driftAfterOpen)
           url = "https://chatgpt.com/c/other-requirement";
-      } else if (args[0] === "click" && args[1].includes("Select model"))
-        models = true;
-      else if (args[0] === "find" && args.includes("Latest")) {
+      } else if (args[0] === "click" && args[1] === MODEL_SELECT) models = true;
+      else if (args[0] === "click" && args[1] === MODEL_LATEST) {
         if (!initial.ignoreLatest) version = initial.latestVersion ?? "6";
         models = false;
-      } else if (args[0] === "focus" && args[1].includes("Power"))
-        focused = true;
+      } else if (args[0] === "focus" && args[1] === MODEL_POWER) focused = true;
       else if (args[0] === "press" && args[1] === "ArrowRight") {
         if (!focused) throw new Error("Keyboard action escaped Power");
         if (!initial.ignoreKeys) effort = Math.min(max, effort + 1);

@@ -176,6 +176,7 @@ export async function verifyUpgrade(
     assert.equal(check.upToDate, true);
     const noop = JSON.parse(await run([...cliArgs, "upgrade"]));
     assert.equal(noop.upgraded, false);
+    assert.equal(noop.skills.status, "check-required");
     assert.equal(readlinkSync(cli), original);
     assert.match(
       await run([...cliArgs, "upgrade", "--version", "../../escape"], {
@@ -204,6 +205,7 @@ export async function verifyUpgrade(
       await run([...cliArgs, "upgrade", "--version", `v${pkg.version}`]),
     );
     assert.equal(upgraded.upgraded, true);
+    assert.equal(upgraded.skills.status, "check-required");
     assert.equal(upgraded.to, pkg.version);
     assert.notEqual(readlinkSync(cli), original);
     assert.ok(

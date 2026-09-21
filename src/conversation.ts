@@ -1,11 +1,5 @@
-import { preference } from "./user-config.ts";
 import { randomUUID } from "node:crypto";
-import {
-  State,
-  registryLockName,
-  tabsLockName,
-  taskLockName,
-} from "./state.ts";
+import { State, registryLockName, tabsLockName } from "./state.ts";
 import {
   Browser,
   clearDraft,
@@ -26,7 +20,11 @@ import {
 } from "./chatgpt/project.ts";
 import { conversationTitle, organizeConversation } from "./chatgpt/organize.ts";
 import { copyMarkdownScript } from "./chatgpt/copy.ts";
-import { publishSafely } from "./post-archive.ts";
+import {
+  publishSafely,
+  withTaskStateLock,
+  type ArchiveNotice,
+} from "./post-archive.ts";
 import { conversationConfig, type Config } from "./config.ts";
 export type { Config } from "./config.ts";
 export interface RejectedSendRecovery {
@@ -114,6 +112,8 @@ export interface Task {
     error?: string;
   };
   cleanup?: any;
+  /** Outcome of this operation only; never persisted as source state. */
+  archive?: ArchiveNotice;
   workspaceBindingChange?: { from: string; to: string; at: string };
 }
 const same = (a: string, b: string) => {
@@ -123,19 +123,8 @@ const same = (a: string, b: string) => {
     return false;
   }
 };
-// Browser side effects for one task serialize on its own tab; different tasks
-// run concurrently. A contended lock is retried for a bounded window, then the
-// operation fails closed. It never steals a live owner's lock.
-// The per-task window is overridable so tests can observe a bounded wait.
-const positiveMs = (value: string | undefined, fallback: number) =>
-  Number.isSafeInteger(Number(value)) && Number(value) > 0
-    ? Number(value)
-    : fallback;
-const taskWaitMs = () => positiveMs(preference("locks.taskWaitMs"), 15_000);
 const REGISTRY_WAIT_MS = 10_000;
 const TABS_WAIT_MS = 15_000;
-/** Escape hatch for environments whose Chrome/CDP cannot drive parallel sessions. */
-const serialBrowser = () => preference("browser.serial") === "true";
 export class Conversation {
   constructor(
     public store: State,
@@ -150,16 +139,16 @@ export class Conversation {
     return this.store.read<Task>("task-" + id);
   }
   private save(t: Task) {
-    this.store.write("task-" + t.id, t);
+    const { archive: _archive, ...document } = t;
+    this.store.write("task-" + t.id, document);
   }
   /** Serializes one task's browser side effects on its own tab, releasing every
    * session it opened. Different tasks proceed concurrently; config browser.serial=true
    * restores the single global browser lock for environments that cannot. */
   private exclusive<T>(id: string, fn: () => Promise<T>) {
-    const name = serialBrowser() ? "operation" : taskLockName(id);
-    return this.store
-      .locked(fn, name, taskWaitMs())
-      .finally(() => this.browser.release());
+    return withTaskStateLock(this.store, id, fn).finally(() =>
+      this.browser.release(),
+    );
   }
   /** Cross-task identity publish (conversation URL, tab binding, request key).
    * Held only for the read-all-tasks conflict check plus the atomic write; it
@@ -363,7 +352,18 @@ export class Conversation {
         : undefined;
     this.save(t);
   }
+  private archiveCompleted(t: Task) {
+    t.archive = publishSafely(this.store.root, t.id);
+    return t;
+  }
   private async reconcile(t: Task, b: any) {
+    // A completed reply is durable. Recovery may finish pending organization,
+    // but must not replace its captured bytes with a fresh DOM observation.
+    if (this.current(t).state === "complete") {
+      if (t.naming && !t.organization)
+        await this.applyOrganization(t, b, t.naming);
+      return this.archiveCompleted(t);
+    }
     const r = this.current(t),
       p = await this.observe(t, b);
     if (!r.userMessageId || !t.url) {
@@ -421,17 +421,15 @@ export class Conversation {
         .map((m) => m.id);
     }
     this.save(t);
-    if (outcome.state === "complete" && !r.reply?.markdown) {
+    if (outcome.state === "complete" && !r.reply?.markdown)
       await this.attemptCapture(t, b, r);
-      publishSafely(this.store.root, t);
-    }
     if (
       t.naming &&
       !t.organization &&
       ["waiting", "complete"].includes(r.state)
     )
       await this.applyOrganization(t, b, t.naming);
-    return t;
+    return r.state === "complete" ? this.archiveCompleted(t) : t;
   }
   async start(
     id: string,
@@ -893,7 +891,7 @@ export class Conversation {
         this.current(t, run).state === "complete" &&
         (!t.naming || t.organization)
       )
-        return t;
+        return this.archiveCompleted(t);
       this.begin(t);
       try {
         // Recover a previously saved initial URL without guessing another tab or resending.
@@ -1086,7 +1084,7 @@ export class Conversation {
         captured,
         unchanged,
         gaps,
-        archive: publishSafely(this.store.root, this.get(id)),
+        archive: publishSafely(this.store.root, id),
       };
     });
   }
