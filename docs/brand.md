@@ -12,8 +12,6 @@ Convorel 让编码 Agent 与 ChatGPT 围绕真实代码持续协作，将独立�
 
 ### 简短介绍
 
-适用于仓库简介、项目目录和分享说明：
-
 > 让编码 Agent 与 ChatGPT 围绕真实代码持续协作，将独立意见带回本地实现与验证。
 
 ### 完整介绍
@@ -22,52 +20,78 @@ Convorel 是一个开源的 AI 代码协作工具，将 ChatGPT 接入本地编�
 
 ## 视觉素材
 
-新版品牌套件提供透明底、浅色底、深色底图标与横向 Logo，以及多尺寸封面。设计沿用双弧带开放 C，将界面图标简化为平面轮廓，封面保留立体表达。
+采用「CV 连字＋定制 Convorel 字标」：C 的弧形主体与 V 的斜向笔画组成独立 icon，交接处保留清晰切口。蓝青渐变从 C 延伸到 V，直接关联品牌名称。带 brand 版本在右侧排列完整 Convorel 字标，延续候选定制字形中的 C 斜切端点、几何圆形字腔与 v 内青色切口。
 
-- [下载完整素材包 ZIP](assets/convorel-brand-kit-v2.zip)
-- [查看版本、尺寸、配色和使用规范](assets/brand-v2/README.md)
-- [查看 imagegen 完整提示词](assets/brand-v2/PROMPTS.md)
-- [查看图片尺寸、透明状态和校验值](assets/brand-v2/manifest.json)
+只保留以下四件成品。全部为真正的 SVG 矢量，不嵌入位图、不加载外部资源，文字已转为路径；可按使用场景缩放，无需重复保存多档尺寸。
 
-![新版横向浅色 Logo](assets/brand-v2/lockups/convorel-lockup-light-768x256.png)
+| 素材                                           | 背景 | 用途                          |
+| ---------------------------------------------- | ---- | ----------------------------- |
+| [CV icon](assets/convorel-mark.svg)            | 透明 | 项目图标、头像、应用内标记    |
+| [浅底横向字标](assets/convorel-logo-light.svg) | 雾白 | 浅色页面、文档与品牌介绍      |
+| [深底横向字标](assets/convorel-logo-dark.svg)  | 深蓝 | 深色页面与演示                |
+| [品牌封面](assets/convorel-cover.svg)          | 雾白 | README 与横向介绍，含中文主张 |
 
-![新版横向深色 Logo](assets/brand-v2/lockups/convorel-lockup-dark-768x256.png)
+![浅底横向字标](assets/convorel-logo-light.svg)
 
-| 素材      | 版本                                   | 导出尺寸                           |
-| --------- | -------------------------------------- | ---------------------------------- |
-| 独立图标  | 透明底、浅色底、深色底                 | 16–1024 px，共 11 档               |
-| 横向 Logo | 透明底深色字、浅色底深色字、深色底白字 | 192×64、384×128、768×256、1536×512 |
-| 品牌封面  | 浅色底、含中文主张                     | 1200×600、1280×640、1600×800       |
-| Favicon   | 透明 ICO                               | 内含 16、32、48、64 px             |
+![深底横向字标](assets/convorel-logo-dark.svg)
 
-透明 PNG 含真实 Alpha。深色页面使用深色底白字 Logo 或透明独立图标；本套未交付白字透明 Logo。所有成品为 PNG/ICO 位图，原始母版与尺寸清单均随包提供。
+![品牌封面](assets/convorel-cover.svg)
 
-### 原有立体素材
+## 配色与排版
 
-下列原图继续保留，现有 README 引用不变。
+| 颜色           | 色值                          | 用途               |
+| -------------- | ----------------------------- | ------------------ |
+| 钴蓝 → 蓝 → 青 | `#3657FF → #188AF0 → #16BDD1` | CV 连字的统一渐变  |
+| 青色           | `#16BDD1`                     | 定制 v 的内部切口  |
+| 深蓝           | `#172238`                     | 字标、深色背景     |
+| 雾白           | `#F5F8FB`                     | 浅色背景、反白字标 |
+| 灰蓝           | `#52647D`                     | 中文主张           |
 
-| 素材                                  | 用途                                         |
-| ------------------------------------- | -------------------------------------------- |
-| [品牌封面](assets/convorel-cover.png) | README 页首、项目介绍和横向分享图，比例 2:1  |
-| [独立标记](assets/convorel-mark.png)  | 正方形项目图标、素材展示，使用不透明浅色背景 |
+名称统一写作 **Convorel**；CLI 和包名保留 `convorel`。Convorel 字标的八个字符按选中的定制字标方向绘制为几何路径，统一字重、间距与切口；这是品牌字标，不是另行分发的字体。封面中文沿用已经转为路径的 Noto Sans CJK SC 字形，成品不分发或依赖字体文件。正文仍优先使用系统中文无衬线字体。
 
-![Convorel 品牌封面](assets/convorel-cover.png)
+CV icon 的 viewBox 为 512×512；横向字标为 1200×360；封面为 1400×700。这些是构图比例，不是导出尺寸限制。主标记可在浅底、深底使用，常规界面建议 24 px 以上，16 px 仅用于受限位置；横向字标建议显示宽度至少 192 px。
 
-两条独立的弧带组成开放的 C：保持各自的视角，也能接续同一项工作。留白是标记的一部分。完整封面左对齐名称和主张，右侧承载标记；其余文档保持简单，让真实的使用场景承担说明工作。
+保持画面比例和自带留白，不拉伸，不合并 C 与 V 的交接切口，不改成不透明白缝，不加立体材质或重阴影。深色页面优先使用深底字标。需要单色印刷时，C 与 V 可使用同一实色，但必须保留负形切口。
 
-| 颜色   | 色值      | 角色           |
-| ------ | --------- | -------------- |
-| 深蓝   | `#14263D` | 名称与主要文字 |
-| 钴蓝   | `#3458DB` | 主标记与重点   |
-| 海玻璃 | `#7CB8BE` | 第二条弧带     |
-| 雾白   | `#F5F8FB` | 素材背景       |
-| 白色   | `#FFFFFF` | 文档背景与留白 |
+SVG 是本套源文件；只接受 PNG/JPEG 的发布平台需要按其实际规格导出，本仓库不再预存多尺寸副本。
 
-名称统一写作 **Convorel**；CLI 和包名保留 `convorel`。标题采用清晰的无衬线字形，中文内容优先使用系统中文无衬线字体。现有图片中的文字已栅格化，仓库不分发字体文件。
+## 生成与验证
 
-保持图片比例和四周留白，不拉伸、不拆开弧带、不在标记上叠加文字。深色页面使用图片自带的浅色底，不将其误作透明图。封面的主张在 README 正文中也有文字说明，不依赖图片传达功能或安装步骤。
+概念探索使用内置 imagegen。用户选择 02「CV 连字」并要求复用 03「定制字标」后，以 SVG 原生路径和线性渐变重建 icon 与字标，并统一所有组合中的几何与颜色。最终文件没有嵌入生成图片，也没有 SVG 滤镜或外部字体依赖。
 
-这组素材使用 imagegen 生成并经视觉检查，原始 PNG 保存在仓库内。使用遵循仓库的 [Apache-2.0 许可证](../LICENSE)，不要据此暗示 Convorel 或 OpenAI 对衍生项目的背书。
+已通过浏览器检查：主标记在浅深背景的 16 / 24 / 32 / 64 / 144 px 显示、两款横向字标、封面中英文排版；同时检查 SVG 结构和本地引用。旧的对话负形方案、六张字母候选稿及此前的多尺寸副本均已清理，只保留四件正式 SVG。
+
+<details>
+<summary>imagegen CV 连字概念的完整提示词</summary>
+
+```text
+Use case: logo-brand
+Asset type: one professional Convorel logo concept, a flat vector-friendly brand identity presentation.
+Brand: Convorel connects local coding agents with independent AI discussion. The user wants an immediately brand-linked shape, not an arbitrary generic symbol. Completely fresh exploration; do NOT reuse previous two-arc ribbons, diagonal two-chat-panel logo, polygon C badge, or converging-arrow mark.
+Presentation: pristine opaque white wide 2:1 canvas, one centered horizontal logo lockup with generous whitespace. Exact brand spelling "Convorel", C-o-n-v-o-r-e-l, capital C only. Typography should be carefully drawn, contemporary, clean and optically kerned, medium or semibold rather than heavy black. Symbol and typography must feel designed together. Deep ink navy #172238 lettering, restrained cobalt #315CF6 and cyan #27B4CA accent; simple flat fills or a very subtle controlled blue gradient only. Shape and spacing are more important than effects. Professional Swiss-influenced brand design, strong 24px silhouette, economical paths.
+Constraints: ONE concept per image, no explanatory text, numbering, tagline, mockup, application examples, board grid, textured paper, 3D, metal, glass, bevels, shadows, glow, decoration, AI star, brain, infinity, network nodes or third-party logos. No giant uppercase typography. Entire background fully opaque white.
+
+Concept 02 — bespoke CV ligature. Design a compact elegant monogram that truly combines a curved C and a diagonal V into ONE coherent shape: the C's open right side is completed by a sharply drawn V stroke flowing down into the lower C terminal. C and V must both be legible; the V is a letterform, not a checkmark added inside a badge. The monogram is open and airy, not enclosed in a square/circle. Shared stroke weight, restrained corner rounding, one precise negative-space diagonal slit at the join. Refined flat blue-to-indigo coloration. Place exact Convorel wordmark alongside it in a slightly geometric sans serif whose v repeats the monogram's angle. Avoid knots, chain links, overlapping translucent ribbons, pointed shield or generic verification-check branding.
+```
+
+</details>
+
+<details>
+<summary>imagegen 定制字标概念的完整提示词</summary>
+
+```text
+Use case: logo-brand
+Asset type: one professional Convorel logo concept, a flat vector-friendly brand identity presentation.
+Brand: Convorel connects local coding agents with independent AI discussion. The user wants an immediately brand-linked shape, not an arbitrary generic symbol. Completely fresh exploration; do NOT reuse previous two-arc ribbons, diagonal two-chat-panel logo, polygon C badge, or converging-arrow mark.
+Presentation: pristine opaque white wide 2:1 canvas, one centered horizontal logo lockup with generous whitespace. Exact brand spelling "Convorel", C-o-n-v-o-r-e-l, capital C only. Typography should be carefully drawn, contemporary, clean and optically kerned, medium or semibold rather than heavy black. Symbol and typography must feel designed together. Deep ink navy #172238 lettering, restrained cobalt #315CF6 and cyan #27B4CA accent; simple flat fills or a very subtle controlled blue gradient only. Shape and spacing are more important than effects. Professional Swiss-influenced brand design, strong 24px silhouette, economical paths.
+Constraints: ONE concept per image, no explanatory text, numbering, tagline, mockup, application examples, board grid, textured paper, 3D, metal, glass, bevels, shadows, glow, decoration, AI star, brain, infinity, network nodes or third-party logos. No giant uppercase typography. Entire background fully opaque white.
+
+Concept 03 — wordmark-first identity. NO separate symbol at all. Make the exact word "Convorel" itself the whole logo in an original beautifully crafted modern lowercase-and-capital sans serif: capital C, rest lowercase. Gently rounded counters, moderate weight, distinctive narrow diagonal notch at the lower-right terminal of the initial C and a precisely matched cut at the apex of the v. Fuse only the adjoining v-o relationship through exceptionally good spacing, not actual unreadable joined characters. The initial C is cobalt, the remaining letters deep ink navy, with a tiny restrained cyan facet confined to the v notch. The C can later stand alone as an icon. The brand has eight letters: C-o-n-v-o-r-e-l; render EXACTLY "Convorel" with all eight correct characters. No dropped letters or added characters. Large but comfortably framed, understated typographic craft, not a generic off-the-shelf bold font and not a sci-fi stencil.
+```
+
+</details>
+
+素材遵循仓库的 [Apache-2.0 许可证](../LICENSE)。Convorel 是独立社区项目，不得利用这些素材暗示 OpenAI 的官方合作或背书。
 
 ## 表达原则
 
@@ -76,5 +100,3 @@ Convorel 是一个开源的 AI 代码协作工具，将 ChatGPT 接入本地编�
 - 区分模型意见与本地验证。避免“保证正确”“完全自动”“零风险”等未经证实的承诺。
 - 清楚说明当前支持范围与前置条件，不把尚未验证的平台或集成写成现有能力。
 - 保持独立社区项目身份，不使用第三方标识制造官方合作印象。
-
-GitHub 仓库简介可使用上面的简短介绍；社交预览可使用品牌封面。仓库中提供的是可用素材，不会自动修改远端仓库设置。

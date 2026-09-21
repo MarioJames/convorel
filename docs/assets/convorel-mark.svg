@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+<title id="title">Convorel</title>
+<desc id="desc">Convorel 的 CV 连字 icon，蓝青渐变，交接处保留斜向切口；背景透明。</desc>
+<defs>
+  <linearGradient id="cv" x1="18" y1="185" x2="411" y2="46" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#3657FF"/><stop offset=".52" stop-color="#188AF0"/><stop offset="1" stop-color="#16BDD1"/>
+  </linearGradient>
+</defs>
+<g transform="translate(36 131)"><g fill="url(#cv)">
+  <path d="M243 66C219 22 184 0 137 0C61 0 0 54 0 130C0 199 50 248 119 248H262L222 182C217 174 207 171 198 176C173 192 147 198 122 194C82 188 58 164 58 129C58 89 88 58 127 58C161 58 188 80 207 119Z"/>
+  <path d="M248 80L284 146L356 14Q364 0 382 0H440L299 244Q290 260 280 246L220 136Z"/>
+</g></g>
+</svg>

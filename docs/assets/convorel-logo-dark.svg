@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+<title id="title">Convorel</title>
+<desc id="desc">CV 连字 icon 与 Convorel 定制字标组成的横向品牌标识，dark 背景。</desc>
+<defs>
+  <linearGradient id="cv" x1="18" y1="185" x2="411" y2="46" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#3657FF"/><stop offset=".52" stop-color="#188AF0"/><stop offset="1" stop-color="#16BDD1"/>
+  </linearGradient>
+</defs>
+<path fill="#172238" d="M0 0H1200V360H0Z"/>
+<g transform="translate(141.583 116.820) scale(0.50544)"><g fill="url(#cv)">
+  <path d="M243 66C219 22 184 0 137 0C61 0 0 54 0 130C0 199 50 248 119 248H262L222 182C217 174 207 171 198 176C173 192 147 198 122 194C82 188 58 164 58 129C58 89 88 58 127 58C161 58 188 80 207 119Z"/>
+  <path d="M248 80L284 146L356 14Q364 0 382 0H440L299 244Q290 260 280 246L220 136Z"/>
+</g></g>
+<g transform="translate(405.017 126.000) scale(1.08000)"><g fill="#F5F8FB" fill-rule="evenodd">
+  <path transform="translate(0 0)" d="M88 16C78 5 64 0 48 0C20 0 0 22 0 50C0 78 20 100 48 100C64 100 78 95 88 84L72 68C65 76 59 79 49 79C32 79 21 67 21 50C21 33 33 21 49 21C58 21 66 25 72 32Z"/>
+  <path transform="translate(96 0)" d="M70 65A35 35 0 1 1 0 65A35 35 0 1 1 70 65ZM52 65A17 18 0 1 0 18 65A17 18 0 1 0 52 65Z"/>
+  <path transform="translate(177 0)" d="M0 100V30H21V38C28 31 36 28 47 28C65 28 75 41 75 61V100H54V64C54 53 48 48 40 48C28 48 21 55 21 67V100Z"/>
+  <path transform="translate(263 0)" d="M0 30H24L39 74L54 30H78L51 100H27Z"/>
+  <path transform="translate(350 0)" d="M70 65A35 35 0 1 1 0 65A35 35 0 1 1 70 65ZM52 65A17 18 0 1 0 18 65A17 18 0 1 0 52 65Z"/>
+  <path transform="translate(431 0)" d="M0 100V30H21V42C29 32 39 28 52 29V51C33 48 21 58 21 76V100Z"/>
+  <path transform="translate(493 0)" d="M80 69H22C24 80 32 86 43 86C52 86 59 83 65 77L78 88C69 98 57 103 42 103C17 103 0 87 0 65C0 42 17 27 40 27C65 27 80 43 80 65ZM22 56H59C57 46 50 41 41 41C31 41 24 47 22 56Z"/>
+  <path transform="translate(583 0)" d="M0 0H22V100H0Z"/>
+</g>
+<path fill="#16BDD1" d="M294 30H310L302 51Z"/></g>
+</svg>

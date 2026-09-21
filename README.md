@@ -1,4 +1,4 @@
-![Convorel：让代码协作，多一个独立视角。](docs/assets/convorel-cover.png)
+![Convorel：让代码协作，多一个独立视角。](docs/assets/convorel-cover.svg)
 
 # Convorel
 
