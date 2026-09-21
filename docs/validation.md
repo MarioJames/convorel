@@ -17,7 +17,7 @@
 4. 回执契约不闭合（unchanged 报空 gaps 让 partial 变 stored、`capture` 恒退出 0、doctor 忽略 integrity、search 把 stats 命名为 coverage、旧版本正文无法读回、检索含被取代的 user 版本）→ 逐项修正，新增 `content --version`。
 5. `fileHash` 先 latin1 解码再按 UTF-8 哈希，且 `scanTasks` 两次读文件可能配对不同内容 → 单次读取、按原始字节哈希。
 6. `--from` 实际读的是该目录下的固定文件名、`verify()` 只看 `dbKind` 键是否存在、只读入口不校验版本、提前分派绕过共享根断言、`--all false` 会导入全部任务 → 精确文件路径、比对值并在读写两侧校验版本、写入类命令补 `assertPrivate`（读取类仍不依赖目录存在）、`--all` 严格布尔化；导出改为在自建的 0700 暂存目录内完成 `VACUUM INTO` 再以 0600 发布。
-7. `observation` 把导入时间与保存的 branch 记成一次页面观测 → 该表在首次发布前删除，避免记录比证据更完整的观测历史；本地既有归档按 `archive --all true` 从任务文档重建（Markdown 本就同时存在任务文档里，重建前后 `markdownVersions` 与 integrity 一致）。`derived` 作为二次派生的占位保留，尚无写入方。
+7. `observation` 把导入时间与保存的 branch 记成一次页面观测 → 该表在首次发布前删除，避免记录比证据更完整的观测历史；本地既有归档按 `archive --all true` 从任务文档重建（Markdown 本就同时存在任务文档里，重建前后 `markdownVersions` 与 integrity 一致）。同样按用户确认删除 `derived` 占位表：二次派生只是未来方向，本轮不预先设计其结构，需求真正到来时再随迁移加入。
 
 未采纳：把 Markdown 从任务 JSON 中移走（保留是为了捕获成功而导入失败时可补发布，且文档仍是唯一真值）；为「零依赖」再拆一层通用模型；本轮引入向量化、worker 或全页采集。自动完成路径未把归档 notice 打进命令输出，回执以库内 gap 与 `doctor`/`archive` 报告为准，不改既有命令输出结构。
 

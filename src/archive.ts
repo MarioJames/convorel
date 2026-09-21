@@ -108,22 +108,6 @@ create table run_selection (
   task_file_hash text,
   indexed_at text not null
 );
--- The derivation surface: summaries and decisions cite exact content versions.
-create table derived (
-  id integer primary key,
-  kind text not null,
-  task_id text references task (id) on delete cascade,
-  run_id text references run (id) on delete cascade,
-  inputs text not null,
-  producer text not null,
-  producer_version text not null,
-  model text,
-  content text not null,
-  content_hash text not null,
-  created_at text not null,
-  supersedes integer references derived (id),
-  invalidated_at text
-);
 create table meta (key text primary key, value text not null);
 create index run_task on run (task_id);
 create index content_task on content_version (task_id, run_id);
@@ -899,7 +883,6 @@ export class Archive {
       markdownVersions: this.one(
         "select count(*) c from content_version where format = 'markdown'",
       ).c,
-      derived: this.one("select count(*) c from derived").c,
       bytes: pages * pageSize,
       journalMode: (this.db.query("pragma journal_mode").get() as any)
         .journal_mode,
