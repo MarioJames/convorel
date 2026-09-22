@@ -22,12 +22,17 @@ import { MODEL_SCRIPT } from "../src/chatgpt/model.ts";
 import { MODEL_SELECT, MODEL_LATEST } from "../src/chatgpt/controls.ts";
 import { organizationUiScript } from "../src/chatgpt/organize.ts";
 import { projectComposerScript } from "../src/chatgpt/project.ts";
+import { setRuntimePaths } from "../src/paths.ts";
+import { writePreference } from "../src/user-config.ts";
 import { copyMarkdownScript } from "../src/chatgpt/copy.ts";
 
 const chromePath = process.argv[process.argv.indexOf("--chrome") + 1];
 if (!process.argv.includes("--chrome") || !chromePath)
   throw new Error("Pass --chrome with an installed Chrome executable");
 const root = mkdtempSync(join(tmpdir(), "review-browser-"));
+const oldPaths = setRuntimePaths({ configDir: join(root, "preferences") });
+writePreference("browser.actionIntervalMs", "1");
+writePreference("browser.navigationWaitMs", "1");
 let namespace = "";
 let controller: Browser;
 const previous = {
@@ -298,6 +303,25 @@ try {
     null,
     "unknown icon fails closed even with a matching label",
   );
+  await localizedPage.run(
+    "eval",
+    `document.querySelector('aside').remove(); const header=document.createElement('button'); header.id='conversation-options-review-a'; header.dataset.testid='conversation-options-button'; header.textContent='Options'; document.body.appendChild(header)`,
+  );
+  assert.equal(
+    (await localizedPage.run("eval", organizationUiScript("review-a"))).result
+      .options,
+    'button[data-testid="conversation-options-button"][id="conversation-options-review-a"]',
+  );
+  assert.equal(
+    (
+      await localizedPage.run(
+        "eval",
+        organizationUiScript("another-conversation"),
+      )
+    ).result.options,
+    null,
+    "header fallback must bind the exact conversation ID",
+  );
   await tabs("close", localizedTab.targetId);
   // file: is a secure context for the real Clipboard API, unlike data: fixtures.
   const copyTab = await tabs(
@@ -556,7 +580,8 @@ try {
     adapter as unknown as Browser,
     async () => ({ observedModel: "6 Pro" }),
   );
-  const restoredTask = await conversation.start(
+  const restoredTask = await startConversation(
+    conversation,
     "continued",
     "Follow-up",
     "next",
@@ -569,7 +594,7 @@ try {
   assert.equal((await list()).length, initial.length + 2);
   const restoredTaskPage = await controller.page(restoredTask.binding!.target);
   assert.equal((await restoredTaskPage.run("eval", "window.sends")).result, 1);
-  await conversation.start("continued", "Follow-up", "next", true);
+  await startConversation(conversation, "continued", "Follow-up", "next", true);
   assert.equal((await restoredTaskPage.run("eval", "window.sends")).result, 1);
   assert.deepEqual(await claimedPage.read(), claimedBefore);
   assert.deepEqual(fixtureState.read("task-occupant"), occupant);
@@ -662,6 +687,15 @@ try {
     if (previous.namespace === undefined)
       delete process.env.AGENT_BROWSER_NAMESPACE;
     else process.env.AGENT_BROWSER_NAMESPACE = previous.namespace;
+    setRuntimePaths(oldPaths);
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+async function startConversation(
+  conversation: Conversation,
+  ...args: Parameters<Conversation["create"]>
+) {
+  const task = await conversation.create(...args);
+  return conversation.start(task.id, task.currentRun, args[4]);
 }

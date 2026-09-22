@@ -10,10 +10,22 @@ export function conversationStatus(task: Task) {
     : run.state === "prepared"
       ? "not_attempted"
       : "unknown";
+  const organization = organizationRecovery(task);
   let phase: string, nextAction: string;
   if (run.state === "complete") {
-    phase = "complete";
-    nextAction = "result";
+    phase =
+      organization && organization.state !== "verified"
+        ? "organization_pending"
+        : "complete";
+    nextAction = organization?.nextAction ?? "result";
+    if (
+      (!organization || organization.state === "verified") &&
+      task.organizationObservation &&
+      !task.organizationObservation.closed
+    ) {
+      phase = "cleanup_pending";
+      nextAction = "finish";
+    }
   } else if (run.observationError) {
     phase = run.observationError.retryable
       ? "observation_interrupted"
@@ -21,7 +33,7 @@ export function conversationStatus(task: Task) {
     nextAction = run.observationError.retryable ? "resume" : "inspect";
   } else if (run.state === "prepared") {
     phase = "before_send";
-    nextAction = run.error ? "inspect" : "retry";
+    nextAction = run.error ? "inspect" : "start";
   } else if (["submitting", "delivery_unknown"].includes(run.state)) {
     phase = "confirming_delivery";
     nextAction = "resume";
@@ -39,6 +51,7 @@ export function conversationStatus(task: Task) {
     workspace: task.config.workspace,
     workspaceId: task.workspaceId,
     state: run.state,
+    replyComplete: run.state === "complete",
     delivery,
     phase,
     nextAction,
@@ -55,9 +68,10 @@ export function conversationStatus(task: Task) {
     lastObservedAt: run.lastObservedAt ?? null,
     observationError: run.observationError ?? null,
     error: run.error ?? null,
-    organization: organizationRecovery(task),
+    organization,
     completionProbe: run.completionProbe ?? null,
     cleanup: task.cleanup ?? null,
+    observerCleanup: task.organizationObservation ?? null,
     ...(task.archive ? { archive: task.archive } : {}),
   };
 }
@@ -67,7 +81,12 @@ export function conversationExitCode(
   operation: "start" | "resume",
 ) {
   const summary = conversationStatus(task);
-  if (summary.state === "complete") return 0;
+  if (summary.state === "complete")
+    return operation === "resume" &&
+      ((summary.organization && summary.organization.state !== "verified") ||
+        summary.phase === "cleanup_pending")
+      ? 2
+      : 0;
   // start confirms submission; resume confirms completion. A readable status alone is not completion.
   return operation === "start" &&
     summary.state === "waiting" &&

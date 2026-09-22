@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { Archive, archivePath, fileHash } from "./archive.ts";
+import { Archive, archivePath } from "./archive.ts";
 import { sha } from "./workspace.ts";
 import { State, taskLockName } from "./state.ts";
 import { preference } from "./user-config.ts";
@@ -49,40 +49,40 @@ export function withTaskStateLock<T>(
 
 function readTask(root: string, taskId: string) {
   taskLockName(taskId);
-  const bytes = readFileSync(join(root, "task-" + taskId + ".json"));
-  const task = JSON.parse(bytes.toString("utf8")) as Task;
+  const bytes = new State(root).bytes("task-" + taskId);
+  const task = JSON.parse(bytes) as Task;
   if (task.version !== 1) throw new Error("TASK_VERSION_UNSUPPORTED");
   if (task.id !== taskId) throw new Error("TASK_ID_MISMATCH");
   if (!Array.isArray(task.runs)) throw new Error("TASK_RUNS_MISSING");
   return { task, hash: sha(bytes) };
 }
 
-/** Reads task documents one by one. State.tasks() stays strict, because it participates
- * in the runtime conflict check; a corrupt file must be an item, not a total failure. */
+/** Reads task documents from SQLite or unmigrated JSON one by one. State.tasks() stays strict, because it participates
+ * in the runtime conflict check; a corrupt document must be an item, not a total failure. */
 export function scanTasks(root: string) {
   const found: { taskId: string; task: Task; hash: string }[] = [];
-  const errors: { file: string; error: string }[] = [];
-  let names: string[];
+  const errors: { taskId: string | null; error: string }[] = [];
+  let ids: string[];
   try {
-    names = readdirSync(root);
-  } catch (e: any) {
-    if (e.code === "ENOENT") return { found, errors };
-    throw e;
+    if (!existsSync(root)) return { found, errors };
+    ids = new State(root).taskIds();
+  } catch (e) {
+    // Source integrity affects coverage, not access to independently archived content.
+    errors.push({ taskId: null, error: String(e) });
+    return { found, errors };
   }
-  for (const name of names.sort()) {
-    if (!name.startsWith("task-") || !name.endsWith(".json")) continue;
+  for (const taskId of ids) {
     try {
-      const taskId = name.slice(5, -5);
       found.push({ taskId, ...readTask(root, taskId) });
     } catch (e) {
-      errors.push({ file: name, error: String(e) });
+      errors.push({ taskId, error: String(e) });
     }
   }
   return { found, errors };
 }
 
 export function taskFileHash(root: string, taskId: string) {
-  return fileHash(join(root, "task-" + taskId + ".json"));
+  return sha(new State(root).bytes("task-" + taskId));
 }
 
 /** Imports the current source document, not a snapshot taken before acquiring

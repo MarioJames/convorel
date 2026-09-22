@@ -228,3 +228,107 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("CLI creates from stdin offline and start executes only a saved run", async () => {
+  const root = mkdtempSync(join(tmpdir(), "convorel-cli-queue-"));
+  const workspace = join(root, "code");
+  mkdirSync(workspace);
+  const store = new State(join(root, "state"));
+  let requests = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => {
+      requests++;
+      return new Response("Unavailable", { status: 503 });
+    },
+  });
+  store.write("config", {
+    version: 1,
+    workspace,
+    cdp: `http://127.0.0.1:${server.port}`,
+  });
+  const run = async (args: string[], input?: string) => {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "--no-env-file",
+        join(import.meta.dir, "../src/cli.ts"),
+        "--state-dir",
+        store.root,
+        "--config-dir",
+        join(root, "prefs"),
+        "conversation",
+        ...args,
+      ],
+      {
+        env: childEnv(),
+        stdin: input === undefined ? "ignore" : new Blob([input]),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [out, err, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    return { value: out ? JSON.parse(out) : null, err, code };
+  };
+  try {
+    const created = await run(
+      [
+        "create",
+        "--id",
+        "queued",
+        "--prompt-stdin",
+        "true",
+        "--workspace",
+        workspace,
+      ],
+      "完整 prompt\n第二行",
+    );
+    expect(created.code).toBe(0);
+    expect(created.value.summary.nextAction).toBe("start");
+    expect(requests).toBe(0);
+    expect(store.read<any>("task-queued").runs[0].prompt).toContain(
+      "完整 prompt\n第二行",
+    );
+    const again = await run([
+      "create",
+      "--id",
+      "queued",
+      "--prompt",
+      "完整 prompt\n第二行",
+    ]);
+    expect(again.value.currentRun).toBe(created.value.currentRun);
+    const conflict = await run([
+      "create",
+      "--id",
+      "queued",
+      "--prompt",
+      "changed",
+    ]);
+    expect(conflict.code).toBe(1);
+    expect(conflict.err).toContain("REQUEST_CONFLICT");
+    const ambiguous = await run(
+      ["create", "--id", "other", "--prompt", "x", "--prompt-stdin", "true"],
+      "y",
+    );
+    expect(ambiguous.code).toBe(1);
+    const sent = await run([
+      "start",
+      "--id",
+      "queued",
+      "--run",
+      created.value.currentRun,
+    ]);
+    expect(sent.code).toBe(2);
+    expect(requests).toBeGreaterThan(0);
+    expect(sent.value.summary.state).toBe("prepared");
+    expect(sent.value.summary.delivery).toBe("not_attempted");
+  } finally {
+    server.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+});

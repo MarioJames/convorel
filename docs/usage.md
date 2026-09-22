@@ -65,23 +65,23 @@ convorel setup --workspace /absolute/path/to/your-project --cdp 9222
 
 ### 4. 发起第一次讨论
 
-直接使用 CLI，先创建一个不含敏感信息的请求文件。文件内容由调用方完整编写：
+直接使用 CLI，通过 stdin 将完整请求写入任务数据库，无需临时文件：
 
 ```bash
-review_prompt_file=$(mktemp)
-cat > "$review_prompt_file" <<'PROMPT'
+bun --no-env-file src/cli.ts conversation create \
+  --id first-question --prompt-stdin true \
+  --type EXP --topic '内容哈希' <<'PROMPT'
 请解释内容哈希如何帮助识别文件变化。
 给出一个简短示例。
 PROMPT
-
-bun --no-env-file src/cli.ts conversation start \
-  --id first-question --prompt-file "$review_prompt_file" \
-  --type EXP --topic '内容哈希'
 ```
+
+创建只入库，不访问浏览器。短文本也可用 `--prompt '完整文本'`。任务及各轮 prompt、配置和状态保存到私有 `tasks.db`；内容检索归档继续使用独立的 `conversations.db`。
 
 从输出中复制 `currentRun`，将下面的 `RUN_ID` 替换为该值：
 
 ```bash
+bun --no-env-file src/cli.ts conversation start --id first-question --run RUN_ID
 bun --no-env-file src/cli.ts conversation wait --id first-question --run RUN_ID
 bun --no-env-file src/cli.ts conversation result --id first-question --run RUN_ID
 bun --no-env-file src/cli.ts conversation finish --id first-question --run RUN_ID
@@ -288,10 +288,12 @@ bun --no-env-file src/cli.ts conversation resume --id first-question --run RUN_I
 
 # 消费上一轮结果后，用新的请求 ID 继续同一对话
 bun --no-env-file src/cli.ts conversation followup \
-  --id first-question --prompt-file /path/to/followup.md --request-id round-2
+  --id first-question --prompt '本轮完整新增说明' --request-id round-2
+# 使用 followup 返回的新 currentRun
+bun --no-env-file src/cli.ts conversation start --id first-question --run NEW_RUN_ID
 ```
 
-重复相同任务和请求不会重发；新问题使用 `followup` 和新请求 ID。后续操作使用它返回的新 `currentRun`。等待超时只停止本地监视，不会停止网页生成。
+`create` 和 `followup` 只创建持久轮次，退出 0 表示入库成功；`start --id --run` 执行精确轮次。重复创建相同请求不会新增轮次，重复 start 不重发；新问题使用 `followup` 和新请求 ID。后续操作使用它返回的新 `currentRun`。等待超时只停止本地监视，不会停止网页生成。
 
 `start`、`retry`、`status`、`resume` 和 `list` 的任务输出包含 `summary`：`delivery` 区分 `not_attempted`、`unknown` 和 `confirmed`；`workspace`/`workspaceId` 显示任务绑定；`phase`、`lastObservedAt`、`observationError`、`nextAction` 说明当前阶段、最近读取和继续方式。`status` 读取本地保存状态，不宣称网页仍保持该状态。
 
@@ -309,7 +311,7 @@ convorel conversation result --id first-question --run RUN_ID --fields reply
 
 `start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅完成时退出 0，未完成或需要处理时退出 2；`status` 退出 0 只表示读取本地状态成功。参数、锁等错误可退出 1。完整回复必须通过同一轮次的 `result` 取得。短暂观察失败最多连续尝试三次，期间保留已确认投递事实，不重复发送；登录、页面身份和草稿问题需要先检查处理。
 
-新任务可以用 `conversation start --workspace /absolute/project` 显式保存任务工作区；省略时使用初始化的默认工作区，不从当前目录或 prompt 推断。`followup`/`retry --workspace PATH` 只断言已有绑定，发现不同就拒绝操作。`status --workspace PATH` 返回 `workspaceMismatch`，不匹配时退出 2，且不修改任务或页面。
+新任务可以用 `conversation create --workspace /absolute/project` 显式保存任务工作区；省略时使用初始化的默认工作区，不从当前目录或 prompt 推断。`followup`/`start`/`retry --workspace PATH` 只断言已有绑定，发现不同就拒绝操作。`status --workspace PATH` 返回 `workspaceMismatch`，不匹配时退出 2，且不修改任务或页面。
 
 尚未发送的首轮（`prepared`、无已确认消息和会话 URL）可显式修正绑定，保留原 run 和 prompt，不修改全局配置、不发送：
 
@@ -356,7 +358,7 @@ bun --no-env-file src/cli.ts conversation export --directory /private/snapshot
 bun --no-env-file src/cli.ts doctor --local true
 ```
 
-- 完成、捕获和归档是独立结果：`state=complete` 不保证已有 Markdown 或数据库写入成功。完成路径返回 `task.archive`，本次 summary/wait 透传 `archive`，CLI `result` 补写本地归档后也返回 `archive`；`stored` / `partial` / `failed` / `unavailable` 与 `error`、`gaps` 独立披露归档结果。notice 不写 task JSON，纯读取 status 不隐式写档；不能把缺省 notice 当作成功。磁盘写满、SQL 拒绝或缺少 Copy 均不改变已完成状态、`nextAction=result` 或完成命令的成功退出码，也不授权重发。`archive` 与 `capture` 退出码为归档失败 → 1，有缺口或 `partial` → 2，其余 0；`doctor --local true` 在库自身完整性检查失败时退出 1，本地记录可读但不完整时退出 2。
+- 完成、捕获和归档是独立结果：`state=complete` 不保证已有 Markdown 或数据库写入成功。完成路径返回 `task.archive`，本次 summary/wait 透传 `archive`，CLI `result` 补写本地归档后也返回 `archive`；`stored` / `partial` / `failed` / `unavailable` 与 `error`、`gaps` 独立披露归档结果。notice 不写 任务文档，纯读取 status 不隐式写档；不能把缺省 notice 当作成功。磁盘写满、SQL 拒绝或缺少 Copy 均不改变已完成状态、`nextAction=result` 或完成命令的成功退出码，也不授权重发。`archive` 与 `capture` 退出码为归档失败 → 1，有缺口或 `partial` → 2，其余 0；`doctor --local true` 在库自身完整性检查失败时退出 1，本地记录可读但不完整时退出 2。
 - 内容只增不改。重新生成的回复、重新捕获的 Markdown 都追加为新的 `content_version`，轮次通过指针选择当前版本。`history` 给出每轮选中的正文和该轮全部版本元数据，`content --version UUID` 按版本 ID 读回任意一条正文（含已被取代的旧版本），这样旧引用今天仍可核对。
 - 回复正文只认 Markdown：没有捕获到 Markdown 时 `history` 的 `reply` 为空、`capture_status` 为 `pending`，页面渲染文本单独保留在 `reply_rendered`，只用于追溯，不会被当作回复正文。检索覆盖每轮当前选定的 prompt 与「当前最佳正文」——已捕获时用 Markdown，未捕获时用渲染副本，命中结果的 `format` 字段披露是哪一种。
 - 检索使用 FTS5 的 `trigram` 分词，中文子串可以直接命中；少于三个字符无法构成三元组时自动退化为 `instr` 字面量扫描。查询文本始终按字面量处理，FTS 语法字符不改变匹配语义；已被取代的旧版本不会混进命中，`--task`、`--role`、`--limit`（默认 20，上限 100）用于收窄，`--task` 时附带该任务的 coverage。
@@ -425,3 +427,24 @@ bun --no-env-file src/cli.ts conversation recover-send \
 命名重新验证失败时，`organization.lastVerified` 保留上次成功的主题、标题和核验时间；相同命名请求的状态为 `revalidation_failed`，当前 `verified` 仍为 false，不把历史成功当成本次核验通过。改成新主题后，历史记录仍保留，但不代表新主题已验证。
 
 停滞回复刷新后，只要重新识别到原提交消息，就继续按回复内容判断等待或完成，不要求输入框同时恢复。`REFRESH_HISTORY_UNAVAILABLE` 专指未识别到原提交消息；输入框缺失仍可能阻止后续发送、整理或关闭，不触发重发。
+
+## 旧任务迁移
+
+旧版 `task-<id>.json` 可继续通过 status/list/archive 读取；变更操作会要求先执行 `conversation migrate --id ID`。先结束该任务旧版 CLI 的操作和 watcher；迁移持有 watch、operation、task、registry 锁，活跃锁不会被抢占。迁移不依赖 Chrome 或仍存在的工作区。
+
+迁移在 SQLite 事务中导入完整任务并记录原文件 hash，原 JSON 原样保留。重复执行不覆盖已迁移的任务。`LEGACY_TASK_CHANGED` 表示旧文件被修改或移走；保留数据库和原文件，核对旧进程及双方数据后处理，不能删数据或改 hash 规避。旧 CLI 不能继续操作已迁移任务。
+
+`tasks.db` 是发送与恢复的权威来源，使用 WAL 与 `synchronous=FULL`；配置和进程锁仍是文件。`conversation export` 仅导出内容归档，不是执行状态备份，不能用归档恢复发送授权。备份任务数据库须使用 SQLite 一致性备份方式，不能直接复制运行中数据库文件忽略 WAL。
+
+### 浏览器节奏与分阶段恢复
+
+默认点击、填入、按键及关闭等动作之间至少间隔 750 毫秒；导航、刷新或新建页面后等待 1500 毫秒，再按页面实际状态核验。复用同一状态目录的多个 CLI 协调间隔，只读观察不等待。可用现有配置调整（均为 1–10000 毫秒的正整数）：
+
+```sh
+convorel config set browser.actionIntervalMs 1000
+convorel config set browser.navigationWaitMs 2000
+```
+
+间隔不会重试失败写入，也不保证规避平台风控。登录、验证码、权限、页面身份变化仍停止处理。绑定页面和新建页面均等待历史就绪；会话恢复排除其他任务的主页面和元数据观察页。发送结果未知时 `wait` 继续有界观察原任务，不自动重发；超时保留 `runState`、投递状态与后续动作。
+
+命名优先精确侧栏入口，不可见时可使用绑定同一会话 ID 的顶部菜单。写前暂时不可见可按 5 秒、30 秒退避，总计最多三次；保存结果未知只核验持久化标题，不重复保存。`summary.replyComplete` 与 `summary.organization` 分别表示回复和命名完成情况：回复完成但命名失败，`resume`/`wait` 返回 2，仍可读取已保存回复。`observerCleanup` 单独报告观察页释放结果，关闭回执丢失可通过原 target 不再存在收敛；身份已过期不关闭当前浏览器中的页面。

@@ -15,12 +15,41 @@ export const settingKeys = [
   "project.name",
   "browser.executable",
   "browser.serial",
+  "browser.actionIntervalMs",
+  "browser.navigationWaitMs",
   "locks.taskWaitMs",
   "release.baseUrl",
 ] as const;
 export type SettingKey = (typeof settingKeys)[number];
 const secrets: SettingKey[] = ["tunnel.apiKey"];
 const document = "preferences";
+export const MAX_BROWSER_PACING_MS = 10_000;
+
+function pacingMilliseconds(key: SettingKey, value: string) {
+  if (
+    !/^[0-9]+$/.test(value) ||
+    Number(value) < 1 ||
+    Number(value) > MAX_BROWSER_PACING_MS
+  )
+    throw new Error(
+      `INVALID_VALUE: ${key} must be an integer from 1 to ${MAX_BROWSER_PACING_MS}`,
+    );
+  return Number(value);
+}
+
+export function browserPacingSettings() {
+  const values = current();
+  return {
+    actionIntervalMs: pacingMilliseconds(
+      "browser.actionIntervalMs",
+      values["browser.actionIntervalMs"] ?? "750",
+    ),
+    navigationWaitMs: pacingMilliseconds(
+      "browser.navigationWaitMs",
+      values["browser.navigationWaitMs"] ?? "1500",
+    ),
+  };
+}
 
 export function resolveSetting(input: string): SettingKey {
   if (!(settingKeys as readonly string[]).includes(input))
@@ -71,6 +100,9 @@ function validate(key: SettingKey, value: string) {
     throw new Error(`INVALID_VALUE: ${key} must not contain a newline or NUL`);
   if (key === "browser.serial" && !["true", "false"].includes(value))
     throw new Error("INVALID_VALUE: browser.serial must be true or false");
+
+  if (key === "browser.actionIntervalMs" || key === "browser.navigationWaitMs")
+    pacingMilliseconds(key, value);
   if (
     key === "locks.taskWaitMs" &&
     (!Number.isSafeInteger(Number(value)) || Number(value) <= 0)

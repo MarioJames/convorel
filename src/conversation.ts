@@ -29,8 +29,10 @@ import {
 import { conversationConfig, type Config } from "./config.ts";
 import {
   organizationDue,
+  organizationRecovery,
   ORGANIZATION_DELAYS,
 } from "./organization-recovery.ts";
+
 export type { Config } from "./config.ts";
 export interface RejectedSendRecovery {
   expectedUserMessageId: string;
@@ -123,6 +125,7 @@ export interface Task {
     target?: string;
     opening?: boolean;
     closed?: boolean;
+    ownershipExpired?: boolean;
     error?: string;
   };
   cleanup?: any;
@@ -156,13 +159,15 @@ export class Conversation {
     const { archive: _archive, ...document } = t;
     this.store.write("task-" + t.id, document);
   }
+
   /** Serializes one task's browser side effects on its own tab, releasing every
    * session it opened. Different tasks proceed concurrently; config browser.serial=true
    * restores the single global browser lock for environments that cannot. */
   private exclusive<T>(id: string, fn: () => Promise<T>) {
-    return withTaskStateLock(this.store, id, fn).finally(() =>
-      this.browser.release(),
-    );
+    return withTaskStateLock(this.store, id, async () => {
+      this.store.assertTaskWritable(id);
+      return fn();
+    }).finally(() => this.browser.release());
   }
   /** Cross-task identity publish (conversation URL, tab binding, request key).
    * Held only for the read-all-tasks conflict check plus the atomic write; it
@@ -266,21 +271,18 @@ export class Conversation {
       throw new Error(
         "OPEN_UNKNOWN: inspect the created page; no automatic replacement",
       );
-    // A completed followup may restore its URL on a new target, but must never
-    // borrow a target claimed by another task, even if that target navigated here.
-    // The caller verifies the saved completed branch before creating a new run.
+    // URL recovery cannot borrow any other task's main or metadata target.
     const claimed = new Set(
-      completedFollowup
-        ? (this.store.tasks() as Task[])
+      (this.store.tasks() as Task[])
+        .filter((other) => other.id !== t.id)
+        .flatMap((other) =>
+          [other.binding, other.organizationObservation]
             .filter(
-              (other) =>
-                other.id !== t.id &&
-                other.binding &&
-                !other.binding.closed &&
-                other.binding.epoch === epoch,
+              (binding) =>
+                binding && !binding.closed && binding.epoch === epoch,
             )
-            .map((other) => other.binding!.target)
-        : [],
+            .map((binding) => binding!.target),
+        ),
     );
     const existing = t.url
       ? tabs.filter((x: any) => same(x.url, t.url!) && !claimed.has(x.targetId))
@@ -317,9 +319,9 @@ export class Conversation {
     const { target, created } = await this.open(t, completedFollowup);
     this.guard(t);
     const b = await this.browser.page(target);
-    // A newly opened saved URL can initially expose about:blank or partial history.
-    // Wait only on that new target; changed URLs and blocked pages still fail closed.
-    if (created && t.url) {
+    // Bound and restored pages can both expose partial history during hydration.
+    // Only read while loading; changed URLs and blocked pages still fail closed.
+    if (t.url) {
       const current = this.current(t);
       const anchor = current.userMessageId ? current : t.runs.at(-2);
       const userId = anchor?.userMessageId;
@@ -334,14 +336,17 @@ export class Conversation {
           p.url === "about:blank" && !p.hasComposer && !p.messages.length;
         const loading =
           same(p.url, t.url) &&
-          (!p.hasComposer ||
-            (userId && !p.messages.some((m) => m.id === userId)) ||
+          ((!p.hasComposer && !userId) ||
+            (userId && !p.messages.length) ||
             (replyId &&
-              (!reply?.final ||
-                (anchor?.replyHash && sha(reply.text) !== anchor.replyHash))));
+              (created
+                ? !reply?.final ||
+                  (anchor?.replyHash && sha(reply.text) !== anchor.replyHash)
+                : !reply && !p.messages.length)));
         if (
           p.blocked ||
           p.draft?.trim() ||
+          p.attachments ||
           p.generating ||
           (!blank && !loading)
         )
@@ -455,6 +460,7 @@ export class Conversation {
     }
   }
   private async reconcile(t: Task, b: any) {
+    await this.releaseOrganizationObserver(t);
     // A completed reply is durable. Recovery may finish pending organization,
     // but must not replace its captured bytes with a fresh DOM observation.
     if (this.current(t).state === "complete") {
@@ -531,7 +537,7 @@ export class Conversation {
       await this.applyOrganization(t, b, t.naming);
     return r.state === "complete" ? this.archiveCompleted(t) : t;
   }
-  async start(
+  async create(
     id: string,
     input: string,
     requestId = "initial",
@@ -540,7 +546,7 @@ export class Conversation {
     naming?: Naming,
   ) {
     if (naming) {
-      if (followup) throw new Error("NAMING_REQUIRES_START_OR_ORGANIZE");
+      if (followup) throw new Error("NAMING_REQUIRES_CREATE_OR_ORGANIZE");
       conversationTitle("2000-01-01T00:00:00Z", naming.type, naming.topic, {
         timezone: "Asia/Shanghai",
         language: naming.language ?? "en",
@@ -561,7 +567,8 @@ export class Conversation {
       Buffer.byteLength(input) > 100000
     )
       throw new Error("INVALID_REQUEST");
-    return this.exclusive(id, async () => {
+    return withTaskStateLock(this.store, id, async () => {
+      this.store.assertTaskWritable(id);
       let t: Task;
       const inputHash = sha(input);
       if (this.store.has("task-" + id)) {
@@ -573,6 +580,10 @@ export class Conversation {
             throw new Error("NAMING_CONFLICT");
           if (previous.inputHash !== inputHash)
             throw new Error("REQUEST_CONFLICT");
+          if (previous.id !== t.currentRun)
+            throw new Error(
+              `REQUEST_RUN_SUPERSEDED: original run ${previous.id}; inspect that run instead of starting the current one`,
+            );
           return t;
         }
         if (!followup)
@@ -595,13 +606,6 @@ export class Conversation {
         };
       }
       this.assertRequestFree(id, requestId);
-      // Check the previous completed turn before assigning a successor.
-      if (t.currentRun) {
-        this.begin(t);
-        const b = await this.page(t, true),
-          p = await this.observe(t, b);
-        this.safeCompleted(t, p);
-      }
       t.attemptId = randomUUID();
       const runId = randomUUID(),
         marker = `[CONVOREL:${runId}]`;
@@ -622,6 +626,17 @@ export class Conversation {
         this.assertRequestFree(id, requestId);
         this.save(t);
       });
+      return t;
+    });
+  }
+  /** Execute a durable, exact run. Repeated start never retries a failed send. */
+  async start(id: string, run: string, workspace?: string) {
+    return this.exclusive(id, async () => {
+      const t = this.get(id);
+      this.checkWorkspace(t, workspace);
+      const r = this.current(t, run);
+      if (r.state !== "prepared" || r.userMessageId || r.error) return t;
+      this.begin(t);
       return this.submitPrepared(t);
     });
   }
@@ -861,9 +876,11 @@ export class Conversation {
   ) {
     const r = this.current(t),
       prompt = r.prompt;
+    if (sha(prompt) !== r.promptHash || !prompt.startsWith(`${r.marker}\n\n`))
+      throw new Error("PROMPT_INTEGRITY_FAILED");
     const draftText = (text: string) => text.replace(/\u00a0/g, " ").trim();
     try {
-      const b = recovery?.b ?? (await this.page(t));
+      const b = recovery?.b ?? (await this.page(t, t.runs.indexOf(r) > 0));
       let p = await this.observe(t, b);
       recovery?.checkPage(p);
       if (recovery && (p.draft === undefined || p.draft.trim()))
@@ -910,6 +927,7 @@ export class Conversation {
           )
           ?.observedModel?.trim() ||
         "";
+
       const observed = await this.verify(b, {
         url: p.url,
         target: t.binding!.target,
@@ -919,6 +937,7 @@ export class Conversation {
       r.observedModel = observed.observedModel;
       p = await this.observe(t, b);
       checkDraft(p);
+
       if (!p.draft?.trim()) await b.run("fill", "#prompt-textarea", prompt);
       this.guard(t);
       p = await this.observe(t, b);
@@ -939,6 +958,7 @@ export class Conversation {
       )
         throw new Error("DRAFT_CHANGED");
       checkDraft(p);
+
       const finalModel = await this.verify(b, {
         url: p.url,
         target: t.binding!.target,
@@ -963,9 +983,12 @@ export class Conversation {
       // Durable write precedes the first action capable of submitting a message.
       r.state = "submitting";
       r.submittedAt = new Date().toISOString();
+
       this.save(t);
       this.guard(t);
+
       await sendPrompt(b, p);
+
       this.guard(t);
       for (let n = 0; n < 12; n++) {
         await this.reconcile(t, b);
@@ -987,12 +1010,15 @@ export class Conversation {
   async poll(id: string, run?: string) {
     return this.exclusive(id, async () => {
       const t = this.get(id);
+      this.current(t, run);
+      this.begin(t);
+      if (t.organizationObservation && !t.organizationObservation.closed)
+        await this.releaseOrganizationObserver(t);
       if (
         this.current(t, run).state === "complete" &&
         (!t.naming || !organizationDue(t))
       )
         return this.archiveCompleted(t);
-      this.begin(t);
       try {
         // Recover a previously saved initial URL without guessing another tab or resending.
         if (t.url === (t.config.projectUrl || "https://chatgpt.com/")) {
@@ -1218,6 +1244,7 @@ export class Conversation {
       this.current(t, run);
       this.result(id, run);
       this.begin(t);
+      await this.releaseOrganizationObserver(t);
       if (!t.binding?.owned || t.binding.closed) {
         t.cleanup = {
           closed: !!t.binding?.closed,
@@ -1283,6 +1310,14 @@ export class Conversation {
             page: error.page,
           };
           this.save(t);
+        } else {
+          t.cleanup = {
+            closed: false,
+            target: binding.target,
+            error: String(error),
+            nextAction: "finish",
+          };
+          this.save(t);
         }
         throw error;
       });
@@ -1323,7 +1358,54 @@ export class Conversation {
       return this.reconcile(t, await this.page(t));
     });
   }
+  private async releaseOrganizationObserver(t: Task) {
+    const owned = t.organizationObservation;
+    if (!owned || owned.closed) return;
+    await this.tabRelease(async () => {
+      try {
+        const epoch = await this.browser.epoch();
+        this.guard(t);
+        if (owned.epoch !== epoch) {
+          owned.closed = true;
+          owned.ownershipExpired = true;
+          delete owned.error;
+          return;
+        }
+        if (!owned.target)
+          throw new Error(
+            "ORGANIZATION_OBSERVER_UNKNOWN: inspect the opening page",
+          );
+        // A previous close may have succeeded even when its acknowledgement failed.
+        const { tabs } = await this.browser.tabs("list");
+        if (!tabs.some((x: any) => x.targetId === owned.target)) {
+          owned.closed = true;
+          delete owned.error;
+          return;
+        }
+        const page = await this.browser.page(owned.target);
+        const p = await page.read();
+        this.guard(t);
+        if (!same(p.url, t.url!) || p.draft?.trim() || p.attachments)
+          throw new Error("METADATA_PAGE_CHANGED");
+        await this.browser.tabs("close", owned.target);
+        if (
+          (await this.browser.tabs("list")).tabs.some(
+            (x: any) => x.targetId === owned.target,
+          )
+        )
+          throw new Error("CLOSE_UNVERIFIED");
+        owned.closed = true;
+        delete owned.error;
+      } catch (e) {
+        owned.error = String(e);
+      } finally {
+        this.guard(t);
+        this.save(t);
+      }
+    });
+  }
   private async applyOrganization(t: Task, b: any, naming: Naming) {
+    await this.releaseOrganizationObserver(t);
     const check = async () => {
       const p = await this.observe(t, b),
         r = this.current(t);
@@ -1363,9 +1445,18 @@ export class Conversation {
       }
       throw new Error("METADATA_PAGE_UNAVAILABLE");
     };
+    const checkpoint = t.organization;
+    const verificationOnly = ["save_pending", "verifying"].includes(
+      checkpoint?.phase,
+    );
     const attempts = (t.organization?.attempts ?? (t.organization ? 1 : 0)) + 1;
     const lastVerified = t.organization?.lastVerified;
-    t.organization = { verified: false, attempts, lastVerified };
+    t.organization = {
+      ...(verificationOnly ? checkpoint : {}),
+      verified: false,
+      attempts,
+      lastVerified,
+    };
     this.save(t);
     try {
       await check();
@@ -1390,7 +1481,7 @@ export class Conversation {
         },
       };
       const metadata =
-        this.current(t).state !== "complete"
+        this.current(t).state !== "complete" || verificationOnly
           ? {
               session: b.session,
               read: async () => (await metadataPage()).read(),
@@ -1420,39 +1511,21 @@ export class Conversation {
           t.organization = {
             ...structuredClone(progress),
             verified: false,
+            attempts,
             lastVerified,
           };
           this.save(t);
         },
         metadata,
+        {
+          verificationOnly,
+          baseline: verificationOnly ? checkpoint?.baseline : undefined,
+        },
       );
     } catch (e) {
       t.organization = { ...t.organization, verified: false, error: String(e) };
     } finally {
-      const owned = t.organizationObservation;
-      const observerTarget = owned?.target;
-      if (observerTarget && !owned?.closed)
-        await this.tabRelease(async () => {
-          try {
-            if (owned.epoch !== (await this.browser.epoch()))
-              throw new Error("BROWSER_RESTARTED");
-            this.guard(t);
-            const page = await this.browser.page(observerTarget);
-            const p = await page.read();
-            if (!same(p.url, t.url!) || p.draft?.trim() || p.attachments)
-              throw new Error("METADATA_PAGE_CHANGED");
-            await this.browser.tabs("close", observerTarget);
-            if (
-              (await this.browser.tabs("list")).tabs.some(
-                (x: any) => x.targetId === observerTarget,
-              )
-            )
-              throw new Error("CLOSE_UNVERIFIED");
-            owned.closed = true;
-          } catch (e) {
-            owned.error = String(e);
-          }
-        });
+      await this.releaseOrganizationObserver(t);
     }
     this.guard(t);
     t.organization.lastVerified = t.organization.verified
@@ -1464,7 +1537,10 @@ export class Conversation {
         }
       : lastVerified;
     t.organization.attempts = attempts;
-    if (!t.organization.verified && attempts <= ORGANIZATION_DELAYS.length)
+    if (
+      organizationRecovery(t)?.state === "retry_pending" &&
+      attempts <= ORGANIZATION_DELAYS.length
+    )
       t.organization.nextRetryAt = new Date(
         Date.now() + ORGANIZATION_DELAYS[attempts - 1],
       ).toISOString();
@@ -1500,9 +1576,26 @@ export class Conversation {
           project: t.organization.project,
         };
       }
+      const unresolved = ["editing", "save_pending", "verifying"].includes(
+        t.organization?.phase,
+      );
+      if (
+        unresolved &&
+        (t.naming?.type !== type ||
+          t.naming?.topic !== topic ||
+          (t.naming?.language ?? "en") !== language)
+      )
+        throw new Error(
+          "ORGANIZATION_WRITE_UNRESOLVED: verify the previous title before changing naming",
+        );
+      if (t.organization?.phase === "editing")
+        throw new Error(
+          "ORGANIZATION_WRITE_UNRESOLVED: inspect the interrupted title editor",
+        );
       t.naming = { type, topic, language };
-      // A new attempt does not erase evidence from the last successful one.
-      t.organization = { lastVerified: t.organization?.lastVerified };
+      // Keep uncertain saves for read-only verification, including explicit recovery.
+      if (!unresolved)
+        t.organization = { lastVerified: t.organization?.lastVerified };
       return this.applyOrganization(t, b, t.naming);
     });
   }

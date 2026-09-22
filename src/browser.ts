@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { command } from "./command.ts";
 import { PAGE_SCRIPT, SEND_SELECTOR, type PageState } from "./chatgpt/page.ts";
+import { BrowserPacing, type PacingClock } from "./browser-pacing.ts";
 // Only observation failures may be retried automatically; never a browser action.
 export class ObservationError extends Error {}
 
@@ -86,8 +87,16 @@ export class Browser {
   readonly cdp: string;
   readonly namespace: string;
   private readonly sessions = new Set<string>();
-  constructor(cdp: string, scope: string) {
+  private readonly pacing: BrowserPacing;
+  private readonly execute: typeof command;
+  constructor(
+    cdp: string,
+    scope: string,
+    dependencies: PacingClock & { command?: typeof command } = {},
+  ) {
     this.cdp = cdpEndpoint(cdp);
+    this.pacing = new BrowserPacing(scope, dependencies);
+    this.execute = dependencies.command ?? command;
     this.namespace =
       "convorel-" +
       createHash("sha256").update(scope).digest("hex").slice(0, 12);
@@ -107,21 +116,23 @@ export class Browser {
   }
   async invoke(session: string, pin: boolean, ...args: string[]) {
     this.sessions.add(session);
-    const x = JSON.parse(
-      await command(
-        this.argv(
-          session,
-          pin ? "--pin-tab" : "--no-pin-tab",
-          "--json",
-          ...args,
+    return this.pacing.run(args, async () => {
+      const x = JSON.parse(
+        await this.execute(
+          this.argv(
+            session,
+            pin ? "--pin-tab" : "--no-pin-tab",
+            "--json",
+            ...args,
+          ),
         ),
-      ),
-    );
-    if (!x.success)
-      throw new Error(
-        "BROWSER_ERROR: " + JSON.stringify(x.error || x.data).slice(0, 600),
       );
-    return x.data;
+      if (!x.success)
+        throw new Error(
+          "BROWSER_ERROR: " + JSON.stringify(x.error || x.data).slice(0, 600),
+        );
+      return x.data;
+    });
   }
   private argv(session: string, ...flags: string[]) {
     return [
@@ -149,7 +160,7 @@ export class Browser {
     if (!sessions.length) return;
     for (const session of sessions) {
       // An already-stopped daemon is not this operation's failure.
-      await command([...this.argv(session, "--json"), "close"]).catch(
+      await this.execute([...this.argv(session, "--json"), "close"]).catch(
         () => undefined,
       );
     }

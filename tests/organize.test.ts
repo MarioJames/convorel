@@ -325,3 +325,74 @@ describe("conversation organization", () => {
     expect(b.mutations).toHaveLength(0);
   });
 });
+
+test("naming persists the write boundary and recovers a lost save acknowledgement by reading only", async () => {
+  const b = fixture({ initialProject: "g-p-example" });
+  const original = b.run;
+  let submit = false;
+  const progress: any[] = [];
+  const interrupted = {
+    ...b,
+    run: async (...args: string[]) => {
+      const result = await original(...args);
+      if (args[0] === "fill") submit = true;
+      else if (submit && args[0] === "press" && args[1] === "Enter")
+        throw new Error("Connection lost after title save");
+      return result;
+    },
+  };
+  await expect(
+    organizeConversation(
+      interrupted,
+      url,
+      preferences,
+      "FIX",
+      "Recovery",
+      (p) => progress.push(structuredClone(p)),
+    ),
+  ).rejects.toThrow("Connection lost");
+  const checkpoint = progress.at(-1);
+  expect(checkpoint.phase).toBe("save_pending");
+  expect(checkpoint.baseline.title).toBe("Automatic title");
+  const mutations = b.mutations.length;
+  const verified = await organizeConversation(
+    b,
+    url,
+    preferences,
+    "FIX",
+    "Recovery",
+    undefined,
+    undefined,
+    { verificationOnly: true, baseline: checkpoint.baseline },
+  );
+  expect(verified.verified).toBe(true);
+  expect(b.mutations.length).toBe(mutations);
+});
+
+test("verification-only naming never resubmits an unconfirmed title", async () => {
+  const b = fixture({ initialProject: "g-p-example" });
+  await expect(
+    organizeConversation(
+      b,
+      url,
+      preferences,
+      "FIX",
+      "Recovery",
+      undefined,
+      undefined,
+      {
+        verificationOnly: true,
+        baseline: {
+          id: "review-a",
+          title: "Automatic title",
+          createdAt: new Date(body().create_time * 1000).toISOString(),
+          projectId: "g-p-example",
+          archived: false,
+          starred: null,
+          pinnedTime: null,
+        },
+      },
+    ),
+  ).rejects.toThrow("ORGANIZATION_SAVE_UNCONFIRMED");
+  expect(b.mutations).toHaveLength(0);
+});

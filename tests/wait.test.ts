@@ -234,3 +234,82 @@ test("completed replies keep waiting for scheduled naming recovery", async () =>
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("wait keeps observing an uncertain submission and never calls a send operation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "convorel-watch-unknown-"));
+  const store = new State(root);
+  let polls = 0;
+  const reports: any[] = [];
+  try {
+    const code = await waitForConversation(
+      store,
+      {
+        get: unusedGet,
+        poll: async () =>
+          ({
+            id: "task",
+            config: { workspace: root },
+            workspaceId: "fixture",
+            currentRun: "r1",
+            runs: [
+              {
+                id: "r1",
+                state: ++polls < 2 ? "delivery_unknown" : "complete",
+              },
+            ],
+          }) as any,
+      },
+      "task",
+      "r1",
+      3,
+      new AbortController().signal,
+      (x) => reports.push(x),
+    );
+    expect(code).toBe(0);
+    expect(polls).toBe(2);
+    expect(reports[0].delivery).toBe("unknown");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("completed reply with unrecovered naming reports partial completion", async () => {
+  const root = mkdtempSync(join(tmpdir(), "convorel-watch-partial-"));
+  try {
+    const reports: any[] = [];
+    const code = await waitForConversation(
+      new State(root),
+      {
+        get: unusedGet,
+        poll: async () =>
+          ({
+            id: "task",
+            config: { workspace: root },
+            workspaceId: "fixture",
+            currentRun: "r1",
+            naming: { type: "FIX", topic: "Recovery" },
+            organization: {
+              verified: false,
+              attempts: 3,
+              error:
+                "Target conversation not visible in sidebar; open its project/history before retrying",
+            },
+            runs: [{ id: "r1", state: "complete", userMessageId: "u1" }],
+          }) as any,
+      },
+      "task",
+      "r1",
+      1,
+      new AbortController().signal,
+      (x) => reports.push(x),
+    );
+    expect(code).toBe(2);
+    expect(reports[0]).toMatchObject({
+      state: "complete",
+      replyComplete: true,
+      nextAction: "organize",
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

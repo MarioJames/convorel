@@ -100,3 +100,35 @@ test("a stored value is validated and a binding still refuses an incomplete pair
     restore();
   }
 });
+
+test("browser pacing preferences accept only bounded positive integer milliseconds", () => {
+  const { restore } = isolated();
+  try {
+    for (const key of [
+      "browser.actionIntervalMs",
+      "browser.navigationWaitMs",
+    ] as const) {
+      for (const value of [
+        "0",
+        "-1",
+        "1.5",
+        "NaN",
+        "Infinity",
+        "10001",
+        "1e3",
+        " 20 ",
+      ])
+        expect(() => configCommand("set", [key, value])).toThrow(
+          "INVALID_VALUE",
+        );
+      for (const value of ["1", "750", "1500", "10000"]) {
+        configCommand("set", [key, value]);
+        expect(preference(key)).toBe(value);
+      }
+      configCommand("unset", [key]);
+      expect(preference(key)).toBeUndefined();
+    }
+  } finally {
+    restore();
+  }
+});

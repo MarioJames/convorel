@@ -41,18 +41,19 @@ Preferences default to `~/.config/convorel/preferences.json`; task state default
 
 ## Manage a persistent conversation
 
-The caller writes the complete UTF-8 request file. Convorel sends `[CONVOREL:<runId>]`, two newlines and the file contents unchanged. The marker is a transport correlation key used to reconcile uncertain delivery; it is not a role or review instruction. Convorel does not load source files into the prompt, add workspace context, or select a review strategy. Include any desired code paths and context in the caller's message. Review policy and prompt preparation belong to the bundled, independently installable `chatgpt-review` skill.
+The caller submits the complete UTF-8 request through stdin or `--prompt`. `create` commits the task and first run to private `tasks.db` without opening a browser. `start --id --run` reads that saved run and sends `[CONVOREL:<runId>]`, two newlines and the prompt unchanged. The marker is a transport correlation key used to reconcile uncertain delivery; it is not a role or review instruction. Convorel does not load source files into the prompt, add workspace context, or select a review strategy. Include any desired code paths and context in the caller's message. Review policy and prompt preparation belong to the bundled, independently installable `chatgpt-review` skill.
 
 ```bash
-bun --no-env-file src/cli.ts conversation start --id auth-design --prompt-file /path/to/request.md --type DES --topic 'Auth boundary'
+bun --no-env-file src/cli.ts conversation create --id auth-design --prompt 'Review the agreed authentication boundary' --type DES --topic 'Auth boundary'
+bun --no-env-file src/cli.ts conversation start --id auth-design --run RUN_ID
 bun --no-env-file src/cli.ts conversation wait --id auth-design --run RUN_ID
 bun --no-env-file src/cli.ts conversation result --id auth-design --run RUN_ID
 bun --no-env-file src/cli.ts conversation finish --id auth-design --run RUN_ID
 ```
 
-Replace RUN_ID with the returned currentRun. `--run` pins status, result, wait and finish to that exact round. `resume` reconciles an interrupted submission with its visible request marker; it does not press Send again. `followup` explicitly starts a new round after the prior reply is complete. A repeated `start` on the same task does not send again.
+Replace RUN_ID with the returned currentRun. `--run` pins status, result, wait and finish to that exact round. `resume` reconciles an interrupted submission with its visible request marker; it does not press Send again. `followup` saves a new round for a separate `start --id --run` after the prior reply is complete. A repeated `start` on the same task does not send again.
 
-`finish` closes only a verified, completed task-owned tab. Borrowed tabs remain open. It retains conversation links, earlier runs and results. Later `followup` calls reopen the saved URL when necessary and verify the previous completed turn before sending a successor; a new CLI process uses the same private state. A completed `resume` returns stored state without reopening the tab unless initial naming is still pending. Skills request these operations; Convorel owns their persistence, identity checks, recovery and cleanup mechanics.
+`finish` closes only a verified, completed task-owned tab. Borrowed tabs remain open. It retains conversation links, earlier runs and results. Executing a saved followup reopens the saved URL when necessary and verifies the previous completed turn before sending a successor; a new CLI process uses the same private state. A completed `resume` returns stored state without reopening the tab unless initial naming is still pending. Skills request these operations; Convorel owns their persistence, identity checks, recovery and cleanup mechanics.
 
 Archival is a separate projection of that same state. When a run completes, its prompt source and the Markdown copied from the reply are appended to `conversations.db` as immutable content versions, and `conversation archive|capture|history|search|content|export` read or backfill them. `reply_version_id` selects only captured Markdown, so a round whose capture failed reports an empty reply plus a recorded gap rather than passing rendered page text off as the source. Archive and capture outcomes never change delivery, completion or retry authorization, so a missing capture is a gap, not a failed round; `archive`/`capture` exit 1 on archive failure and 2 on gaps. `--from PATH` makes `search`/`history`/`content` read an exported store or a renamed snapshot with no preferences, workspace or browser, which keeps old content readable after the project directory or Chrome session is gone.
 

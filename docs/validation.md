@@ -212,3 +212,17 @@ Linux x64、Bun 1.4.2。`bun run check` 通过 TypeScript 和 207 个测试；�
 `bun run test:install` 使用隔离 HOME、配置、工作区和安装目录验证真实 standalone：`start/status/logs/restart/stop`、重复启动、`skills install --dir` 的完整资源与重复安装保护，以及安装、重装和卸载后的用户数据保留。升级验证已接入这一既有发布验收入口，也可用 `bun run test:upgrade` 单独执行；本地 HTTP release fixture 覆盖最新版检查、指定版本、同版本重装、旧版本保留、checksum 拒绝、路径及安装布局校验。安装器行为测试还验证激活失败时回滚两个链接和拒绝不安全归档；带空格、引号及反斜线的自定义路径通过独立升级验收。
 
 进程行为测试覆盖并发启动的单实例约束、配置丢失后停止、身份不匹配时不发送信号、启动失败反馈、日志跟随与轮转，以及忽略 SIGTERM 的后代进程清理。测试使用替代 tunnel-client，没有连接真实云端；`status.running` 仅证明本地进程存活。没有操作共享 Chrome、真实安装或持久会话数据；测试进程、临时 release HTTP 服务及临时安装由验收脚本释放。此次为 CLI 变更，不涉及前端页面或浏览器验收。
+
+## 2026-09-22 — 任务入库、浏览器恢复与操作节奏
+
+Linux x64、Bun 1.4.2。任务持久化改用独立 `tasks.db`，`create`/`followup` 入库与 `start --id --run` 执行分离，`conversations.db` 继续独立归档。六个独立进程的并发初始化测试复现过数据库初始化窗口，改为完整 schema 原子发布后通过。历史 JSON 迁移验证原字节保留、重复迁移不覆盖、旧写入者改写拒绝、活跃写入者拒绝；数据库拒绝提交时不会点击发送。
+
+本任务版本 TypeScript 检查与 289 项测试全部通过，覆盖跨进程节奏、导航稳定时间、失败写入不重放、已有页面历史延迟、投递未知持续观察、标题保存不确定时只读核验、关闭回执丢失的恢复及命名未完成反馈。同仓另一任务正在添加 diagnostics；验证通过只读模块覆盖隔离了三个共享源文件中的对方改动，并排除其独立测试，工作区文件未替换。普通全量检查当时有该任务的一项 `TARGET_CONFLICT` 测试失败，已通知其负责人，不把对方修改纳入本次提交。
+
+`test:package`、`test:install` 均通过；standalone 验证离线创建、跨命令读取数据库 prompt、历史 JSON 迁移及重复迁移。两项打包验收使用当时完整工作区。技能通过 canonical quick_validate，源码 CLI 三方更新同步既有 `/home/mocha/.agents/skills/chatgpt-review`，回读 `skills check --dir /home/mocha/.agents/skills` 为 `current`、无冲突。
+
+真实 Chrome 的隔离夹具通过，agent-browser 0.34.0，最终临时 CDP 端口 57107。覆盖恢复续谈、目标归属、模型与项目 DOM 契约、草稿保护、发送边界，以及侧栏未挂载时绑定精确会话 ID 的顶部菜单。页面错误为空；测试配置仅将隔离实例间隔设为 1ms，生产默认 750ms/1500ms 由确定性和跨进程测试验证。临时 profile、Chrome、控制进程、安装测试进程均由脚本释放，子 Agent pane 已回收。本次没有前端应用 APP_URL 或 dev server。
+
+共享已登录 Chrome 的独立架构审查任务因项目页加载错误恢复后，提交结果仍为 `delivery_unknown`。保留本任务记录、原 JSON、自有页面及诊断报告，不重发、不关闭未知投递页面。释放条件为查明投递并完成结果交接，负责人为本任务 Agent。没有取得远端审查意见；本地夹具通过不代表真实 ChatGPT 投递验收成功，未替换其他 Agent 正使用的全局旧运行时。
+
+节奏子任务首次红灯测试在 mock 注入实现缺失时误触真实浏览器命令，命令超时，不能据此确认有无页面副作用；已停止测试，后续加入模块存在性前置约束、mock 注入和端口 1 隔离，最终测试不连接共享浏览器。完整交接保留于私有 `requests/recovery-audit-20260922.md`；持久任务及归档数据未清理。

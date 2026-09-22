@@ -23,6 +23,8 @@ export interface ConversationMetadata {
   pinnedTime: unknown;
 }
 export interface OrganizationProgress {
+  phase: "locating" | "editing" | "save_pending" | "verifying" | "complete";
+  baseline: ConversationMetadata;
   rename: { verified: boolean; title: string };
   project: { state: "skipped" | "pending" | "verified"; id: string | null };
 }
@@ -128,8 +130,13 @@ export function organizationUiScript(id: string) {
     const links = Array.from(document.querySelectorAll('a[data-sidebar-item]')).filter(e => {
       try { return new URL(e.href).pathname.endsWith('/c/' + ${JSON.stringify(id)}); } catch { return false; }
     });
-    const options = 'button[data-conversation-options-trigger=' + JSON.stringify(${JSON.stringify(id)}) + ']';
-    const buttons = Array.from(document.querySelectorAll(options)).filter(visible);
+    let options = 'button[data-conversation-options-trigger=' + JSON.stringify(${JSON.stringify(id)}) + ']';
+    let buttons = Array.from(document.querySelectorAll(options)).filter(visible);
+    if (!buttons.length) {
+      // The current conversation header remains available when history is virtualized or collapsed.
+      options = 'button[data-testid="conversation-options-button"][id=' + JSON.stringify('conversation-options-' + ${JSON.stringify(id)}) + ']';
+      buttons = Array.from(document.querySelectorAll(options)).filter(visible);
+    }
     const button = buttons.length === 1 ? buttons[0] : null;
     const panel = links.length === 1 ? links[0].closest('[id]') : null;
     const expanders = panel ? Array.from(document.querySelectorAll('[aria-controls]')).filter(e => visible(e) && e.getAttribute('aria-controls') === panel.id && e.getAttribute('aria-expanded') === 'false') : [];
@@ -153,6 +160,10 @@ export async function organizeConversation(
   topic: string,
   onProgress: (progress: OrganizationProgress) => void = () => {},
   metadataBrowser?: Browser,
+  recovery: {
+    verificationOnly?: boolean;
+    baseline?: ConversationMetadata;
+  } = {},
 ) {
   validatePreferences(preferences);
   const id = conversationId(url);
@@ -297,7 +308,8 @@ export async function organizeConversation(
       );
     }
     if (!state.options)
-      throw new Error(
+      state = await waitUi(
+        (s) => !!s.options,
         "Target conversation not visible in sidebar; open its project/history before retrying",
       );
     // Sidebar hydration can replace Radix ids; anchor the control to this conversation.
@@ -305,7 +317,10 @@ export async function organizeConversation(
     await act("focus", state.options);
     await act("press", "Enter");
   };
-  const before = await freshMetadata(false);
+  const before = await freshMetadata(!!recovery.verificationOnly);
+  const baseline = recovery.baseline ?? before;
+  if (baseline.id !== id || baseline.projectId !== before.projectId)
+    throw new Error("Organization baseline changed; inspect before continuing");
   // An absent destination preserves placement, including an existing user project.
   const expectedProject = configuredProject ?? before.projectId;
   if (before.projectId !== expectedProject)
@@ -318,6 +333,8 @@ export async function organizeConversation(
     );
   const title = conversationTitle(before.createdAt, type, topic, preferences);
   const progress: OrganizationProgress = {
+    phase: recovery.verificationOnly ? "verifying" : "locating",
+    baseline,
     rename: { verified: false, title },
     project: {
       state: configuredProject ? "pending" : "skipped",
@@ -328,21 +345,28 @@ export async function organizeConversation(
   let current = before;
   const checkPreserved = () => {
     if (
-      current.createdAt !== before.createdAt ||
-      current.archived !== before.archived ||
-      current.starred !== before.starred ||
-      current.pinnedTime !== before.pinnedTime
+      current.createdAt !== baseline.createdAt ||
+      current.archived !== baseline.archived ||
+      current.starred !== baseline.starred ||
+      current.pinnedTime !== baseline.pinnedTime
     )
       throw new Error(
         "Unrelated conversation metadata changed; inspect before continuing",
       );
   };
+  checkPreserved();
+  if (recovery.verificationOnly && current.title !== title)
+    throw new Error(
+      "ORGANIZATION_SAVE_UNCONFIRMED: inspect the original title edit; no automatic resubmit",
+    );
   if (current.title !== title) {
     await openOptions();
     const menu = await waitUi(
       (s) => !!s.rename,
       "Conversation rename action unavailable or ambiguous",
     );
+    progress.phase = "editing";
+    onProgress(progress);
     await act("click", menu.rename);
     const state = await waitUi(
       (s) => !!s.titleInput,
@@ -352,9 +376,13 @@ export async function organizeConversation(
     const previous = new Set<string>(
       (await requests()).map((r: any) => r.requestId),
     );
+    progress.phase = "save_pending";
+    onProgress(progress);
     await act("press", "Enter");
     await waitUi((s) => !s.titleInput, "Chat title edit did not finish");
     await waitForSave(previous, "Title");
+    progress.phase = "verifying";
+    onProgress(progress);
     current = await freshMetadata();
     if (current.title !== title)
       throw new Error(
@@ -372,6 +400,7 @@ export async function organizeConversation(
     );
   checkPreserved();
   if (configuredProject) progress.project.state = "verified";
+  progress.phase = "complete";
   onProgress(progress);
   return {
     ...progress,

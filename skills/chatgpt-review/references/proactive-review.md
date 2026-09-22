@@ -23,6 +23,8 @@ Do not automatically review routine copy/style changes, small features following
 
 ## Send a reviewable decision
 
+Before choosing the review brief, apply the direction-confirmation rule in SKILL.md. If the user's technical direction is unclear or materially different directions remain possible, explain the alternatives and obtain the user's choice before sending or implementing a direction-dependent plan. An explicit request to explore alternatives authorizes a comparison within the agreed scope, not silently choosing one. Separate confirmed user intent, the local Agent's recommendation, and open questions in the brief. Reviewer agreement cannot supply missing user confirmation.
+
 Prepare a concrete draft before requesting review. Include the goal and constraints, exact project path and known revision, a small map of relevant files, alternatives and recommendation, verified result summaries, assumptions and unresolved questions. For a mechanism/code review, include focused code blocks carrying the decision and explain their significance; the reviewer can retrieve surrounding implementation through read-only MCP. For result review, lead with the goal-to-outcome comparison and provide implementation detail only where needed. Use only authorized, task-relevant material and omit secrets. Supply local verification summaries and their limits, not full logs by default; the remote reviewer must not claim to have run the local tests.
 
 Ask for failure-causing assumptions, concrete counterexamples, simpler established alternatives, and a distinction between verified defects and hypotheses. Request decision-blocking issues separately from optional improvements and ask what experiment would resolve a disagreement. Avoid a generic request for approval.

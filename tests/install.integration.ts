@@ -125,6 +125,49 @@ try {
     await run([...cliArgs, "init", "--workspace", workspace, "--cdp", "9223"]),
   );
   assert.equal(initialized.modelPolicy, "6 Pro");
+  const queued = JSON.parse(
+    await run([
+      ...cliArgs,
+      "conversation",
+      "create",
+      "--id",
+      "offline-queue",
+      "--prompt",
+      "Persist before opening a browser",
+    ]),
+  );
+  assert.equal(queued.summary.nextAction, "start");
+  assert.ok(existsSync(join(state, "tasks.db")));
+  assert.equal(existsSync(join(state, "task-offline-queue.json")), false);
+  const saved = JSON.parse(
+    await run([
+      ...cliArgs,
+      "conversation",
+      "status",
+      "--id",
+      queued.id,
+      "--run",
+      queued.currentRun,
+    ]),
+  );
+  assert.equal(saved.runs[0].prompt, queued.runs[0].prompt);
+  const legacy = { ...queued, id: "legacy-queue" };
+  const legacyBytes = JSON.stringify(legacy);
+  writeFileSync(join(state, "task-legacy-queue.json"), legacyBytes);
+  const migrated = JSON.parse(
+    await run([...cliArgs, "conversation", "migrate", "--id", legacy.id]),
+  );
+  assert.equal(migrated.migrated, true);
+  assert.equal(
+    JSON.parse(
+      await run([...cliArgs, "conversation", "migrate", "--id", legacy.id]),
+    ).alreadyStored,
+    true,
+  );
+  assert.equal(
+    readFileSync(join(state, "task-legacy-queue.json"), "utf8"),
+    legacyBytes,
+  );
   const doctor = await run([...cliArgs, "doctor"], {
     failure: true,
   });

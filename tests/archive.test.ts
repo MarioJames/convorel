@@ -374,9 +374,9 @@ test("a corrupt task document is reported without blocking the others", async ()
   writeFileSync(join(root, "task-truncated.json"), "{");
   const scanned = scanTasks(root);
   expect(scanned.found.map((item) => item.taskId)).toEqual(["review"]);
-  expect(scanned.errors.map((error) => error.file).sort()).toEqual([
-    "task-half.json",
-    "task-truncated.json",
+  expect(scanned.errors.map((error) => error.taskId).sort()).toEqual([
+    "half",
+    "truncated",
   ]);
   expect(await publishTask(root, scanned.found[0].taskId)).toMatchObject({
     status: "partial",
@@ -565,13 +565,19 @@ class CaptureBrowser {
     const page = this.pageState;
     const later = this.laterPages;
     const browser = this;
+    let afterClickReads = 1;
     return {
       session: "capture",
       run: async (...args: string[]) => {
         browser.evals.push(args[1] ?? "");
         return { result: browser.copyResult };
       },
-      read: async () => structuredClone(later[browser.reads++] ?? page),
+      read: async () => {
+        browser.reads++;
+        return structuredClone(
+          (browser.evals.length ? later[afterClickReads++] : later[0]) ?? page,
+        );
+      },
     };
   }
 }
@@ -955,7 +961,7 @@ test("a turn whose bytes changed under the click is not archived", async () => {
   });
   // The click did happen; only the re-read proved the bytes are no longer this reply's.
   expect(browser.evals.length).toBe(1);
-  expect(browser.reads).toBe(2);
+  expect(browser.reads).toBe(3);
   const task = store.read<any>("task-review");
   expect(task.runs[0].reply.markdown).toBeUndefined();
   expect(task.runs[0].reply.markdownError).toBe("TARGET_CHANGED");
@@ -985,7 +991,7 @@ test("the copy control's own relabel window is waited out, not rejected", async 
     archive: { status: "stored" },
   });
   expect(browser.evals.length).toBe(1);
-  expect(browser.reads).toBe(3);
+  expect(browser.reads).toBe(4);
   const task = store.read<any>("task-review");
   expect(task.runs[0].reply.markdown).toBe("## 裁定\n\n**推荐 A**");
   expect(task.runs[0].reply.markdownError).toBeUndefined();
@@ -1011,7 +1017,7 @@ test("a capture already proven by its bytes survives a label that never settles"
     gaps: [],
   });
   // Bounded waiting: four reads, then the attribution it already has is kept.
-  expect(browser.reads).toBe(5);
+  expect(browser.reads).toBe(6);
   expect(store.read<any>("task-review").runs[0].reply.markdown).toBe(
     "## 裁定\n\n**推荐 A**",
   );

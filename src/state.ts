@@ -1,3 +1,4 @@
+import { TaskStore } from "./task-store.ts";
 import {
   existsSync,
   mkdirSync,
@@ -51,15 +52,33 @@ export class State {
     return join(this.root, key + ".json");
   }
   has(key: string) {
+    this.path(key);
+    if (key.startsWith("task-"))
+      return (
+        this.taskStore().read(key.slice(5)) !== undefined ||
+        existsSync(this.path(key))
+      );
     return existsSync(this.path(key));
   }
   read<T = any>(key: string): T {
-    const x = JSON.parse(readFileSync(this.path(key), "utf8"));
+    const x = JSON.parse(this.bytes(key));
+    if (key.startsWith("task-")) {
+      if (x.id !== key.slice(5)) throw new Error("TASK_ID_MISMATCH");
+      if (!Array.isArray(x.runs)) throw new Error("TASK_RUNS_MISSING");
+    }
     if (x.version !== 1) throw new Error("STATE_VERSION_UNSUPPORTED");
     return x;
   }
   write(key: string, value: any) {
     if (value.version !== 1) throw new Error("STATE_VERSION_REQUIRED");
+    this.path(key);
+    if (key.startsWith("task-")) {
+      this.taskStore().write(
+        key.slice(5),
+        JSON.stringify(value, null, 2) + "\n",
+      );
+      return;
+    }
     const path = this.path(key),
       tmp = path + "." + randomUUID() + ".tmp";
     const fd = openSync(tmp, "wx", 0o600);
@@ -77,10 +96,72 @@ export class State {
       closeSync(dir);
     }
   }
+  private taskStore() {
+    return new TaskStore(this.root);
+  }
+  assertTaskWritable(id: string) {
+    taskLockName(id);
+    if (
+      this.taskStore().read(id) === undefined &&
+      existsSync(this.path("task-" + id))
+    )
+      throw new Error(
+        `TASK_MIGRATION_REQUIRED: ${id}; use conversation migrate --id ${id}`,
+      );
+  }
+  bytes(key: string) {
+    const path = this.path(key);
+    return (
+      (key.startsWith("task-")
+        ? this.taskStore().read(key.slice(5))
+        : undefined) ?? readFileSync(path, "utf8")
+    );
+  }
+  taskIds() {
+    return [
+      ...new Set([
+        ...this.taskStore().ids(),
+        ...readdirSync(this.root)
+          .filter((f) => f.startsWith("task-") && f.endsWith(".json"))
+          .map((f) => f.slice(5, -5)),
+      ]),
+    ].sort();
+  }
   tasks() {
-    return readdirSync(this.root)
-      .filter((f) => f.startsWith("task-") && f.endsWith(".json"))
-      .map((f) => this.read<any>(f.slice(0, -5)));
+    return this.taskIds().map((id) => this.read<any>("task-" + id));
+  }
+  async migrateTask(id: string) {
+    taskLockName(id);
+    // Watchers retain their lock between polls; never migrate underneath one.
+    return this.locked(
+      () =>
+        this.locked(
+          () =>
+            this.locked(
+              () =>
+                this.locked(async () => {
+                  const existing = this.taskStore().read(id);
+                  if (existing !== undefined)
+                    return { id, migrated: false, alreadyStored: true };
+                  const document = readFileSync(
+                    this.path("task-" + id),
+                    "utf8",
+                  );
+                  const value = JSON.parse(document);
+                  if (
+                    value.version !== 1 ||
+                    value.id !== id ||
+                    !Array.isArray(value.runs)
+                  )
+                    throw new Error("LEGACY_TASK_INVALID");
+                  return this.taskStore().import(id, document);
+                }, registryLockName()),
+              taskLockName(id),
+            ),
+          "operation",
+        ),
+      "watch-" + id,
+    );
   }
   /**
    * Acquire the named lock, run fn, then release. When waitForMs is set, a

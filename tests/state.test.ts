@@ -101,3 +101,99 @@ test("isLockedActive reports absent, live, and stale lock ownership", () => {
   });
   expect(s.isLockedActive(key)).toBe(false);
 });
+
+test("task documents commit to SQLite and reopen without a JSON handoff", () => {
+  const a = new State(root);
+  a.write("task-alpha", {
+    version: 1,
+    id: "alpha",
+    runs: [],
+    prompt: "durable",
+  });
+  const b = new State(root);
+  expect(b.read<any>("task-alpha").prompt).toBe("durable");
+  expect(statSync(join(root, "tasks.db")).mode & 0o777).toBe(0o600);
+  expect(b.tasks().map((t) => t.id)).toEqual(["alpha"]);
+});
+
+test("legacy task migration preserves bytes, is repeatable, and detects old writers", async () => {
+  const s = new State(root);
+  const bytes = JSON.stringify({
+    version: 1,
+    id: "alpha",
+    runs: [],
+    prompt: "old",
+  });
+  const path = join(root, "task-alpha.json");
+  writeFileSync(path, bytes);
+  expect(s.read<any>("task-alpha").prompt).toBe("old");
+  expect(() => s.write("task-alpha", { version: 1 })).toThrow(
+    "TASK_MIGRATION_REQUIRED",
+  );
+  await s.migrateTask("alpha");
+  await s.migrateTask("alpha");
+  s.write("task-alpha", { version: 1, id: "alpha", runs: [], prompt: "new" });
+  expect(new State(root).read<any>("task-alpha").prompt).toBe("new");
+  expect(readFileSync(path, "utf8")).toBe(bytes);
+  await s.migrateTask("alpha");
+  expect(s.read<any>("task-alpha").prompt).toBe("new");
+  writeFileSync(path, bytes + "\n");
+  expect(() => s.read("task-alpha")).toThrow("LEGACY_TASK_CHANGED");
+});
+
+test("migration refuses a live watcher and preserves malformed legacy state", async () => {
+  const s = new State(root);
+  writeFileSync(
+    join(root, "task-alpha.json"),
+    '{"version":1,"id":"alpha","runs":[]}',
+  );
+  await s.locked(async () => {
+    await expect(s.migrateTask("alpha")).rejects.toThrow("LOCK_BUSY");
+  }, "watch-alpha");
+  writeFileSync(join(root, "task-broken.json"), "{");
+  await expect(s.migrateTask("broken")).rejects.toThrow();
+  expect(readFileSync(join(root, "task-broken.json"), "utf8")).toBe("{");
+});
+
+test("independent CLI processes can initialize and update different database tasks", async () => {
+  const module = join(import.meta.dir, "../src/state.ts");
+  const children = Array.from({ length: 6 }, (_, index) =>
+    Bun.spawn(
+      [
+        process.execPath,
+        "--no-env-file",
+        "-e",
+        `import { State } from ${JSON.stringify(module)};
+     const state = new State(${JSON.stringify(root)});
+     const id = "parallel-${index}";
+     for (let n = 0; n < 8; n++) {
+       state.has("task-" + id);
+       state.write("task-" + id, { version: 1, id, runs: [], n });
+     }`,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    ),
+  );
+  const results = await Promise.all(
+    children.map(async (child) => ({
+      code: await child.exited,
+      error: await new Response(child.stderr).text(),
+    })),
+  );
+  expect(results).toEqual(
+    Array.from({ length: 6 }, () => ({ code: 0, error: "" })),
+  );
+  const state = new State(root);
+  expect(state.tasks()).toHaveLength(6);
+  for (const task of state.tasks()) expect(task.n).toBe(7);
+});
+
+test("migration excludes a task writer as well as its watcher", async () => {
+  const s = new State(root);
+  const original = '{"version":1,"id":"alpha","runs":[]}';
+  writeFileSync(join(root, "task-alpha.json"), original);
+  await s.locked(async () => {
+    await expect(s.migrateTask("alpha")).rejects.toThrow("LOCK_BUSY");
+    expect(readFileSync(join(root, "task-alpha.json"), "utf8")).toBe(original);
+  }, "task-alpha");
+});

@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { preference, writePreference } from "../src/user-config.ts";
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
@@ -136,7 +137,7 @@ function setup() {
 }
 test("generation failure stops wait with confirmed delivery and resumes only by observing the original turn", async () => {
   const { state, browser, conversation } = setup();
-  const t = await conversation.start("generation-failed", "Review");
+  const t = await start(conversation, "generation-failed", "Review");
   const p = [...browser.pages.values()][0];
   p.generating = false;
   p.messages.push({
@@ -194,7 +195,7 @@ test("an error after recognizing the submitted message never restores permission
     }
     return write(key, value);
   };
-  const t = await conversation.start("confirmed-send", "Review");
+  const t = await start(conversation, "confirmed-send", "Review");
   expect(t.runs[0].userMessageId).toBe("u1");
   expect(t.runs[0].state).toBe("waiting");
   await expect(conversation.retry(t.id, t.currentRun)).rejects.toThrow(
@@ -214,7 +215,7 @@ test("model drift after filling the draft stops before sending", async () => {
       observedModel: opts["verify-only"] === "true" ? "Changed model" : "6 Pro",
     }),
   );
-  const t = await conversation.start("model-drift", "Conversation");
+  const t = await start(conversation, "model-drift", "Conversation");
   expect(t.runs[0]).toMatchObject({
     state: "prepared",
     error: "Error: MODEL_CHANGED_BEFORE_SEND",
@@ -225,7 +226,7 @@ test("model drift after filling the draft stops before sending", async () => {
 test("an obstructed Send button retains a prepared run without clicking", async () => {
   const { browser, conversation } = setup();
   browser.sendReady = false;
-  const t = await conversation.start("obstructed", "Conversation");
+  const t = await start(conversation, "obstructed", "Conversation");
   expect(t.runs[0]).toMatchObject({
     state: "prepared",
     error: "Error: SEND_CONTROL_UNAVAILABLE",
@@ -240,7 +241,7 @@ test("an obstructed Send button retains a prepared run without clicking", async 
 test("a submitted message can precede its persisted conversation URL without allowing a resend", async () => {
   const { browser, conversation } = setup();
   browser.delayedUrl = true;
-  const first = await conversation.start("url-pending", "Conversation");
+  const first = await start(conversation, "url-pending", "Conversation");
   expect(first.url).toBeUndefined();
   expect(first.runs[0].state).toBe("waiting");
   expect(first.runs[0].userMessageId).toBe("u1");
@@ -261,7 +262,7 @@ test("a submitted message can precede its persisted conversation URL without all
 });
 test("resume recovers a saved draft URL only on its original target with the exact submitted message", async () => {
   const { state, browser, conversation } = setup();
-  const first = await conversation.start("legacy-pending", "Conversation");
+  const first = await start(conversation, "legacy-pending", "Conversation");
   first.url = "https://chatgpt.com/";
   first.runs[0].state = "delivery_unknown";
   state.write("task-" + first.id, first);
@@ -273,7 +274,7 @@ test("resume recovers a saved draft URL only on its original target with the exa
 });
 test("draft URL recovery never trusts a different submitted message", async () => {
   const { state, browser, conversation } = setup();
-  const first = await conversation.start("wrong-pending", "Conversation");
+  const first = await start(conversation, "wrong-pending", "Conversation");
   first.url = "https://chatgpt.com/";
   first.runs[0].state = "delivery_unknown";
   state.write("task-" + first.id, first);
@@ -301,16 +302,22 @@ test("new tasks resolve stored preferences while followups retain their original
     writePreference("model", "7 Pro");
     writePreference("project.url", "");
     writePreference("project.name", "");
-    const first = await conversation.start("preferences", "First");
+    const first = await start(conversation, "preferences", "First");
     expect(first.config.model).toBe("7 Pro");
     expect(first.config.projectUrl).toBeUndefined();
     browser.complete();
     await conversation.poll(first.id, first.currentRun);
     writePreference("model", "");
-    const next = await conversation.start(first.id, "Followup", "second", true);
+    const next = await start(
+      conversation,
+      first.id,
+      "Followup",
+      "second",
+      true,
+    );
     expect(next.config.model).toBe("7 Pro");
     browser.delayedUrl = true;
-    const other = await conversation.start("default-preferences", "Other");
+    const other = await start(conversation, "default-preferences", "Other");
     expect(other.config.model).toBeUndefined();
     expect(checks).toEqual(["7 Pro", "7 Pro", "7 Pro", "7 Pro", "", "8 Pro"]);
     expect(other.runs[0].observedModel).toBe("8 Pro");
@@ -323,8 +330,8 @@ test("new tasks resolve stored preferences while followups retain their original
 });
 test("duplicate start never resends, exact reply persists, finish closes owned page and a new service instance retains its result", async () => {
   const { state, browser, conversation } = setup();
-  const first = await conversation.start("design", "Conversation");
-  await conversation.start("design", "Conversation");
+  const first = await start(conversation, "design", "Conversation");
+  await start(conversation, "design", "Conversation");
   expect(browser.sends).toBe(1);
   browser.complete();
   await conversation.poll("design", first.currentRun);
@@ -341,7 +348,7 @@ test("duplicate start never resends, exact reply persists, finish closes owned p
 test("uncertain send reconciles existing marker without a second click", async () => {
   const { browser, conversation } = setup();
   browser.failSend = true;
-  const first = await conversation.start("uncertain", "Conversation");
+  const first = await start(conversation, "uncertain", "Conversation");
   expect(browser.sends).toBe(1);
   expect(conversationStatus(first)).toMatchObject({
     delivery: "unknown",
@@ -360,7 +367,7 @@ test("uncertain send reconciles existing marker without a second click", async (
 
 test("observation failures preserve delivery evidence and expose safe recovery actions", async () => {
   const { state, browser, conversation } = setup();
-  const t = await conversation.start("read-interrupted", "Review");
+  const t = await start(conversation, "read-interrupted", "Review");
   expect(conversationExitCode(t, "start")).toBe(0);
   expect(conversationExitCode(t, "resume")).toBe(2);
   const page = browser.page.bind(browser);
@@ -419,7 +426,7 @@ test("resuming a pre-send observation failure saves recovery without sending", a
       throw new ObservationError("connection reset");
     },
   });
-  const t = await conversation.start("before-send-read", "Review");
+  const t = await start(conversation, "before-send-read", "Review");
   expect(conversationStatus(t)).toMatchObject({
     state: "prepared",
     delivery: "not_attempted",
@@ -430,7 +437,7 @@ test("resuming a pre-send observation failure saves recovery without sending", a
   expect(conversationStatus(conversation.get(t.id))).toMatchObject({
     state: "prepared",
     delivery: "not_attempted",
-    nextAction: "retry",
+    nextAction: "start",
     observationError: null,
     error: null,
   });
@@ -441,7 +448,7 @@ test("resuming a pre-send observation failure saves recovery without sending", a
 });
 test("draft and newer messages protect a completed page from closure", async () => {
   const { browser, conversation } = setup();
-  const first = await conversation.start("draft", "Conversation");
+  const first = await start(conversation, "draft", "Conversation");
   browser.complete();
   await conversation.poll("draft", first.currentRun);
   const p = [...browser.pages.values()][0];
@@ -464,7 +471,7 @@ test("draft and newer messages protect a completed page from closure", async () 
 });
 test("a known user turn without composer remains pending, and stale run IDs fail", async () => {
   const { browser, conversation } = setup();
-  const first = await conversation.start("pending", "Conversation");
+  const first = await start(conversation, "pending", "Conversation");
   const p = [...browser.pages.values()][0];
   p.generating = false;
   p.hasComposer = false;
@@ -498,8 +505,8 @@ test("borrowed conversation cannot be claimed twice or closed, and completed res
 });
 test("request changes, browser restart, navigation and attachments cannot overwrite or close resources", async () => {
   const { browser, conversation } = setup();
-  const t = await conversation.start("protected", "Conversation");
-  await expect(conversation.start("protected", "Different")).rejects.toThrow(
+  const t = await start(conversation, "protected", "Conversation");
+  await expect(start(conversation, "protected", "Different")).rejects.toThrow(
     "REQUEST_CONFLICT",
   );
   expect(browser.sends).toBe(1);
@@ -532,7 +539,8 @@ test("a fresh task never fills or sends into a redirected non-ChatGPT page", asy
     }
     return value;
   };
-  const t = await conversation.start(
+  const t = await start(
+    conversation,
     "redirect",
     "Private conversation context",
   );
@@ -544,14 +552,15 @@ test("a fresh task never fills or sends into a redirected non-ChatGPT page", asy
 test("caller content is relayed intact with only a run correlation marker", async () => {
   const { browser, conversation } = setup();
   const input = "请解释这个算法。\n\n```ts\nconst n = 2;\n```\n";
-  const first = await conversation.start("question", input);
+  const first = await start(conversation, "question", input);
   const expected = `[CONVOREL:${first.currentRun}]\n\n${input}`;
   expect(first.runs[0].prompt).toBe(expected);
   expect([...browser.pages.values()][0].messages[0].text).toBe(expected);
   browser.complete();
   await conversation.poll("question", first.currentRun);
   const nextInput = "补充问题：为什么？\n";
-  const next = await conversation.start(
+  const next = await start(
+    conversation,
     "question",
     nextInput,
     "second-question",
@@ -567,7 +576,7 @@ test("caller content is relayed intact with only a run correlation marker", asyn
 
 test("followup restores a closed conversation after page loading and retains earlier runs", async () => {
   const { browser, conversation } = setup();
-  const first = await conversation.start("continued", "Initial question");
+  const first = await start(conversation, "continued", "Initial question");
   browser.complete();
   await conversation.poll("continued", first.currentRun);
   const saved = structuredClone([...browser.pages.values()][0]);
@@ -619,7 +628,7 @@ test("followup restores a closed conversation after page loading and retains ear
       return { observedModel: "6 Pro" };
     },
   );
-  const next = await restored.start("continued", "Follow-up", "second", true);
+  const next = await start(restored, "continued", "Follow-up", "second", true);
   expect(modelChecks).toEqual([
     { url: first.url!, target: next.binding!.target, model: "6 Pro" },
     {
@@ -638,13 +647,13 @@ test("followup restores a closed conversation after page loading and retains ear
 async function completedWithClaimedTab() {
   const setupResult = setup();
   const { state, browser, conversation } = setupResult;
-  const first = await conversation.start("continued", "Initial question");
+  const first = await start(conversation, "continued", "Initial question");
   browser.complete();
   await conversation.poll(first.id, first.currentRun);
   const savedPage = structuredClone(browser.pages.get(first.binding!.target));
   await conversation.finish(first.id, first.currentRun);
   browser.sendReady = false;
-  const other = await conversation.start("occupant", "Unsent question");
+  const other = await start(conversation, "occupant", "Unsent question");
   // Its registered URL differs, but its target has navigated to this conversation.
   other.url = "https://chatgpt.com/c/other-conversation";
   state.write("task-" + other.id, other);
@@ -680,7 +689,7 @@ test.each([true, false])(
       expect(target).not.toBe(other.binding!.target);
       return page(target);
     };
-    const next = await conversation.start(first.id, "Follow-up", "next", true);
+    const next = await start(conversation, first.id, "Follow-up", "next", true);
     expect(next.binding).toMatchObject({ owned: true, epoch: "epoch1" });
     expect(next.binding!.target).not.toBe(other.binding!.target);
     expect(next.url).toBe(first.url);
@@ -696,13 +705,13 @@ test.each([true, false])(
     expect(conversation.get(other.id)).toEqual(other);
     expect(browser.pages.get(other.binding!.target)).toEqual(otherPage);
     expect(
-      await conversation.start(first.id, "Follow-up", "next", true),
+      await start(conversation, first.id, "Follow-up", "next", true),
     ).toEqual(next);
     expect(browser.sends).toBe(2);
   },
 );
 
-test("restored followup verifies the entire completed branch before creating its run", async () => {
+test("restored followup verifies the entire completed branch before sending its saved run", async () => {
   const { browser, conversation, first, other, savedPage } =
     await completedWithClaimedTab();
   savedPage.messages.push({
@@ -712,12 +721,12 @@ test("restored followup verifies the entire completed branch before creating its
     final: false,
   });
   const otherPage = structuredClone(browser.pages.get(other.binding!.target));
-  await expect(
-    conversation.start(first.id, "Follow-up", "next", true),
-  ).rejects.toThrow("COMPLETED_TURN_CHANGED");
+  const failed = await start(conversation, first.id, "Follow-up", "next", true);
+  expect(failed.runs.at(-1)?.error).toContain("COMPLETED_TURN_CHANGED");
   const after = conversation.get(first.id);
-  expect(after.currentRun).toBe(first.currentRun);
-  expect(after.runs).toHaveLength(1);
+  expect(after.currentRun).not.toBe(first.currentRun);
+  expect(after.runs).toHaveLength(2);
+  expect(after.runs[1].state).toBe("prepared");
   expect(after.runs[0].state).toBe("complete");
   expect(browser.sends).toBe(1);
   expect(conversation.get(other.id)).toEqual(other);
@@ -749,7 +758,8 @@ test.each([1, 2])(
       candidates.push(await browser.tabs("new", first.url!));
     const targets = structuredClone(browser.targets);
     if (count === 1) {
-      const next = await conversation.start(
+      const next = await start(
+        conversation,
         first.id,
         "Follow-up",
         "next",
@@ -761,10 +771,18 @@ test.each([1, 2])(
       });
       expect(browser.sends).toBe(2);
     } else {
-      await expect(
-        conversation.start(first.id, "Follow-up", "next", true),
-      ).rejects.toThrow("AMBIGUOUS_CONVERSATION_TABS");
-      expect(conversation.get(first.id).runs).toHaveLength(1);
+      const failed = await start(
+        conversation,
+        first.id,
+        "Follow-up",
+        "next",
+        true,
+      );
+      expect(failed.runs.at(-1)?.error).toContain(
+        "AMBIGUOUS_CONVERSATION_TABS",
+      );
+      expect(failed.runs.at(-1)?.state).toBe("prepared");
+      expect(conversation.get(first.id).runs).toHaveLength(2);
       expect(browser.sends).toBe(1);
     }
     expect(browser.targets).toEqual(targets);
@@ -791,12 +809,13 @@ test("composer nonbreaking spaces preserve indentation without accepting changed
       },
     };
   };
-  const first = await conversation.start("spaces", "Code:\n  const n = 1;");
+  const first = await start(conversation, "spaces", "Code:\n  const n = 1;");
   expect(first.runs[0].state).toBe("waiting");
   expect(browser.sends).toBe(1);
   // Independent task must still stop on an actual text mutation.
   changeWords = true;
-  const second = await conversation.start(
+  const second = await start(
+    conversation,
     "changed-words",
     "Code:\n  const n = 2;",
   );
@@ -807,7 +826,7 @@ test("composer nonbreaking spaces preserve indentation without accepting changed
 
 test("restoring a saved conversation refuses a different conversation without sending", async () => {
   const { browser, conversation } = setup();
-  const first = await conversation.start("restore-drift", "Initial question");
+  const first = await start(conversation, "restore-drift", "Initial question");
   browser.complete();
   await conversation.poll("restore-drift", first.currentRun);
   await conversation.finish("restore-drift", first.currentRun);
@@ -820,11 +839,17 @@ test("restoring a saved conversation refuses a different conversation without se
     }
     return result;
   };
-  await expect(
-    conversation.start("restore-drift", "Next question", "next", true),
-  ).rejects.toThrow("CONVERSATION_CHANGED");
+  const failed = await start(
+    conversation,
+    "restore-drift",
+    "Next question",
+    "next",
+    true,
+  );
+  expect(failed.runs.at(-1)?.error).toContain("CONVERSATION_CHANGED");
+  expect(failed.runs.at(-1)?.state).toBe("prepared");
   expect(browser.sends).toBe(1);
-  expect(conversation.get("restore-drift").runs).toHaveLength(1);
+  expect(conversation.get("restore-drift").runs).toHaveLength(2);
 });
 
 test("first durable task write already contains a recoverable run", async () => {
@@ -835,7 +860,7 @@ test("first durable task write already contains a recoverable run", async () => 
     if (key === "task-first-write")
       throw new Error("simulated interruption after durable write");
   };
-  await expect(conversation.start("first-write", "Question")).rejects.toThrow(
+  await expect(start(conversation, "first-write", "Question")).rejects.toThrow(
     "simulated interruption",
   );
   const restored = new Conversation(
@@ -859,7 +884,7 @@ test("pre-submit recovery is explicit, run-bound and never retries uncertain del
     if (!available) throw new Error("MODEL_UNVERIFIED");
     return { observedModel: "6 Pro" };
   });
-  const first = await conversation.start("recover-send", "Question");
+  const first = await start(conversation, "recover-send", "Question");
   expect(first.runs[0].state).toBe("prepared");
   expect(browser.sends).toBe(0);
   expect(
@@ -897,7 +922,7 @@ test("explicit retry preserves a changed draft and continues only the recorded m
       },
     };
   };
-  const first = await conversation.start("retry-draft", "Recorded question");
+  const first = await start(conversation, "retry-draft", "Recorded question");
   expect(first.runs[0].state).toBe("prepared");
   const p = [...browser.pages.values()][0];
   failFill = false;
@@ -922,7 +947,7 @@ test("restored draft recovery backs up, confirms clearing, then retries the same
     return { observedModel: "6 Pro" };
   });
   browser.restoredDraft = "Old restored draft\nsecond line";
-  const t = await conversation.start("restored", "Recorded question");
+  const t = await start(conversation, "restored", "Recorded question");
   expect(t.runs[0].error).toContain("DRAFT_CHANGED");
   expect(browser.sends).toBe(0);
   expect(modelChecks).toBe(0);
@@ -970,7 +995,7 @@ test("restored draft recovery backs up, confirms clearing, then retries the same
 test("recovery refuses changed drafts, stale runs, attachments, history, and borrowed pages without clearing", async () => {
   const { state, browser, conversation } = setup();
   browser.restoredDraft = "Old draft";
-  const t = await conversation.start("recovery-guards", "Question");
+  const t = await start(conversation, "recovery-guards", "Question");
   const p = browser.pages.get(t.binding!.target);
   await expect(
     conversation.clearDraft(t.id, "stale", "Old draft"),
@@ -1005,7 +1030,7 @@ test("a successful browser command does not prove the draft cleared and never tr
   const { browser, conversation } = setup();
   browser.restoredDraft = "Restored draft";
   browser.ignoreClear = true;
-  const t = await conversation.start("unverified-clear", "Question");
+  const t = await start(conversation, "unverified-clear", "Question");
   await expect(
     conversation.clearDraft(t.id, t.currentRun, browser.restoredDraft),
   ).rejects.toThrow("DRAFT_CLEAR_UNVERIFIED");
@@ -1019,7 +1044,7 @@ for (const delivery of ["submitting", "delivery_unknown"]) {
   test(`draft recovery cannot reauthorize ${delivery} delivery`, async () => {
     const { state, browser, conversation } = setup();
     browser.restoredDraft = "Old draft";
-    const t = await conversation.start("unknown-recovery", "Question");
+    const t = await start(conversation, "unknown-recovery", "Question");
     t.runs[0].state = delivery;
     state.write("task-" + t.id, t);
     await expect(
@@ -1038,7 +1063,8 @@ test("workspace snapshots can be selected explicitly and mismatch cannot silentl
   const other = join(ws, "other");
   mkdirSync(other);
   browser.restoredDraft = "Old draft";
-  const t = await conversation.start(
+  const t = await start(
+    conversation,
     "workspace-binding",
     "Question",
     "initial",
@@ -1048,7 +1074,7 @@ test("workspace snapshots can be selected explicitly and mismatch cannot silentl
   expect(t.config.workspace).toBe(other);
   expect(conversationStatus(t).workspace).toBe(other);
   await expect(
-    conversation.start(t.id, "Question", "initial", false, ws),
+    start(conversation, t.id, "Question", "initial", false, ws),
   ).rejects.toThrow("WORKSPACE_MISMATCH");
   await expect(conversation.retry(t.id, t.currentRun, ws)).rejects.toThrow(
     "WORKSPACE_MISMATCH",
@@ -1061,7 +1087,7 @@ test("explicit prepared workspace correction retains prompt/run and rejects stal
   const other = join(ws, "other");
   mkdirSync(other);
   browser.restoredDraft = "Old draft";
-  const t = await conversation.start("correct-workspace", "Question");
+  const t = await start(conversation, "correct-workspace", "Question");
   const corrected = await conversation.rebindWorkspace(
     t.id,
     t.currentRun,
@@ -1087,10 +1113,11 @@ test("explicit prepared workspace correction retains prompt/run and rejects stal
 async function missingDelivery(priorInput = "Architecture review") {
   const ctx = setup();
   const { conversation, browser } = ctx;
-  const first = await conversation.start("missing-send", priorInput);
+  const first = await start(conversation, "missing-send", priorInput);
   browser.complete();
   await conversation.poll(first.id, first.currentRun);
-  const sent = await conversation.start(
+  const sent = await start(
+    conversation,
     first.id,
     "Result review\n",
     "result",
@@ -1463,7 +1490,7 @@ for (const mode of [
 ]) {
   test(`continuation preserves the verified model through both checks: ${mode}`, async () => {
     const { state, browser, conversation } = setup();
-    const first = await conversation.start("continue-model", "First");
+    const first = await start(conversation, "continue-model", "First");
     browser.complete();
     const completed = await conversation.poll(first.id, first.currentRun);
     completed.config.model = mode === "explicit-config" ? "7 Pro" : undefined;
@@ -1488,7 +1515,13 @@ for (const mode of [
         return { observedModel: opts.model };
       },
     );
-    let result = await continuation.start(first.id, "Followup", "second", true);
+    let result = await start(
+      continuation,
+      first.id,
+      "Followup",
+      "second",
+      true,
+    );
     const prepared = structuredClone(result.runs[1]);
     if (mode.startsWith("retry-")) {
       expect(prepared.state).toBe("prepared");
@@ -1554,7 +1587,7 @@ for (const historicalState of [
 ]) {
   test(`continuation only inherits a completed historical observation: ${historicalState}`, async () => {
     const { state, browser, conversation } = setup();
-    const first = await conversation.start("historical-model", "First");
+    const first = await start(conversation, "historical-model", "First");
     browser.complete();
     const completed = await conversation.poll(first.id, first.currentRun);
     completed.config.model = undefined;
@@ -1578,7 +1611,8 @@ for (const historicalState of [
         return { observedModel: opts.model || "7 Pro" };
       },
     );
-    const result = await continuation.start(
+    const result = await start(
+      continuation,
       first.id,
       "Followup",
       "second",
@@ -1610,7 +1644,8 @@ test("initial naming runs after delivery while the first reply is still generati
       return { verified: true, title: "0918｜OPT｜创建路径" } as any;
     },
   );
-  const first = await conversation.start(
+  const first = await start(
+    conversation,
     "named",
     "Review",
     "initial",
@@ -1627,13 +1662,13 @@ test("initial naming runs after delivery while the first reply is still generati
     generating: true,
     messages: [{ id: "u1", role: "user" }],
   });
-  await conversation.start("named", "Review", "initial", false, undefined, {
+  await start(conversation, "named", "Review", "initial", false, undefined, {
     type: "OPT",
     topic: "创建路径",
   });
   browser.complete();
   await conversation.resume(first.id, first.currentRun);
-  await conversation.start("named", "Next", "next", true);
+  await start(conversation, "named", "Next", "next", true);
   expect(calls).toHaveLength(1);
   expect(browser.sends).toBe(2);
 });
@@ -1651,7 +1686,8 @@ test("naming waits for the persisted URL and failures never undo delivery or res
     },
   );
   browser.delayedUrl = true;
-  const first = await conversation.start(
+  const first = await start(
+    conversation,
     "delayed-name",
     "Review",
     "initial",
@@ -1701,7 +1737,8 @@ test("transient naming failures back off, survive restart and recover after comp
       organizer,
     );
   let conversation = create();
-  const first = await conversation.start(
+  const first = await start(
+    conversation,
     "retry-name",
     "Review",
     "initial",
@@ -1763,7 +1800,8 @@ for (const failure of [
         throw new Error(failure);
       },
     );
-    const first = await conversation.start(
+    const first = await start(
+      conversation,
       "bounded-name",
       "Review",
       "initial",
@@ -1793,7 +1831,7 @@ for (const remote of [
 ]) {
   test(`stalled stream refreshes and reconciles without resending: ${remote}`, async () => {
     const { state, browser, conversation } = setup();
-    const first = await conversation.start("stalled", "Review");
+    const first = await start(conversation, "stalled", "Review");
     const original = browser.pages.get(first.binding!.target);
     const saved = structuredClone(original);
     if (remote.startsWith("complete")) {
@@ -1846,7 +1884,7 @@ for (const remote of [
 
 test("stalled refresh preserves drafts, bounds navigation and never resends", async () => {
   const { state, browser, conversation } = setup();
-  const first = await conversation.start("stalled-limit", "Review");
+  const first = await start(conversation, "stalled-limit", "Review");
   const p = browser.pages.get(first.binding!.target);
   let reloads = 0;
   browser.gate = async (where) => {
@@ -1895,7 +1933,7 @@ test("missing owned creation can be replaced only before the first send", async 
     if (!ready) throw new Error("Model control unavailable");
     return { observedModel: "6 Pro" };
   });
-  const first = await conversation.start("recreate", "Review");
+  const first = await start(conversation, "recreate", "Review");
   expect(first.runs[0].state).toBe("prepared");
   expect(browser.sends).toBe(0);
   browser.targets = [];
@@ -1911,7 +1949,7 @@ test("unknown submission cannot recreate a missing new conversation", async () =
   const { browser, conversation } = setup();
   browser.delayedUrl = true;
   browser.failSend = true;
-  const first = await conversation.start("no-recreate", "Review");
+  const first = await start(conversation, "no-recreate", "Review");
   expect(first.runs[0].state).toBe("delivery_unknown");
   browser.targets = [];
   await expect(conversation.resume(first.id)).rejects.toThrow("OPEN_UNKNOWN");
@@ -1922,7 +1960,7 @@ test("unknown submission cannot recreate a missing new conversation", async () =
 test("invalid initial naming stops before creating a browser page", async () => {
   const { browser, conversation } = setup();
   await expect(
-    conversation.start("bad-name", "Review", "initial", false, undefined, {
+    start(conversation, "bad-name", "Review", "initial", false, undefined, {
       type: "BAD",
       topic: "Topic",
     }),
@@ -1965,7 +2003,7 @@ test("project starts use only the configured project composer and reject a gener
           [...browser.pages.values()][0].url = "https://chatgpt.com/";
         return { observedModel: "6 Pro" };
       });
-      const task = await conversation.start("project-" + scenario, "Review");
+      const task = await start(conversation, "project-" + scenario, "Review");
       expect(browser.targets).toHaveLength(1);
       expect(task.config.projectUrl).toBe(projectUrl);
       if (scenario === "project") expect(browser.sends).toBe(1);
@@ -2004,7 +2042,8 @@ test.each([false, true])(
         throw new Error("Metadata unavailable");
       },
     );
-    const t = await conversation.start(
+    const t = await start(
+      conversation,
       "observer-failure",
       "Review",
       "initial",
@@ -2030,7 +2069,7 @@ test.each([false, true])(
 );
 test("an operation releases its browser sessions whether it returned or failed", async () => {
   const { browser, conversation } = setup();
-  const t = await conversation.start("released", "Review");
+  const t = await start(conversation, "released", "Review");
   expect(browser.releases).toBe(1);
   browser.pages.delete(t.binding!.target);
   browser.releases = 0;
@@ -2041,7 +2080,7 @@ test("an operation releases its browser sessions whether it returned or failed",
 });
 test("a watcher releases its browser sessions on every observation, not only at the end", async () => {
   const { state, browser, conversation } = setup();
-  const t = await conversation.start("watched", "Review");
+  const t = await start(conversation, "watched", "Review");
   browser.complete();
   browser.releases = 0;
   expect(
@@ -2098,9 +2137,9 @@ test("one task holding its own tab does not block another task's send", async ()
   browser.uniqueUrls = true; // two live conversations coexist
   g.block("run:fill:target1");
   try {
-    const a = conversation.start("task-a", "Review A");
+    const a = start(conversation, "task-a", "Review A");
     await waitUntil(() => g.reached("run:fill:target1")); // A holds lock-task-a only
-    const tb = await conversation.start("task-b", "Review B"); // must not LOCK_BUSY
+    const tb = await start(conversation, "task-b", "Review B"); // must not LOCK_BUSY
     expect(tb.binding!.target).toBe("target2");
     g.release("run:fill:target1");
     const ta = await a;
@@ -2118,7 +2157,7 @@ test("a second operation on the same task waits a bounded window then fails clos
   writePreference("locks.taskWaitMs", "120");
   g.block("run:fill:target1");
   try {
-    const a = conversation.start("same-task", "Review");
+    const a = start(conversation, "same-task", "Review");
     await waitUntil(() => g.reached("run:fill:target1"));
     const sendsBefore = browser.sends;
     await expect(conversation.poll("same-task")).rejects.toThrow("LOCK_BUSY");
@@ -2139,9 +2178,9 @@ test("browser.serial restores a single global browser lock across different task
   writePreference("locks.taskWaitMs", "120");
   g.block("run:fill:target1");
   try {
-    const a = conversation.start("serial-a", "Review A");
+    const a = start(conversation, "serial-a", "Review A");
     await waitUntil(() => g.reached("run:fill:target1"));
-    await expect(conversation.start("serial-b", "Review B")).rejects.toThrow(
+    await expect(start(conversation, "serial-b", "Review B")).rejects.toThrow(
       "LOCK_BUSY",
     ); // different task, still serialized by the global lock
     g.release("run:fill:target1");
@@ -2155,7 +2194,7 @@ test("browser.serial restores a single global browser lock across different task
 
 test("finish persists a redacted missing-composer diagnosis without closing the page", async () => {
   const { browser, conversation } = setup();
-  const t = await conversation.start("missing-composer", "Review");
+  const t = await start(conversation, "missing-composer", "Review");
   browser.complete();
   await conversation.poll(t.id);
   const p = browser.pages.get(t.binding!.target);
@@ -2198,7 +2237,8 @@ test("failed organization revalidation retains the last verified naming, includi
     async () => ({ observedModel: "6 Pro" }),
     async () => ({ verified: true, title: "0922｜OPT｜原主题" }) as any,
   );
-  const t = await conversation.start(
+  const t = await start(
+    conversation,
     "revalidation",
     "Review",
     "initial",
@@ -2235,4 +2275,220 @@ test("failed organization revalidation retains the last verified naming, includi
   expect(conversationStatus(conversation.get(t.id)).organization!.state).toBe(
     "needs_attention",
   );
+});
+
+async function start(
+  conversation: Conversation,
+  ...args: Parameters<Conversation["create"]>
+) {
+  const task = await conversation.create(...args);
+  return conversation.start(task.id, task.currentRun, args[4]);
+}
+test("create is durable and offline; start loads the saved run and never sends it twice", async () => {
+  const { state, browser, conversation } = setup();
+  const prepared = await conversation.create("queued", "Saved prompt");
+  expect(prepared.runs[0].state).toBe("prepared");
+  expect(browser.nextTarget).toBe(0);
+  expect(browser.sends).toBe(0);
+  const resumed = new Conversation(
+    new State(home),
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+  );
+  const sent = await resumed.start(prepared.id, prepared.currentRun);
+  expect(sent.runs[0].state).toBe("waiting");
+  expect(browser.sends).toBe(1);
+  expect([...browser.pages.values()][0].messages[0].text).toContain(
+    "Saved prompt",
+  );
+  await resumed.start(prepared.id, prepared.currentRun);
+  expect(browser.sends).toBe(1);
+  await expect(resumed.start(prepared.id, "stale")).rejects.toThrow(
+    "STALE_RUN",
+  );
+  const repeated = await resumed.create("queued", "Saved prompt");
+  expect(repeated.currentRun).toBe(prepared.currentRun);
+  await expect(resumed.create("queued", "Changed prompt")).rejects.toThrow(
+    "REQUEST_CONFLICT",
+  );
+  expect(state.read<any>("task-queued").currentRun).toBe(prepared.currentRun);
+});
+
+test("followup creation does not contact the browser; execution checks prior reply drift", async () => {
+  const { browser, conversation } = setup();
+  const prepared = await conversation.create("offline-followup", "First");
+  await conversation.start(prepared.id, prepared.currentRun);
+  browser.complete();
+  await conversation.poll(prepared.id, prepared.currentRun);
+  browser.gate = async () => {
+    throw new Error("OFFLINE");
+  };
+  const next = await conversation.create(
+    prepared.id,
+    "Second",
+    "followup-key",
+    true,
+  );
+  expect(next.runs).toHaveLength(2);
+  expect(browser.sends).toBe(1);
+  browser.gate = undefined;
+  [...browser.pages.values()][0].messages.at(-1).text = "Changed reply";
+  const failed = await conversation.start(next.id, next.currentRun);
+  expect(failed.runs.at(-1)?.state).toBe("prepared");
+  expect(failed.runs.at(-1)?.error).toBeTruthy();
+  expect(browser.sends).toBe(1);
+});
+
+test("replaying an older create request cannot select a queued successor", async () => {
+  const { browser, conversation } = setup();
+  const first = await conversation.create("old-key", "First");
+  await conversation.start(first.id, first.currentRun);
+  browser.complete();
+  await conversation.poll(first.id, first.currentRun);
+  const next = await conversation.create(first.id, "Second", "second", true);
+  await expect(conversation.create(first.id, "First")).rejects.toThrow(
+    "REQUEST_RUN_SUPERSEDED",
+  );
+  expect(conversation.get(first.id).currentRun).toBe(next.currentRun);
+  expect(browser.sends).toBe(1);
+});
+
+test("a database rejection at the submission boundary prevents the browser click", async () => {
+  const { browser, conversation } = setup();
+  const task = await conversation.create(
+    "durability-failure",
+    "Do not send before commit",
+  );
+  const db = new Database(join(home, "tasks.db"));
+  db.exec(`create trigger reject_submission before update on task_document
+    when json_extract(new.document, '$.runs[0].state') = 'submitting'
+    begin select raise(abort, 'test disk failure'); end`);
+  db.close();
+  const result = await conversation.start(task.id, task.currentRun);
+  expect(result.runs[0].error).toContain("test disk failure");
+  expect(browser.sends).toBe(0);
+  await conversation.start(task.id, task.currentRun);
+  expect(browser.sends).toBe(0);
+});
+
+test("bound page waits for delayed history without resending", async () => {
+  const { browser, conversation } = setup();
+  const t = await start(conversation, "hydration", "Review");
+  const p = browser.pages.get(t.binding!.target);
+  const messages = structuredClone(p.messages);
+  p.messages = [];
+  p.generating = false;
+  let reads = 0;
+  browser.gate = async (where) => {
+    if (where === "read:" + t.binding!.target && ++reads === 2)
+      p.messages = messages;
+  };
+  const result = await conversation.resume(t.id);
+  expect(result.runs[0].state).toBe("waiting");
+  expect(reads).toBeGreaterThanOrEqual(2);
+  expect(browser.sends).toBe(1);
+});
+
+test("observer close acknowledgement loss reconciles missing target on resume", async () => {
+  const { state, browser } = setup();
+  let calls = 0,
+    lostAck = false;
+  const tabs = browser.tabs.bind(browser);
+  browser.tabs = async (...args: string[]) => {
+    const result = await tabs(...args);
+    if (args[0] === "close" && !lostAck) {
+      lostAck = true;
+      throw new Error("Connection lost after close");
+    }
+    return result;
+  };
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+    async (_b, _url, _prefs, _type, _topic, _progress, metadata) => {
+      calls++;
+      await metadata!.read();
+      if (calls === 1) throw new Error("METADATA_PAGE_UNAVAILABLE");
+      return { verified: true } as any;
+    },
+  );
+  const t = await start(
+    conversation,
+    "close-ack",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "FIX", topic: "恢复" },
+  );
+  expect(t.organizationObservation?.closed).not.toBe(true);
+  const stored = conversation.get(t.id);
+  stored.organization.nextRetryAt = new Date(0).toISOString();
+  state.write("task-" + t.id, stored);
+  const result = await conversation.resume(t.id);
+  expect(result.organization.verified).toBe(true);
+  expect(result.organizationObservation?.closed).toBe(true);
+  expect(browser.sends).toBe(1);
+});
+
+test("title-save uncertainty survives restart and resumes only metadata verification", async () => {
+  const { state, browser } = setup();
+  let calls = 0;
+  const baseline = {
+    id: "test-conversation",
+    title: "old",
+    createdAt: "2026-09-22T00:00:00Z",
+    projectId: null,
+  };
+  const organizer = async (
+    _b: any,
+    _url: any,
+    _prefs: any,
+    _type: any,
+    _topic: any,
+    progress: any,
+    metadata: any,
+    recovery: any,
+  ) => {
+    calls++;
+    if (calls === 1) {
+      progress({
+        phase: "save_pending",
+        baseline,
+        rename: { verified: false },
+      });
+      throw new Error("Connection lost after title save");
+    }
+    expect(recovery).toEqual({ verificationOnly: true, baseline });
+    expect(metadata).toBeDefined();
+    return { verified: true, phase: "complete" } as any;
+  };
+  const create = () =>
+    new Conversation(
+      state,
+      browser as any,
+      async () => ({ observedModel: "6 Pro" }),
+      organizer,
+    );
+  let conversation = create();
+  const t = await start(
+    conversation,
+    "save-ack",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "FIX", topic: "恢复" },
+  );
+  expect(t.organization.phase).toBe("save_pending");
+  await expect(
+    conversation.organize(t.id, t.currentRun, "FIX", "different"),
+  ).rejects.toThrow("ORGANIZATION_WRITE_UNRESOLVED");
+  const stored = conversation.get(t.id);
+  stored.organization.nextRetryAt = new Date(0).toISOString();
+  state.write("task-" + t.id, stored);
+  conversation = create();
+  expect((await conversation.resume(t.id)).organization.verified).toBe(true);
+  expect(browser.sends).toBe(1);
 });

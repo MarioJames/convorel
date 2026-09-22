@@ -18,6 +18,7 @@ import { runTunnel, tunnelInstructions, recoverTunnelLock } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
 import { jsonPrinter } from "./output.ts";
 import { preference } from "./user-config.ts";
+
 import { agentBrowserLocation, COMPILED, selfExec } from "./runtime.ts";
 import { conversationConfig } from "./config.ts";
 import { configCommand } from "./config-command.ts";
@@ -51,6 +52,36 @@ function opts(args: string[]) {
   }
   return o;
 }
+async function promptInput(o: Record<string, string>) {
+  const inline = o.prompt !== undefined;
+  const stdin = o["prompt-stdin"] !== undefined;
+  if (inline === stdin || (stdin && o["prompt-stdin"] !== "true"))
+    throw new Error(
+      "Choose exactly one of --prompt TEXT or --prompt-stdin true",
+    );
+  if (inline) return o.prompt;
+  if (process.stdin.isTTY) throw new Error("PROMPT_STDIN_REQUIRES_PIPE");
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = Bun.stdin.stream().getReader();
+  try {
+    for (;;) {
+      const { done, value: chunk } = await reader.read();
+      if (done) break;
+      size += chunk.byteLength;
+      if (size > 100000) {
+        await reader.cancel();
+        throw new Error("PROMPT_TOO_LARGE");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(
+    Buffer.concat(chunks),
+  );
+}
 const help = `convorel ${packageInfo.version} (Linux, ${COMPILED ? "standalone" : "source"})
 setup --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claude-code]
 init --workspace PATH --cdp PORT_OR_HTTP
@@ -65,8 +96,10 @@ config list|get KEY|set KEY VALUE|unset KEY|path
 doctor
 version [--check]|--version
 conversation list
-conversation start --id ID --prompt-file FILE [--type DES --topic TOPIC] [--language en|zh] [--request-id KEY] [--workspace PATH]
-conversation followup --id ID --prompt-file FILE --request-id KEY [--workspace PATH]
+conversation create --id ID (--prompt TEXT | --prompt-stdin true) [--type DES --topic TOPIC] [--language en|zh] [--request-id KEY] [--workspace PATH]
+conversation followup --id ID (--prompt TEXT | --prompt-stdin true) --request-id KEY [--workspace PATH]
+conversation start --id ID --run UUID [--workspace PATH]
+conversation migrate --id ID
 conversation status|resume|wait|result --id ID [--run UUID]
 conversation retry --id ID --run UUID [--workspace PATH]
 conversation recover-send --id ID --run UUID --expected-user-message ID --expected-url URL --prompt-file FILE --evidence-file FILE --rejected-at UNIX_MS --confirm-cloudflare-challenge true --reason TEXT [--workspace PATH]
@@ -83,6 +116,9 @@ conversation search --query TEXT [--task ID] [--role user|assistant] [--limit N]
 conversation content --version UUID [--from PATH]
 conversation export --directory PATH
 doctor --local true
+create/followup persist complete prompts in private STATE_DIR/tasks.db without browser access.
+start reads the exact saved run; repeating it never resends an already-started run.
+Legacy JSON tasks are read-only until explicit migrate; stop old task writers before migration.
 The archive is a private SQLite store at STATE_DIR/conversations.db: prompts, copied Markdown,
 content versions and gaps. history/search/content --from PATH reads an exported archive
 or a renamed snapshot with no config, workspace or browser. Search uses FTS5 trigrams, or a
@@ -118,6 +154,7 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error(
       "ENV_AUTOLOAD_DISABLED_REQUIRED: invoke bun --no-env-file or the installed executable",
     );
+
   const conversationOptions = area === "conversation" ? opts(rest) : undefined;
   const print = jsonPrinter(conversationOptions?.fields);
   if (area === "version" || area === "--version") {
@@ -260,6 +297,16 @@ export async function main(args = process.argv.slice(2)) {
     });
     if (existing.length) new WorkspaceAccess(existing).assertPrivate(path);
   };
+  if (area === "conversation" && sub === "migrate") {
+    const o = conversationOptions!;
+    for (const key of Object.keys(o))
+      if (!["id", "fields"].includes(key))
+        throw new Error(`Unknown migrate option --${key}`);
+    const store = getStore();
+    assertOutsideSharedRoots(store.root);
+    print(await store.migrateTask(required(o, "id")));
+    return 0;
+  }
   const archiveKeys: Record<string, string[]> = {
     archive: ["id", "all", "fields"],
     history: ["id", "run", "from", "coverage", "fields"],
@@ -291,7 +338,7 @@ export async function main(args = process.argv.slice(2)) {
       if (o.id && !selected.length)
         throw new Error(
           scanned.errors.some(
-            (error) => error.file === "task-" + o.id + ".json",
+            (error) => error.taskId === o.id || error.taskId === null,
           )
             ? "TASK_UNREADABLE: inspect sourceErrors"
             : "TASK_NOT_FOUND",
@@ -628,7 +675,22 @@ export async function main(args = process.argv.slice(2)) {
   }
   const o = conversationOptions!,
     id = required(o, "id");
-  if (sub === "start" || sub === "followup") {
+  if (sub === "create" || sub === "followup") {
+    for (const key of Object.keys(o))
+      if (
+        ![
+          "id",
+          "prompt",
+          "prompt-stdin",
+          "type",
+          "topic",
+          "language",
+          "request-id",
+          "workspace",
+          "fields",
+        ].includes(key)
+      )
+        throw new Error(`Unknown ${sub} option --${key}`);
     const naming =
       o.type || o.topic || o.language
         ? {
@@ -637,11 +699,8 @@ export async function main(args = process.argv.slice(2)) {
             language: (o.language || "en") as "en" | "zh",
           }
         : undefined;
-    const input = readFileSync(
-      realpathSync(required(o, "prompt-file")),
-      "utf8",
-    );
-    const t = await conversation.start(
+    const input = await promptInput(o);
+    const t = await conversation.create(
       id,
       input,
       sub === "followup"
@@ -651,6 +710,16 @@ export async function main(args = process.argv.slice(2)) {
       o.workspace,
       naming,
     );
+    print({ ...t, summary: conversationStatus(t) });
+    return 0;
+  }
+  if (sub === "start") {
+    for (const key of Object.keys(o))
+      if (!["id", "run", "workspace", "fields"].includes(key))
+        throw new Error(
+          `Unknown start option --${key}; create the prompt first`,
+        );
+    const t = await conversation.start(id, required(o, "run"), o.workspace);
     print({ ...t, summary: conversationStatus(t) });
     return conversationExitCode(t, "start");
   }

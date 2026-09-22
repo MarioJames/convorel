@@ -23,6 +23,7 @@ export async function waitForConversation(
   return store.locked(async () => {
     const deadline = Date.now() + seconds * 1000;
     let observationFailures = 0;
+    let lastSummary: ReturnType<typeof conversationStatus> | undefined;
     while (!signal.aborted && Date.now() < deadline) {
       let t;
       try {
@@ -57,10 +58,21 @@ export async function waitForConversation(
       const r = t.runs.find((r) => r.id === run);
       if (t.currentRun !== run || !r) throw new Error("STALE_RUN");
       const summary = conversationStatus(t);
+      lastSummary = summary;
       report(summary);
       const retryNaming = summary.organization?.state === "retry_pending";
-      if (r.state === "complete" && !retryNaming) return 0;
-      if (r.state !== "waiting" && r.state !== "complete") return 2;
+      if (r.state === "complete" && !retryNaming)
+        return (summary.organization &&
+          summary.organization.state !== "verified") ||
+          summary.phase === "cleanup_pending"
+          ? 2
+          : 0;
+      if (
+        !["waiting", "complete", "submitting", "delivery_unknown"].includes(
+          r.state,
+        )
+      )
+        return 2;
       const delay = retryNaming
         ? Math.max(
             1,
@@ -68,7 +80,9 @@ export async function waitForConversation(
               summary.organization!.nextRetryAt ?? new Date().toISOString(),
             ) - Date.now(),
           )
-        : 60000;
+        : ["submitting", "delivery_unknown"].includes(r.state)
+          ? 1000
+          : 60000;
       try {
         await sleep(
           Math.min(delay, Math.max(1, deadline - Date.now())),
@@ -80,8 +94,10 @@ export async function waitForConversation(
       }
     }
     report({
+      ...lastSummary,
       id,
       runId: run,
+      runState: lastSummary?.state ?? null,
       state: signal.aborted ? "cancelled" : "timeout",
       remoteGenerationStopped: false,
     });
