@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha } from "../src/workspace.ts";
-import { State } from "../src/state.ts";
+import { State, tabsLockName } from "../src/state.ts";
 import { Conversation } from "../src/conversation.ts";
 import { ObservationError } from "../src/browser.ts";
 import { waitForConversation } from "../src/wait.ts";
@@ -1625,7 +1625,7 @@ for (const historicalState of [
   });
 }
 
-test("initial naming runs after delivery while the first reply is still generating and never repeats on followup", async () => {
+test("initial naming waits for the first wait return even while the reply is still generating", async () => {
   const { state, browser } = setup();
   const calls: any[] = [];
   const conversation = new Conversation(
@@ -1653,7 +1653,20 @@ test("initial naming runs after delivery while the first reply is still generati
     undefined,
     { type: "OPT", topic: "创建路径" },
   );
-  expect(first.organization.verified).toBe(true);
+  expect(first.organization).toBeUndefined();
+  expect(calls).toHaveLength(0);
+  await conversation.poll(first.id);
+  expect(calls).toHaveLength(0);
+  await waitForConversation(
+    state,
+    conversation,
+    first.id,
+    first.currentRun,
+    0.02,
+    new AbortController().signal,
+    () => {},
+  );
+  expect(conversation.get(first.id).organization.verified).toBe(true);
   expect(first.runs[0].state).toBe("waiting");
   expect(calls).toHaveLength(1);
   expect(calls[0]).toMatchObject({
@@ -1699,7 +1712,9 @@ test("naming waits for the persisted URL and failures never undo delivery or res
   const p = [...browser.pages.values()][0];
   p.url = "https://chatgpt.com/c/test-conversation";
   browser.targets[0].url = p.url;
-  const named = await conversation.resume(first.id, first.currentRun);
+  await conversation.resume(first.id, first.currentRun);
+  expect(calls).toBe(0);
+  const named = await conversation.ensureNaming(first.id, first.currentRun);
   expect(calls).toBe(1);
   expect(named.organization).toMatchObject({
     verified: false,
@@ -1722,22 +1737,21 @@ test("naming waits for the persisted URL and failures never undo delivery or res
   );
 });
 
-test("transient naming failures back off, survive restart and recover after completion without resending", async () => {
+test("transient naming failures recover at later checkpoints across restart without resending", async () => {
   const { state, browser } = setup();
   let calls = 0;
-  const organizer = async () => {
-    if (++calls < 3) throw new Error("Conversation UI reported an error");
-    return { verified: true } as any;
-  };
   const create = () =>
     new Conversation(
       state,
       browser as any,
       async () => ({ observedModel: "6 Pro" }),
-      organizer,
+      async () => {
+        if (++calls < 3) throw new Error("Conversation UI reported an error");
+        return { verified: true } as any;
+      },
     );
   let conversation = create();
-  const first = await start(
+  const t = await start(
     conversation,
     "retry-name",
     "Review",
@@ -1746,82 +1760,25 @@ test("transient naming failures back off, survive restart and recover after comp
     undefined,
     { type: "FIX", topic: "恢复命名" },
   );
-  expect(conversationStatus(first).organization).toMatchObject({
-    state: "retry_pending",
-    attempts: 1,
-  });
-  await conversation.poll(first.id);
+  expect(calls).toBe(0);
+  await conversation.ensureNaming(t.id, t.currentRun);
+  expect(conversationStatus(conversation.get(t.id)).organization).toMatchObject(
+    { state: "retry_pending", attempts: 1, nextAction: "wait" },
+  );
+  await conversation.poll(t.id);
   expect(calls).toBe(1);
-  const due = () => {
-    const t = conversation.get(first.id);
-    t.organization.nextRetryAt = new Date(0).toISOString();
-    state.write("task-" + first.id, t);
-  };
-  due();
   conversation = create();
-  await conversation.resume(first.id);
+  await conversation.ensureNaming(t.id, t.currentRun);
   expect(calls).toBe(2);
-  due();
   browser.complete();
-  // Persist completion first to exercise the completed-run fast path.
-  const t = conversation.get(first.id);
-  t.runs[0].state = "complete";
-  t.runs[0].reply = {
-    id: "a1",
-    role: "assistant",
-    text: "Answer",
-    final: true,
-  };
-  t.runs[0].branch = ["u1", "a1"];
-  t.runs[0].replyHash = sha("Answer");
-  state.write("task-" + first.id, t);
-  const recovered = await conversation.resume(first.id);
-  expect(recovered.organization.verified).toBe(true);
-  expect(calls).toBe(3);
-  await conversation.poll(first.id);
+  await conversation.resume(t.id);
+  expect(calls).toBe(2);
+  expect(
+    (await conversation.ensureNaming(t.id, t.currentRun)).organization.verified,
+  ).toBe(true);
   expect(calls).toBe(3);
   expect(browser.sends).toBe(1);
 });
-
-for (const failure of [
-  "Conversation UI reported an error",
-  "Title save was not acknowledged",
-  "Project membership does not match",
-]) {
-  test(`naming recovery bounds attempts and preserves unsafe failures: ${failure}`, async () => {
-    const { state, browser } = setup();
-    let calls = 0;
-    const conversation = new Conversation(
-      state,
-      browser as any,
-      async () => ({ observedModel: "6 Pro" }),
-      async () => {
-        calls++;
-        throw new Error(failure);
-      },
-    );
-    const first = await start(
-      conversation,
-      "bounded-name",
-      "Review",
-      "initial",
-      false,
-      undefined,
-      { type: "FIX", topic: "恢复命名" },
-    );
-    for (let i = 0; i < 5; i++) {
-      const t = conversation.get(first.id);
-      t.organization.nextRetryAt = new Date(0).toISOString();
-      state.write("task-" + first.id, t);
-      await conversation.poll(first.id);
-    }
-    expect(calls).toBe(failure === "Conversation UI reported an error" ? 3 : 1);
-    expect(
-      conversationStatus(conversation.get(first.id)).organization,
-    ).toMatchObject({ state: "needs_attention" });
-    expect(browser.sends).toBe(1);
-  });
-}
 
 for (const remote of [
   "complete",
@@ -2051,6 +2008,7 @@ test.each([false, true])(
       undefined,
       { type: "OPT", topic: "创建路径" },
     );
+    Object.assign(t, await conversation.ensureNaming(t.id, t.currentRun));
     expect(t.runs[0]).toMatchObject({ state: "waiting", userMessageId: "u1" });
     expect(t.organization.error).toContain("Metadata unavailable");
     expect(browser.targets.some((x) => x.targetId === t.binding!.target)).toBe(
@@ -2246,9 +2204,10 @@ test("failed organization revalidation retains the last verified naming, includi
     undefined,
     { type: "OPT", topic: "原主题" },
   );
+  await conversation.ensureNaming(t.id, t.currentRun);
   browser.complete();
   await conversation.poll(t.id);
-  browser.pages.get(t.binding!.target).hasComposer = false;
+  browser.pages.get(t.binding!.target).draft = "User draft";
   const result = await conversation.organize(
     t.id,
     t.currentRun,
@@ -2260,7 +2219,7 @@ test("failed organization revalidation retains the last verified naming, includi
     title: "0922｜OPT｜原主题",
     naming: { type: "OPT", topic: "原主题" },
   });
-  expect(result.error).toContain("COMPOSER_MISSING");
+  expect(result.error).toContain("DRAFT_PRESENT");
   expect(conversationStatus(conversation.get(t.id)).organization).toMatchObject(
     { state: "revalidation_failed", lastVerified: result.lastVerified },
   );
@@ -2276,6 +2235,267 @@ test("failed organization revalidation retains the last verified naming, includi
     "needs_attention",
   );
 });
+
+test("naming is independent of completed reply drift and composer hydration, and never reloads the reply page", async () => {
+  const { state, browser, conversation: original } = setup();
+  const t = await start(original, "name-drift", "Review");
+  browser.complete();
+  await original.poll(t.id);
+  const saved = original.result(t.id, t.currentRun).reply;
+  const p = browser.pages.get(t.binding!.target);
+  p.hasComposer = false;
+  p.messages.push({
+    id: "a-late",
+    role: "assistant",
+    text: "Later answer",
+    final: true,
+  });
+  let calls = 0;
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({}) as any,
+    async (page, _url, _preferences, _type, _topic, _progress, metadata) => {
+      calls++;
+      await page.read();
+      expect(metadata).toBeDefined();
+      return { verified: true, title: "0922｜FIX｜可靠命名" } as any;
+    },
+  );
+  const result = await conversation.organize(
+    t.id,
+    t.currentRun,
+    "FIX",
+    "可靠命名",
+  );
+  expect(result.verified).toBe(true);
+  expect(calls).toBe(1);
+  expect(conversation.result(t.id, t.currentRun).reply).toEqual(saved);
+  expect(browser.sends).toBe(1);
+});
+
+test("finish waits for transient composer hydration without reloading or resending", async () => {
+  const { browser, conversation } = setup();
+  const t = await start(conversation, "finish-loading", "Review");
+  browser.complete();
+  await conversation.poll(t.id);
+  const p = browser.pages.get(t.binding!.target);
+  p.hasComposer = false;
+  let reads = 0;
+  browser.gate = async (where) => {
+    if (where === "read:" + t.binding!.target && ++reads === 3)
+      p.hasComposer = true;
+    if (where.startsWith("run:reload:")) throw new Error("Must not reload");
+  };
+  expect((await conversation.finish(t.id, t.currentRun)).closed).toBe(true);
+  expect(reads).toBeGreaterThanOrEqual(3);
+  expect(browser.sends).toBe(1);
+});
+
+test("finish can release an idle owned page after same-turn reply drift without replacing the captured result", async () => {
+  const { browser, conversation } = setup();
+  const t = await start(conversation, "finish-drift", "Review");
+  browser.complete();
+  await conversation.poll(t.id);
+  const saved = conversation.result(t.id, t.currentRun).reply;
+  browser.pages.get(t.binding!.target).messages.push({
+    id: "a-late",
+    role: "assistant",
+    text: "Later answer",
+    final: true,
+  });
+  expect(await conversation.finish(t.id, t.currentRun)).toMatchObject({
+    closed: true,
+    replyChanged: true,
+  });
+  expect(conversation.result(t.id, t.currentRun).reply).toEqual(saved);
+  expect(browser.sends).toBe(1);
+});
+
+test("each wait return and finish provide a naming checkpoint without exhausting later attempts", async () => {
+  const { state, browser } = setup();
+  let attempts = 0;
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+    async () => {
+      attempts++;
+      return { verified: true, title: "0922｜FIX｜检查点" } as any;
+    },
+  );
+  const t = await start(
+    conversation,
+    "name-checkpoints",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "FIX", topic: "检查点" },
+  );
+  expect(attempts).toBe(0); // Sending does not name.
+  const fail = () => {
+    const task = conversation.get(t.id);
+    task.organization = {
+      verified: false,
+      attempts: 3,
+      phase: "metadata",
+      error: "Error: METADATA_PAGE_UNAVAILABLE",
+    };
+    state.write("task-" + t.id, task);
+  };
+  expect(
+    await waitForConversation(
+      state,
+      conversation,
+      t.id,
+      t.currentRun,
+      0.02,
+      new AbortController().signal,
+      () => {},
+    ),
+  ).toBe(2);
+  expect(conversation.get(t.id).organization.verified).toBe(true);
+  expect(attempts).toBe(1); // Timed-out wait, while still generating.
+  fail();
+  browser.complete();
+  expect(
+    await waitForConversation(
+      state,
+      conversation,
+      t.id,
+      t.currentRun,
+      1,
+      new AbortController().signal,
+      () => {},
+    ),
+  ).toBe(0);
+  expect(attempts).toBe(2); // Completed wait also repairs naming.
+  fail();
+  expect((await conversation.finish(t.id, t.currentRun)).closed).toBe(true);
+  expect(conversation.get(t.id).organization.verified).toBe(true);
+  expect(attempts).toBe(3);
+  expect(browser.sends).toBe(1);
+});
+
+test("the first wait return names a delivered conversation even when the reply is blocked", async () => {
+  const { state, browser } = setup();
+  let named = 0;
+  const originalPage = browser.page.bind(browser);
+  browser.page = async (target) => {
+    const page = await originalPage(target);
+    const run = page.run;
+    page.run = async (...args: string[]) => {
+      const result = await run(...args);
+      if (args[0] === "click") {
+        const p = browser.pages.get(target);
+        p.generating = false;
+        p.messages.push({
+          id: "a-failed",
+          role: "assistant",
+          text: "",
+          final: false,
+          error: "Response generation failed",
+        });
+      }
+      return result;
+    };
+    return page;
+  };
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+    async () => {
+      named++;
+      return { verified: true } as any;
+    },
+  );
+  const t = await start(
+    conversation,
+    "name-before-reply",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "FIX", topic: "首次命名" },
+  );
+  expect(t.runs[0].state).toBe("blocked");
+  expect(named).toBe(0);
+  await waitForConversation(
+    state,
+    conversation,
+    t.id,
+    t.currentRun,
+    1,
+    new AbortController().signal,
+    () => {},
+  );
+  expect(named).toBe(1);
+  expect(conversation.get(t.id).organization.verified).toBe(true);
+  expect(browser.sends).toBe(1);
+});
+
+test("wait/finish naming checkpoints do not replay interrupted edits, rejected writes, or legacy unknown saves", async () => {
+  const { state, browser, conversation } = setup();
+  const t = await start(conversation, "unsafe-checkpoint", "Review");
+  for (const organization of [
+    { phase: "editing", error: "Connection lost" },
+    { phase: "metadata", error: "HTTP 403" },
+    { phase: "verifying", error: "ORGANIZATION_SAVE_UNCONFIRMED" },
+    { error: "Title save was not acknowledged" },
+  ]) {
+    const task = conversation.get(t.id);
+    task.naming = { type: "FIX", topic: "保留写入边界" };
+    task.organization = { verified: false, ...organization };
+    state.write("task-" + t.id, task);
+    browser.gate = async () => {
+      throw new Error("Must not touch browser");
+    };
+    const result = await conversation.ensureNaming(t.id, t.currentRun);
+    expect(result.organization).toEqual(task.organization);
+  }
+  expect(browser.sends).toBe(1);
+});
+
+test.each([
+  "Conversation UI reported an error",
+  "Login required",
+  "Human verification required",
+])(
+  "metadata-only observation handles %s independently of the streaming reply",
+  async (blocked) => {
+    const { state, browser } = setup();
+    const conversation = new Conversation(
+      state,
+      browser as any,
+      async () => ({ observedModel: "6 Pro" }),
+      async (_page, _url, _prefs, _type, _topic, _progress, metadata) => {
+        await metadata!.read();
+        browser.pages.get(browser.targets.at(-1).targetId).blocked = blocked;
+        await metadata!.run("network", "requests");
+        return { verified: true } as any;
+      },
+    );
+    const t = await start(
+      conversation,
+      "metadata-alert",
+      "Review",
+      "initial",
+      false,
+      undefined,
+      { type: "FIX", topic: "元数据读取" },
+    );
+    Object.assign(t, await conversation.ensureNaming(t.id, t.currentRun));
+    expect(t.organization.verified).toBe(
+      blocked === "Conversation UI reported an error",
+    );
+    if (blocked !== "Conversation UI reported an error")
+      expect(t.organization.error).toContain(blocked);
+    expect(browser.sends).toBe(1);
+    expect(browser.targets).toHaveLength(1);
+  },
+);
 
 async function start(
   conversation: Conversation,
@@ -2312,6 +2532,80 @@ test("create is durable and offline; start loads the saved run and never sends i
     "REQUEST_CONFLICT",
   );
   expect(state.read<any>("task-queued").currentRun).toBe(prepared.currentRun);
+});
+
+test("a wait checkpoint repairs a remotely reverted title even when local naming was verified", async () => {
+  const { state, browser } = setup();
+  let calls = 0;
+  const title = "0922｜FIX｜可辨认会话";
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+    async () => {
+      calls++;
+      browser.pages.get(browser.targets[0].targetId).title =
+        "Project - " + title;
+      return { verified: true, title, phase: "complete" } as any;
+    },
+  );
+  const t = await start(
+    conversation,
+    "reverted-title",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "FIX", topic: "可辨认会话" },
+  );
+  await conversation.ensureNaming(t.id, t.currentRun);
+  browser.pages.get(t.binding!.target).title = "Project - Automatic title";
+  expect(
+    await waitForConversation(
+      state,
+      conversation,
+      t.id,
+      t.currentRun,
+      0.02,
+      new AbortController().signal,
+      () => {},
+    ),
+  ).toBe(2);
+  expect(calls).toBe(2);
+  expect(browser.pages.get(t.binding!.target).title).toBe("Project - " + title);
+  await conversation.ensureNaming(t.id, t.currentRun);
+  expect(calls).toBe(2); // Current title already matches; no metadata page or write.
+  browser.gate = async () => {
+    throw new ObservationError("BROWSER_READ_FAILED: temporary disconnect");
+  };
+  await conversation.ensureNaming(t.id, t.currentRun);
+  expect(conversation.get(t.id).organization.verified).toBe(false);
+  browser.gate = undefined;
+  await conversation.ensureNaming(t.id, t.currentRun);
+  expect(conversation.get(t.id).organization.verified).toBe(true);
+  expect(browser.sends).toBe(1);
+});
+
+test("a surviving owned metadata page can replace a lost main tab without becoming borrowed or being closed", async () => {
+  const { state, browser, conversation } = setup();
+  const t = await start(conversation, "observer-transfer", "Review");
+  const saved = structuredClone(browser.pages.get(t.binding!.target));
+  const observer = await browser.tabs("new", t.url!);
+  browser.pages.set(observer.targetId!, saved);
+  await browser.tabs("close", t.binding!.target);
+  t.organizationObservation = { epoch: "epoch1", target: observer.targetId };
+  state.write("task-" + t.id, t);
+  const result = await conversation.resume(t.id, t.currentRun);
+  expect(result.binding).toMatchObject({
+    target: observer.targetId,
+    owned: true,
+  });
+  expect(result.organizationObservation).toMatchObject({
+    closed: true,
+    transferredToMain: true,
+  });
+  expect(browser.targets).toHaveLength(1);
+  expect(browser.sends).toBe(1);
 });
 
 test("followup creation does not contact the browser; execution checks prior reply drift", async () => {
@@ -2422,11 +2716,10 @@ test("observer close acknowledgement loss reconciles missing target on resume", 
     undefined,
     { type: "FIX", topic: "恢复" },
   );
+  Object.assign(t, await conversation.ensureNaming(t.id, t.currentRun));
   expect(t.organizationObservation?.closed).not.toBe(true);
-  const stored = conversation.get(t.id);
-  stored.organization.nextRetryAt = new Date(0).toISOString();
-  state.write("task-" + t.id, stored);
-  const result = await conversation.resume(t.id);
+  await conversation.resume(t.id);
+  const result = await conversation.ensureNaming(t.id, t.currentRun);
   expect(result.organization.verified).toBe(true);
   expect(result.organizationObservation?.closed).toBe(true);
   expect(browser.sends).toBe(1);
@@ -2481,14 +2774,104 @@ test("title-save uncertainty survives restart and resumes only metadata verifica
     undefined,
     { type: "FIX", topic: "恢复" },
   );
+  Object.assign(t, await conversation.ensureNaming(t.id, t.currentRun));
   expect(t.organization.phase).toBe("save_pending");
   await expect(
     conversation.organize(t.id, t.currentRun, "FIX", "different"),
   ).rejects.toThrow("ORGANIZATION_WRITE_UNRESOLVED");
-  const stored = conversation.get(t.id);
-  stored.organization.nextRetryAt = new Date(0).toISOString();
-  state.write("task-" + t.id, stored);
   conversation = create();
-  expect((await conversation.resume(t.id)).organization.verified).toBe(true);
+  expect(
+    (await conversation.ensureNaming(t.id, t.currentRun)).organization.verified,
+  ).toBe(true);
   expect(browser.sends).toBe(1);
+});
+
+test.each([
+  "Conversation UI reported an error",
+  "Login required",
+  "Human verification required",
+])("wait naming handles main page alert: %s", async (blocked) => {
+  const { state, browser } = setup();
+  let edits = 0;
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+    async () => {
+      edits++;
+      return { verified: true } as any;
+    },
+  );
+  const t = await start(
+    conversation,
+    "main-alert",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "FIX", topic: "命名" },
+  );
+  browser.pages.get(t.binding!.target).blocked = blocked;
+  if (blocked === "Conversation UI reported an error") {
+    expect(
+      await waitForConversation(
+        state,
+        conversation,
+        t.id,
+        t.currentRun,
+        0.02,
+        new AbortController().signal,
+        () => {},
+      ),
+    ).toBe(2);
+    expect(edits).toBe(1);
+    expect(conversation.get(t.id).runs[0].state).toBe("blocked");
+  } else {
+    await conversation.ensureNaming(t.id, t.currentRun);
+    expect(edits).toBe(0);
+  }
+});
+
+test("a slow metadata cleanup read does not hold the cross-task close lock", async () => {
+  const { state, browser, conversation } = setup();
+  const t = await start(conversation, "slow-observer", "Review");
+  const observer = await browser.tabs("new", t.url!);
+  browser.pages.set(
+    observer.targetId!,
+    structuredClone(browser.pages.get(t.binding!.target)),
+  );
+  t.organizationObservation = { epoch: "epoch1", target: observer.targetId };
+  state.write("task-" + t.id, t);
+  let entered!: () => void, release!: () => void;
+  const reading = new Promise<void>((r) => (entered = r)),
+    barrier = new Promise<void>((r) => (release = r));
+  browser.gate = async (where) => {
+    if (where === "read:" + observer.targetId) {
+      entered();
+      await barrier;
+    }
+  };
+  const pending = conversation.resume(t.id);
+  try {
+    await reading;
+    await state.locked(async () => {}, tabsLockName(), 0);
+  } finally {
+    release();
+    await pending;
+  }
+});
+
+test("finish reports pending naming even when an interrupted edit has no error text", async () => {
+  const { state, browser, conversation } = setup();
+  const t = await start(conversation, "pending-edit-finish", "Review");
+  browser.complete();
+  await conversation.poll(t.id);
+  const stored = conversation.get(t.id);
+  stored.naming = { type: "FIX", topic: "命名" };
+  stored.organization = { verified: false, phase: "editing" };
+  state.write("task-" + t.id, stored);
+  expect(await conversation.finish(t.id, t.currentRun)).toMatchObject({
+    closed: true,
+    organizationPending: true,
+  });
 });

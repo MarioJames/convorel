@@ -195,7 +195,7 @@ test("waiting retries only observation failures and stops after three consecutiv
   }
 }, 10000);
 
-test("completed replies keep waiting for scheduled naming recovery", async () => {
+test("completed replies perform one naming checkpoint before returning", async () => {
   const root = mkdtempSync(join(tmpdir(), "convorel-watch-name-"));
   const store = new State(root);
   let calls = 0;
@@ -204,21 +204,21 @@ test("completed replies keep waiting for scheduled naming recovery", async () =>
       store,
       {
         get: unusedGet,
+        ensureNaming: async () =>
+          ({
+            config: { workspace: root },
+            currentRun: "r1",
+            naming: { type: "FIX", topic: "Naming" },
+            organization: { verified: true },
+            runs: [{ id: "r1", state: "complete" }],
+          }) as any,
         poll: async () =>
           ({
             config: { workspace: root },
             workspaceId: "fixture",
             currentRun: "r1",
             naming: { type: "FIX", topic: "Naming" },
-            organization:
-              ++calls === 1
-                ? {
-                    verified: false,
-                    attempts: 1,
-                    error: "Error: Conversation UI reported an error",
-                    nextRetryAt: new Date(0).toISOString(),
-                  }
-                : { verified: true, attempts: 2 },
+            organization: { verified: false, attempts: ++calls },
             runs: [{ id: "r1", state: "complete" }],
           }) as any,
       },
@@ -229,7 +229,7 @@ test("completed replies keep waiting for scheduled naming recovery", async () =>
       () => {},
     );
     expect(code).toBe(0);
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -268,6 +268,42 @@ test("wait keeps observing an uncertain submission and never calls a send operat
     expect(code).toBe(0);
     expect(polls).toBe(2);
     expect(reports[0].delivery).toBe("unknown");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a confirmed submission without its URL is polled promptly instead of waiting a full reply interval", async () => {
+  const root = mkdtempSync(join(tmpdir(), "convorel-watch-url-"));
+  let polls = 0;
+  try {
+    const code = await waitForConversation(
+      new State(root),
+      {
+        get: unusedGet,
+        poll: async () =>
+          ({
+            id: "task",
+            config: { workspace: root },
+            currentRun: "r1",
+            url: ++polls === 1 ? undefined : "https://chatgpt.com/c/test",
+            runs: [
+              {
+                id: "r1",
+                state: polls === 1 ? "waiting" : "complete",
+                userMessageId: "u1",
+              },
+            ],
+          }) as any,
+      },
+      "task",
+      "r1",
+      2,
+      new AbortController().signal,
+      () => {},
+    );
+    expect(code).toBe(0);
+    expect(polls).toBe(2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -313,3 +349,51 @@ test("completed reply with unrecovered naming reports partial completion", async
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test.each([0.02, 5])(
+  "observation failure still reaches one naming checkpoint at wait return (%s seconds)",
+  async (seconds) => {
+    const root = mkdtempSync(join(tmpdir(), "convorel-watch-error-name-"));
+    const task: any = {
+      id: "task",
+      config: { workspace: root },
+      currentRun: "r1",
+      naming: { type: "FIX", topic: "恢复" },
+      runs: [
+        {
+          id: "r1",
+          state: "waiting",
+          userMessageId: "u1",
+          error: "read failed",
+        },
+      ],
+    };
+    let checks = 0;
+    const reports: any[] = [];
+    try {
+      const code = await waitForConversation(
+        new State(root),
+        {
+          get: () => task,
+          poll: async () => {
+            throw new ObservationError("read failed");
+          },
+          ensureNaming: async () => {
+            checks++;
+            return task;
+          },
+        },
+        "task",
+        "r1",
+        seconds,
+        new AbortController().signal,
+        (x) => reports.push(x),
+      );
+      expect(code).toBe(2);
+      expect(checks).toBe(1);
+      expect(reports.at(-1).error).toContain("read failed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

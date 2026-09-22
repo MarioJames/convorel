@@ -64,6 +64,15 @@ const CODES = new Set([
   "METADATA_PAGE_UNAVAILABLE",
   "DELIVERY_NOT_CONFIRMED",
   "INVALID_CDP",
+  "COMPLETED_TURN_CHANGED",
+  "NAMING_METADATA",
+  "NAMING_LOCATING",
+  "NAMING_EDITING",
+  "NAMING_SAVE_PENDING",
+  "NAMING_VERIFYING",
+  "NAMING_COMPLETE",
+  "NAMING_CONTROL_UNAVAILABLE",
+  "NAMING_METADATA_UNAVAILABLE",
 ]);
 const SCHEMA = `
 create table diagnostic_event (
@@ -104,6 +113,18 @@ export function diagnosticCode(error: unknown) {
         : "";
   const text = raw.replace(/^Error:\s*/, "");
   if (text.startsWith("NEEDS_ATTENTION")) return "NEEDS_ATTENTION";
+  if (
+    /^(Target conversation not visible in sidebar|Conversation rename action unavailable|Chat title input unavailable)/.test(
+      text,
+    )
+  )
+    return "NAMING_CONTROL_UNAVAILABLE";
+  if (
+    /^(Fresh conversation metadata unavailable|Conversation metadata request rejected)/.test(
+      text,
+    )
+  )
+    return "NAMING_METADATA_UNAVAILABLE";
   const token = /^[A-Z][A-Z0-9_]*/.exec(text)?.[0];
   return token && CODES.has(token) ? token : "UNCLASSIFIED";
 }
@@ -187,6 +208,15 @@ export class Diagnostics {
     } catch {
       return "skipped";
     }
+  }
+  namingProgress(taskId: string, runId: string, phase: string) {
+    this.failure({
+      taskId,
+      runId,
+      event: "operation_result",
+      step: "naming",
+      code: "NAMING_" + phase.toUpperCase(),
+    });
   }
   failure(input: {
     taskId: string;

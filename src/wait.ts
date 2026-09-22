@@ -11,7 +11,8 @@ export function watcherLockName(id: string) {
 
 export async function waitForConversation(
   store: State,
-  conversation: Pick<Conversation, "poll" | "get">,
+  conversation: Pick<Conversation, "poll" | "get"> &
+    Partial<Pick<Conversation, "ensureNaming">>,
   id: string,
   run: string,
   seconds: number,
@@ -24,6 +25,18 @@ export async function waitForConversation(
     const deadline = Date.now() + seconds * 1000;
     let observationFailures = 0;
     let lastSummary: ReturnType<typeof conversationStatus> | undefined;
+    const namingCheckpoint = async () => {
+      if (
+        signal.aborted ||
+        !conversation.ensureNaming ||
+        !lastSummary?.organization
+      )
+        return;
+      const t = await conversation.ensureNaming(id, run);
+      if (t.currentRun !== run) throw new Error("STALE_RUN");
+      lastSummary = conversationStatus(t);
+      report(lastSummary);
+    };
     while (!signal.aborted && Date.now() < deadline) {
       let t;
       try {
@@ -33,6 +46,7 @@ export async function waitForConversation(
         if (!(e instanceof ObservationError)) throw e;
         t = conversation.get(id);
         if (t.currentRun !== run) throw new Error("STALE_RUN");
+        lastSummary = conversationStatus(t);
         observationFailures++;
         report({
           ...conversationStatus(t),
@@ -40,7 +54,16 @@ export async function waitForConversation(
           nextAction: observationFailures >= 3 ? "inspect" : "resume",
           error: String(e),
         });
-        if (observationFailures >= 3) return 2;
+        if (observationFailures >= 3) {
+          await namingCheckpoint();
+          report({
+            ...lastSummary,
+            observationRetry: { attempt: observationFailures, limit: 3 },
+            nextAction: "inspect",
+            error: String(e),
+          });
+          return 2;
+        }
         try {
           await sleep(
             Math.min(
@@ -60,29 +83,24 @@ export async function waitForConversation(
       const summary = conversationStatus(t);
       lastSummary = summary;
       report(summary);
-      const retryNaming = summary.organization?.state === "retry_pending";
-      if (r.state === "complete" && !retryNaming)
-        return (summary.organization &&
-          summary.organization.state !== "verified") ||
-          summary.phase === "cleanup_pending"
+      if (r.state === "complete") {
+        await namingCheckpoint();
+        const final = lastSummary!;
+        return (final.organization &&
+          final.organization.state !== "verified") ||
+          final.phase === "cleanup_pending"
           ? 2
           : 0;
+      }
       if (
         !["waiting", "complete", "submitting", "delivery_unknown"].includes(
           r.state,
         )
-      )
+      ) {
+        await namingCheckpoint();
         return 2;
-      const delay = retryNaming
-        ? Math.max(
-            1,
-            Date.parse(
-              summary.organization!.nextRetryAt ?? new Date().toISOString(),
-            ) - Date.now(),
-          )
-        : ["submitting", "delivery_unknown"].includes(r.state)
-          ? 1000
-          : 60000;
+      }
+      const delay = summary.phase === "confirming_delivery" ? 1000 : 60000;
       try {
         await sleep(
           Math.min(delay, Math.max(1, deadline - Date.now())),
@@ -93,6 +111,7 @@ export async function waitForConversation(
         if (e.name !== "AbortError") throw e;
       }
     }
+    await namingCheckpoint();
     report({
       ...lastSummary,
       id,

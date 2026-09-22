@@ -719,7 +719,9 @@ for (const changed of [false, true]) {
         return { verified: true } as any;
       },
     );
-    const result = await conversation.poll("review");
+    await conversation.poll("review");
+    expect(organized).toBe(0);
+    const result = await conversation.ensureNaming("review", task.currentRun);
     expect(result.runs[0]).toMatchObject({
       state: "complete",
       reply: prior.reply,
@@ -727,8 +729,9 @@ for (const changed of [false, true]) {
       branch: prior.branch,
     });
     expect(store.read<any>("task-review").runs[0].reply).toEqual(prior.reply);
-    expect(result.organization.verified).toBe(!changed);
-    expect(organized).toBe(changed ? 0 : 1);
+    // Naming does not depend on reply bytes; the captured reply above remains immutable.
+    expect(result.organization.verified).toBe(true);
+    expect(organized).toBe(1);
     expect(browser.evals).toEqual([]);
     expect(conversationStatus(result)).toMatchObject({
       archive: { status: "stored" },

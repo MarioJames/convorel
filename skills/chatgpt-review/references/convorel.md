@@ -42,7 +42,7 @@ PROMPT
 convorel conversation start --id ID --run RUN_ID --workspace /absolute/project
 ```
 
-`start` 从数据库取出精确轮次并执行，不再接收 prompt。配置项目时在项目的新建对话入口创建；消息与 URL 确认后立即命名，不等回复完成。重复 `create` 的当前 request key/正文幂等，冲突拒绝；若该 key 已属于历史轮次则返回 `REQUEST_RUN_SUPERSEDED` 和原 run ID，读取原轮结果，不把当前新轮误当成重试对象；重复 `start` 不重发已开始轮次，不自动重试失败。只有 `prepared` 的失败轮次可在检查后显式 `retry`。不能因为初次 CLI 回执丢失而换 ID 重建，先 `status --id ID` 找回已入库的 run。
+`start` 从数据库取出精确轮次并执行，不再接收 prompt。配置项目时在项目的新建对话入口创建；只发送并确认投递，首次命名延后到第一轮 `wait` 正常或超时返回前。重复 `create` 的当前 request key/正文幂等，冲突拒绝；若该 key 已属于历史轮次则返回 `REQUEST_RUN_SUPERSEDED` 和原 run ID，读取原轮结果，不把当前新轮误当成重试对象；重复 `start` 不重发已开始轮次，不自动重试失败。只有 `prepared` 的失败轮次可在检查后显式 `retry`。不能因为初次 CLI 回执丢失而换 ID 重建，先 `status --id ID` 找回已入库的 run。
 
 消费上一轮完整结果后，以完整新增说明创建后续轮次，再按返回的新 run 执行：
 
@@ -74,13 +74,13 @@ convorel conversation result --id ID --run RUN_ID
 
 Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何种通知，都须用同一 `--id`、`--run` 取得当前完整 `result`，不能以通知、退出码或最后可见的网页答案代替。
 
-`resume` 观察和核对，不发送消息；首轮 URL 延迟时会补做已请求但尚未开始的命名。只有状态为 `prepared` 且已解决发送前错误时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。它重新核验模型、页面和草稿；不得重试 `submitting`/`delivery_unknown`，不得覆盖变更后的草稿强行推进。未知发送或等待超时不能用新 ID 再发。
+`resume` 只观察和核对，不发送消息或命名；URL 延迟时继续追踪原提交。只有状态为 `prepared` 且已解决发送前错误时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。它重新核验模型、页面和草稿；不得重试 `submitting`/`delivery_unknown`，不得覆盖变更后的草稿强行推进。未知发送或等待超时不能用新 ID 再发。
 
 新建页恢复了旧草稿时，先读取并备份完整原文。仅用户明确授权删除该页草稿副本后，才使用 `conversation clear-draft --id ID --run RUN_ID --expected-draft-file /private/approved-draft.txt`。该命令只处理任务自有、无历史消息的新建页和未发送首轮；逐字核对草稿，持久保存备份，删除后实际读回确认。草稿已变、附件存在、页面身份不同或投递未知都会停止，不扩大到其他标签页。成功后再显式 retry 同一 run；命令成功回执不能代替空草稿、模型、页面和投递状态核验。
 
 `status` 的 `summary` 区分已确认投递、发送结果未知和未尝试发送，并返回当前阶段、最近观察时间、观察错误和下一步动作。`status` 退出 0 只表示本地状态读取成功；`start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅回复完成且要求的命名已核验时退出 0，未完成或需处理时退出 2，参数/基础设施等异常可退出 1。不要仅凭退出码取代精确轮次的 `result`。`wait` 仅对观察失败做最多三次连续尝试，不自动重发；登录、页面身份或草稿等需处理的问题不会被当作临时读取失败反复尝试。
 
-命名遇到首次改名交互之前的临时页面错误、元数据加载超时或 HTTP 429/5xx 时，`wait`/`resume` 自动恢复，总计最多 3 次，后两次间隔至少 5 秒、30 秒；重试次数与时间持久保存。`summary.organization` 单独报告核验状态、次数、错误与下一步，不把回复完成视为命名完成。侧栏暂未挂载目标时先使用绑定同一会话 ID 的顶部菜单，仍不可用才有限重试。保存标题前持久化阶段；保存结果不明时只重新读取元数据核验，绝不自动再次保存。权限错误、归属变化、编辑中断或核验仍不匹配时停止自动操作。观察页关闭回执丢失时按原 target 与浏览器身份对账，保留草稿/附件和被接管页面。`summary.organization.phase/recovery` 与 `summary.observerCleanup` 保留恢复依据。
+每次 `wait` 正常或超时返回前各执行一次命名检查。前置临时失败由下一次 `wait` 或 `finish` 检查点再试，不在观察循环里按定时退避反复改名。`summary.organization` 单独报告核验状态、累计次数、错误与下一步；`retryAt: wait_return` 表示下一次等待返回时检查。侧栏暂未挂载目标时使用绑定同一会话 ID 的顶部菜单。保存标题前持久化阶段；保存结果不明时只重新读取元数据核验，绝不自动再次保存。权限错误、归属变化、编辑中断或核验仍不匹配时停止自动操作。观察页关闭回执丢失时按原 target 与浏览器身份对账，保留草稿/附件和被接管页面。主页面消失但任务自有观察页仍存在时，将后者转为主页面并保留自有归属。`summary.organization.phase/recovery` 与 `summary.observerCleanup` 保留恢复依据。
 
 监听同一轮回复持续 2 分钟无变化时，先检查会话身份、草稿和附件，再主动刷新原标签页并等待历史加载。刷新只恢复观察，不发送消息；刷新后按原用户消息 ID 判定完成、仍生成或已被后续消息取代。正常长时间思考不算失败，连续 3 次刷新失败则提示检查；`summary.completionProbe` 暴露停滞时间、刷新次数及错误。草稿和附件存在时保留原页并报告延期。`wait` 的总超时仍然生效。
 
@@ -90,7 +90,11 @@ Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何�
 
 ## 命名恢复、消费与清理
 
-命名在首条消息发送后完成。若返回的 `organization` 未核验成功，检查原因后在原任务显式重试命名；该操作也支持回复生成期间执行，不重发消息：
+首次命名发生在发送成功后的第一轮 `wait` 返回前，前提是已取得持久会话 URL；回复完成或超时都触发，不与发送操作穿插。`summary.organization.requested/title/phase/startedAt` 区分命名请求、目标标题与实际执行阶段，诊断事件进一步记录 metadata、locating、editing、save_pending、verifying、complete。只有 `verified: true` 才证明标题已保存并核验。
+
+每次 `wait` 正常结束或到达观察超时后，在返回前读取当前标题并检查命名；`finish` 也先检查。缺失或被自动标题覆盖时有界补命名；尚未写入标题的临时故障可以在后续检查点再次尝试，不重发消息、不覆盖回复。这个命名步骤有界，但可能使命令晚于观察超时返回；SIGINT/SIGTERM 取消等待时跳过该步骤。权限/登录/身份冲突不会自动重试，编辑中断和不明保存仍按持久阶段处理。命名读回的元数据始终使用任务自有观察页，避免刷新原回复页。
+
+首次命名由第一轮 `wait` 返回触发。若返回的 `organization` 未核验成功，检查原因后在原任务显式重试命名；该操作也支持回复生成期间执行，不重发消息：
 
 ```bash
 convorel conversation organize --id ID --run RUN_ID --type DES --topic '具体主题'
@@ -107,6 +111,8 @@ TYPE 默认英文代码；仅用户明确要求中文时为 `create` 或 `organi
 命名必须返回 `verified: true`；失败返回独立的 `organization.error`，不撤销已确认的消息投递、不自动重发；`organize` 失败返回非零退出码，并保留已核验的 rename/project 步骤状态，表示整体未完成；记录错误，仍对已核验完成的轮次尝试 `finish`。`organizationPending` 保留失败信息，不要求保留可释放的自有标签页。finish 只释放经过核验的自有页面，保留会话历史、配置、借用页面和登录态；不授权关闭其他页或共享浏览器。
 
 单独释放任务自有等待进程/lane，记录保留对象和原因。提示词、run 映射、意见和回复留在 Convorel 私有状态或已有任务交付记录，不进入技能源码，不新增平行注册表。
+
+`finish` 在输入框尚未加载时最多只读等待 10 秒，等待期间不持有跨任务关闭锁。关闭仍核验同一会话/用户轮次、任务所有权、无草稿附件、未生成、没有后续用户消息。相同用户轮次的 assistant 回复发生变化不会单独阻止释放，回执以 `replyChanged: true` 明示；原捕获结果保持不变，这不是已取得最新正文的证明。续谈和内容捕获仍执行各自的严格核验。
 
 ## 取回历史内容
 
@@ -134,7 +140,7 @@ convorel doctor --local true
 
 恢复时保留原 task、run、状态根和已保存正文：
 
-- `archive.failed/unavailable`：先解决所报告的目录权限、空间或 SQLite 问题，再执行同一 run 的 `resume` 或 `conversation archive --id ID`。已完成且无待处理命名的轮次，poll/resume 完全在本地重试归档；仍待命名时会访问原页面恢复组织操作并核验安全完成条件，但不重新 Copy、不替换已存回复。读回 `history`/coverage 核验结果；不要删库或改任务 JSON 排障。
+- `archive.failed/unavailable`：先解决所报告的目录权限、空间或 SQLite 问题，再执行同一 run 的 `resume` 或 `conversation archive --id ID`。已完成轮次的 poll/resume 在本地重试归档，必要时对账遗留观察页；命名单独由 wait/finish 检查点或显式 organize 处理，不重新 Copy、不替换已存回复。读回 `history`/coverage 核验结果；不要删库或改任务 JSON 排障。
 - 缺 Markdown：`archive` 只能重建本地已有内容，不能补出未捕获的正文；确需原文时用同一 run 的 `capture`，它会严格核验原消息与回复。页面缺失、目标变更或 Copy 失败时保留缺口和渲染副本，不将最新网页答案冒认为该轮回复，也不重新发送问题。
 - 当前选择缺正文但已有版本 ID：先 `content --version VERSION_UUID` 读取不可变版本，保留证据；不要因为 `history.reply` 为空就认定原文已删除。`archive` 补写后再核对当前选择。
 - 页面入口或模型核验失败：`doctor` 成功只证明本地 CDP/MCP，不能代替真实项目入口、模型或远端 MCP 访问核验。仅 `prepared` 且原目标仍可验证时按上文 retry；投递未知或原 target 丢失时不猜测替代页、不新建 ID 绕过保护。

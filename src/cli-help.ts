@@ -280,7 +280,7 @@ const conversation = [
       fields,
     ],
     [
-      "The prompt has to be created first. Exit 0 means the send was confirmed, or the run was already waiting or complete without an observation error. Exit 2 means the run needs attention. Exit 1 is a parameter or infrastructure failure.",
+      "The prompt has to be created first. Naming is deferred until the first wait return; start only sends and confirms. Exit 0 means the send was confirmed, or the run was already waiting or complete without an observation error. Exit 2 means the run needs attention. Exit 1 is a parameter or infrastructure failure.",
     ],
   ),
   page(
@@ -315,7 +315,7 @@ const conversation = [
     "Observe the saved run again. It does not click Send.",
     [taskId, runOpt(false), fields],
     [
-      "Exit 0 only when the reply is complete and any requested naming is verified. Exit 2 when the run is unfinished, naming is unfinished, or the page needs attention. A temporary page error may be retried up to three times; a login, identity, or draft problem is not retried.",
+      "Exit 0 only when the reply is complete and any requested naming is verified. Exit 2 when the run is unfinished, naming is unfinished, or the page needs attention. This command observes only; use wait for a naming checkpoint, or organize for explicit naming.",
     ],
   ),
   page(
@@ -327,12 +327,13 @@ const conversation = [
       runOpt(false),
       [
         "--timeout-seconds SECONDS",
-        "Local time limit. Default 1800. The value must be finite, greater than 0, and at most 86400. The timeout stops this process only; generation in the browser continues.",
+        "Local observation time limit. Default 1800. The value must be finite, greater than 0, and at most 86400. A final bounded naming check can extend the command beyond this limit; generation in the browser continues.",
       ],
       fields,
     ],
     [
       "The same fields are printed on each report. Exit 0 only when the reply is complete and any requested naming is verified. Exit 2 when the run is unfinished or needs attention. SIGINT and SIGTERM stop the local wait and do not send the prompt again.",
+      "Initial naming is deferred until the first normal or timed-out wait return. Each wait return checks the current title and repairs it once if the saved write stage permits it. Cancellation skips this check. A confirmed send awaiting its conversation URL is observed every second.",
     ],
   ),
   page(

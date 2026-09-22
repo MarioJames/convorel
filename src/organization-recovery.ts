@@ -1,8 +1,5 @@
 import type { Task } from "./conversation.ts";
 
-export const ORGANIZATION_ATTEMPTS = 3;
-export const ORGANIZATION_DELAYS = [5000, 30000];
-
 export function organizationRecovery(task: Task) {
   if (!task.naming) return null;
   const o = task.organization;
@@ -10,22 +7,7 @@ export function organizationRecovery(task: Task) {
   // After save dispatch recovery only reads persisted metadata. An interrupted
   // edit (or a legacy checkpoint without a phase) is never replayed.
   const verificationOnly = ["save_pending", "verifying"].includes(o?.phase);
-  const beforeEdit = o?.phase === "locating" || (!o?.phase && !o?.rename);
-  const transient =
-    (verificationOnly &&
-      !/ORGANIZATION_SAVE_UNCONFIRMED|CHANGED|HTTP (?:401|403)|NEEDS_ATTENTION/.test(
-        o?.error ?? "",
-      )) ||
-    (beforeEdit &&
-      /^(?:Error: )?(?:NEEDS_ATTENTION: )?(?:Conversation UI reported an error|METADATA_PAGE_UNAVAILABLE|Target conversation not visible in sidebar; open its project\/history before retrying|Fresh conversation metadata unavailable after reload; organization not verified|Conversation metadata request rejected \(HTTP (?:429|5\d\d)\); organization not verified)$/.test(
-        o?.error ?? "",
-      ));
-  const retryable =
-    !o?.verified &&
-    transient &&
-    attempts < ORGANIZATION_ATTEMPTS &&
-    (!task.organizationObservation ||
-      task.organizationObservation.closed === true);
+  const retryable = organizationCheckpointDue(task);
   const previous = o?.lastVerified;
   const revalidation =
     previous?.naming &&
@@ -33,6 +15,9 @@ export function organizationRecovery(task: Task) {
     previous.naming.topic === task.naming.topic &&
     previous.naming.language === (task.naming.language ?? "en");
   return {
+    title: o?.title ?? o?.rename?.title ?? null,
+    requested: task.naming,
+    startedAt: o?.startedAt ?? null,
     lastVerified: previous ?? null,
     phase: o?.phase ?? null,
     recovery: verificationOnly ? "verify_only" : "locate",
@@ -46,18 +31,34 @@ export function organizationRecovery(task: Task) {
             ? "revalidation_failed"
             : "needs_attention",
     attempts,
-    limit: ORGANIZATION_ATTEMPTS,
-    nextRetryAt: retryable ? (o?.nextRetryAt ?? null) : null,
+    retryAt: retryable || !o ? "wait_return" : null,
     error: o?.error ?? null,
-    nextAction: o?.verified ? null : !o || retryable ? "resume" : "organize",
+    nextAction: o?.verified ? null : !o || retryable ? "wait" : "organize",
   };
 }
 
-export function organizationDue(task: Task) {
-  const recovery = organizationRecovery(task);
+/** Each lifecycle checkpoint gets one fresh attempt before any title write.
+ * A stale reply/composer observation must not permanently exhaust naming.
+ * Interrupted edits and rejected/ambiguous writes still require inspection. */
+export function organizationCheckpointDue(task: Task) {
+  if (!task.naming || task.organization?.verified || !task.url) return false;
+  const o = task.organization;
+  if (o?.phase === "editing" || (!o?.phase && o?.rename)) return false;
+  if (
+    /HTTP (?:401|403)|Login required|Human verification|Project membership does not match|CONVERSATION_CHANGED|TARGET_NAVIGATED|METADATA_PAGE_CHANGED|ORGANIZATION_SAVE_UNCONFIRMED|Title save was not acknowledged|DRAFT_PRESENT|ATTACHMENTS_PRESENT/.test(
+      o?.error ?? "",
+    )
+  )
+    return false;
+  if (o?.phase)
+    return ["metadata", "locating", "save_pending", "verifying"].includes(
+      o.phase,
+    );
+  // Legacy failures without a write phase need positive pre-write evidence.
   return (
-    recovery?.state === "pending" ||
-    (recovery?.state === "retry_pending" &&
-      (!recovery.nextRetryAt || Date.parse(recovery.nextRetryAt) <= Date.now()))
+    !o?.error ||
+    /^(?:Error: )?(?:PAGE_NOT_IDLE|COMPLETED_TURN_CHANGED|METADATA_PAGE_UNAVAILABLE|NEEDS_ATTENTION: Conversation UI reported an error|Conversation UI reported an error|Target conversation not visible in sidebar|Fresh conversation metadata unavailable|Conversation metadata request rejected|BROWSER_READ_FAILED|CDP_UNAVAILABLE)/.test(
+      o.error,
+    )
   );
 }

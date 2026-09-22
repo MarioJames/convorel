@@ -80,6 +80,9 @@ export class TaskStore {
       db = new Database(staging, { readwrite: true });
       db.exec("pragma synchronous = full");
       db.transaction(() => db!.exec(SCHEMA)).immediate();
+      // Publish the final journal mode too. Switching DELETE to WAL after
+      // publication makes concurrent first writers race for an exclusive lock.
+      db.exec("pragma journal_mode = wal");
       db.close();
       db = undefined;
       const file = openSync(staging, "r");
@@ -101,7 +104,7 @@ export class TaskStore {
       }
     } finally {
       db?.close();
-      for (const suffix of ["", "-journal"])
+      for (const suffix of ["", "-journal", "-wal", "-shm"])
         if (existsSync(staging + suffix)) unlinkSync(staging + suffix);
     }
   }

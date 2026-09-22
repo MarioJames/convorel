@@ -27,11 +27,7 @@ import {
   type ArchiveNotice,
 } from "./post-archive.ts";
 import { conversationConfig, type Config } from "./config.ts";
-import {
-  organizationDue,
-  organizationRecovery,
-  ORGANIZATION_DELAYS,
-} from "./organization-recovery.ts";
+import { organizationCheckpointDue } from "./organization-recovery.ts";
 import {
   diagnosticCode,
   Diagnostics,
@@ -130,6 +126,7 @@ export interface Task {
     opening?: boolean;
     closed?: boolean;
     ownershipExpired?: boolean;
+    transferredToMain?: boolean;
     error?: string;
   };
   cleanup?: any;
@@ -388,7 +385,11 @@ export class Conversation {
     }
     return b;
   }
-  private async observe(t: Task, b: any) {
+  private async observe(
+    t: Task,
+    b: any,
+    purpose: "observe" | "delivery" | "naming" = "observe",
+  ) {
     this.step = "observe";
     const p: PageState = await b.read();
     this.guard(t);
@@ -401,7 +402,15 @@ export class Conversation {
     )
       throw new Error("PAGE_ORIGIN_CHANGED");
     if (t.url && !same(p.url, t.url)) throw new Error("CONVERSATION_CHANGED");
-    if (p.blocked) throw new Error("NEEDS_ATTENTION: " + p.blocked);
+    if (
+      p.blocked &&
+      !(
+        purpose !== "observe" &&
+        p.blocked === "Conversation UI reported an error"
+      )
+    )
+      throw new Error("NEEDS_ATTENTION: " + p.blocked);
+    if (purpose === "naming") return p;
     if (r.observationError?.retryable && r.error === r.observationError.message)
       r.error = undefined;
     r.observationError = undefined;
@@ -502,15 +511,10 @@ export class Conversation {
   }
   private async reconcile(t: Task, b: any) {
     await this.releaseOrganizationObserver(t);
-    // A completed reply is durable. Recovery may finish pending organization,
-    // but must not replace its captured bytes with a fresh DOM observation.
-    if (this.current(t).state === "complete") {
-      if (t.naming && organizationDue(t))
-        await this.applyOrganization(t, b, t.naming);
-      return this.archiveCompleted(t);
-    }
+    // Completed reply bytes are durable; observation never renames a conversation.
+    if (this.current(t).state === "complete") return this.archiveCompleted(t);
     const r = this.current(t);
-    let p = await this.observe(t, b);
+    let p = await this.observe(t, b, "delivery");
     if (!r.userMessageId || !t.url) {
       const found = p.messages.filter(
         (m) => m.role === "user" && m.text.includes(r.marker),
@@ -570,12 +574,6 @@ export class Conversation {
     this.save(t);
     if (outcome.state === "complete" && !r.reply?.markdown)
       await this.attemptCapture(t, b, r);
-    if (
-      t.naming &&
-      organizationDue(t) &&
-      ["waiting", "complete"].includes(r.state)
-    )
-      await this.applyOrganization(t, b, t.naming);
     return r.state === "complete" ? this.archiveCompleted(t) : t;
   }
   async create(
@@ -1037,7 +1035,7 @@ export class Conversation {
       this.guard(t);
       for (let n = 0; n < 12; n++) {
         await this.reconcile(t, b);
-        if (r.userMessageId && (!t.naming || t.url)) return t;
+        if (r.userMessageId) return t;
         await Bun.sleep(250);
       }
       return t;
@@ -1061,10 +1059,7 @@ export class Conversation {
       this.begin(t);
       if (t.organizationObservation && !t.organizationObservation.closed)
         await this.releaseOrganizationObserver(t);
-      if (
-        this.current(t, run).state === "complete" &&
-        (!t.naming || !organizationDue(t))
-      )
+      if (this.current(t, run).state === "complete")
         return this.archiveCompleted(t);
       try {
         // Recover a previously saved initial URL without guessing another tab or resending.
@@ -1116,6 +1111,50 @@ export class Conversation {
   }
   resume(id: string, run?: string) {
     return this.poll(id, run);
+  }
+  /** A bounded naming check at a wait/finish boundary, independent of reply
+   * monitoring. Never sends, replaces captured results, or resets a write checkpoint. */
+  async ensureNaming(id: string, run: string) {
+    return this.exclusive(id, async () => {
+      const t = this.get(id);
+      this.current(t, run);
+      await this.namingCheckpoint(t);
+      return this.current(t).state === "complete"
+        ? this.archiveCompleted(t)
+        : t;
+    });
+  }
+  private async namingCheckpoint(t: Task) {
+    if (!t.naming || !t.url || !this.current(t).userMessageId) return;
+    if (!t.organization?.verified && !organizationCheckpointDue(t)) return;
+    // A released task remains released. Explicit organize can restore a page.
+    if (t.binding?.closed) return;
+    this.begin(t);
+    try {
+      const page = await this.page(t);
+      if (t.organization?.verified) {
+        const p = await this.observe(t, page, "naming");
+        const title = t.organization.title ?? t.organization.rename?.title;
+        // Read the current document title, not a stale local verified flag.
+        // The provider can finish auto-titling after our initial rename.
+        if (
+          title &&
+          (p.title === title ||
+            p.title?.endsWith(" - " + title) ||
+            p.title?.startsWith(title + " - "))
+        )
+          return;
+      }
+      await this.applyOrganization(t, page, t.naming);
+    } catch (e) {
+      t.organization = {
+        ...t.organization,
+        ...(t.organization?.verified ? { phase: "metadata" } : {}),
+        verified: false,
+        error: String(e),
+      };
+      this.save(t);
+    }
   }
   result(id: string, run?: string) {
     const t = this.get(id),
@@ -1261,7 +1300,7 @@ export class Conversation {
       };
     });
   }
-  private safeCompleted(t: Task, p: PageState, r = this.current(t)) {
+  private completedPage(t: Task, p: PageState, r = this.current(t)) {
     if (r.state !== "complete" || !r.reply || !t.url || !r.userMessageId)
       throw new Error("RESULT_NOT_COMPLETE");
     if (
@@ -1277,13 +1316,37 @@ export class Conversation {
       branch = p.messages
         .slice(p.messages.findIndex((m) => m.id === r.userMessageId))
         .map((m) => m.id);
-    if (
-      out.state !== "complete" ||
-      out.reply?.id !== r.reply.id ||
-      sha(out.reply.text) !== r.replyHash ||
+    if (out.state !== "complete") throw new Error("COMPLETED_TURN_CHANGED");
+    return { out, branch };
+  }
+  private replyChanged(t: Task, p: PageState, r = this.current(t)) {
+    const { out, branch } = this.completedPage(t, p, r);
+    return (
+      out.reply?.id !== r.reply!.id ||
+      sha(out.reply!.text) !== r.replyHash ||
       JSON.stringify(branch) !== JSON.stringify(r.branch)
-    )
-      throw new Error("COMPLETED_TURN_CHANGED");
+    );
+  }
+  private safeCompleted(t: Task, p: PageState, r = this.current(t)) {
+    if (this.replyChanged(t, p, r)) throw new Error("COMPLETED_TURN_CHANGED");
+  }
+  /** Attaching to an idle background tab can precede composer hydration. Read
+   * only, outside the cross-task close lock; never reload or clear a draft. */
+  private async waitForRelease(t: Task, b: any) {
+    for (let n = 0; ; n++) {
+      const p = await this.observe(t, b);
+      const loading =
+        (!p.hasComposer || !p.messages.length) &&
+        p.draft === "" &&
+        !p.attachments &&
+        !p.generating &&
+        !p.blocked;
+      if (!loading || n >= 40) {
+        this.completedPage(t, p);
+        return;
+      }
+      await Bun.sleep(250);
+    }
   }
   async finish(id: string, run?: string) {
     return this.exclusive(id, async () => {
@@ -1291,6 +1354,7 @@ export class Conversation {
       this.current(t, run);
       this.result(id, run);
       this.begin(t);
+      await this.namingCheckpoint(t);
       await this.releaseOrganizationObserver(t);
       if (!t.binding?.owned || t.binding.closed) {
         t.cleanup = {
@@ -1305,48 +1369,58 @@ export class Conversation {
       // The last-tab keepalive decision and the close must be one cross-process
       // critical section, or two releases can strand zero tabs or double-create.
       const binding = t.binding;
-      return this.tabRelease(async () => {
-        this.guard(t);
-        let { tabs } = await this.browser.tabs("list");
-        this.guard(t);
-        if (!tabs.some((x: any) => x.targetId === binding.target)) {
+      const release = async () => {
+        const { tabs } = await this.browser.tabs("list");
+        if (tabs.some((x: any) => x.targetId === binding.target))
+          await this.waitForRelease(t, await this.browser.page(binding.target));
+        return this.tabRelease(async () => {
+          this.guard(t);
+          let { tabs } = await this.browser.tabs("list");
+          this.guard(t);
+          if (!tabs.some((x: any) => x.targetId === binding.target)) {
+            binding.closed = true;
+            t.cleanup = { closed: true, alreadyGone: true };
+            this.save(t);
+            return t.cleanup;
+          }
+          const b = await this.browser.page(binding.target);
+          this.completedPage(t, await this.observe(t, b));
+          if (tabs.length === 1) {
+            this.store.write("keepalive", {
+              version: 1,
+              opening: true,
+              epoch: binding.epoch,
+            });
+            const k = await this.browser.tabs("new", "about:blank");
+            this.guard(t);
+            this.store.write("keepalive", {
+              version: 1,
+              target: k.targetId,
+              epoch: binding.epoch,
+            });
+          }
+          // Closing an idle owned tab does not overwrite its durable reply. A
+          // later assistant rendering in the same user turn is not user work.
+          const replyChanged = this.replyChanged(t, await this.observe(t, b));
+          this.guard(t);
+          await this.browser.tabs("close", binding.target);
+          this.guard(t);
+          tabs = (await this.browser.tabs("list")).tabs;
+          if (tabs.some((x: any) => x.targetId === binding.target))
+            throw new Error("CLOSE_UNVERIFIED");
           binding.closed = true;
-          t.cleanup = { closed: true, alreadyGone: true };
+          t.cleanup = {
+            closed: true,
+            target: binding.target,
+            organizationPending:
+              !!t.naming && t.organization?.verified !== true,
+            replyChanged,
+          };
           this.save(t);
           return t.cleanup;
-        }
-        const b = await this.browser.page(binding.target);
-        this.safeCompleted(t, await this.observe(t, b));
-        if (tabs.length === 1) {
-          this.store.write("keepalive", {
-            version: 1,
-            opening: true,
-            epoch: binding.epoch,
-          });
-          const k = await this.browser.tabs("new", "about:blank");
-          this.guard(t);
-          this.store.write("keepalive", {
-            version: 1,
-            target: k.targetId,
-            epoch: binding.epoch,
-          });
-        }
-        this.safeCompleted(t, await this.observe(t, b));
-        this.guard(t);
-        await this.browser.tabs("close", binding.target);
-        this.guard(t);
-        tabs = (await this.browser.tabs("list")).tabs;
-        if (tabs.some((x: any) => x.targetId === binding.target))
-          throw new Error("CLOSE_UNVERIFIED");
-        binding.closed = true;
-        t.cleanup = {
-          closed: true,
-          target: binding.target,
-          organizationPending: !!t.organization?.error,
-        };
-        this.save(t);
-        return t.cleanup;
-      }).catch((error) => {
+        });
+      };
+      return release().catch((error) => {
         if (typeof t.currentRun === "string")
           this.diagnostics.failure({
             taskId: t.id,
@@ -1416,60 +1490,76 @@ export class Conversation {
   private async releaseOrganizationObserver(t: Task) {
     const owned = t.organizationObservation;
     if (!owned || owned.closed) return;
-    await this.tabRelease(async () => {
-      try {
-        const epoch = await this.browser.epoch();
-        this.guard(t);
-        if (owned.epoch !== epoch) {
-          owned.closed = true;
-          owned.ownershipExpired = true;
-          delete owned.error;
-          return;
-        }
-        if (!owned.target)
-          throw new Error(
-            "ORGANIZATION_OBSERVER_UNKNOWN: inspect the opening page",
-          );
-        // A previous close may have succeeded even when its acknowledgement failed.
-        const { tabs } = await this.browser.tabs("list");
-        if (!tabs.some((x: any) => x.targetId === owned.target)) {
-          owned.closed = true;
-          delete owned.error;
-          return;
-        }
-        const page = await this.browser.page(owned.target);
-        const p = await page.read();
-        this.guard(t);
-        if (!same(p.url, t.url!) || p.draft?.trim() || p.attachments)
-          throw new Error("METADATA_PAGE_CHANGED");
-        await this.browser.tabs("close", owned.target);
-        if (
-          (await this.browser.tabs("list")).tabs.some(
-            (x: any) => x.targetId === owned.target,
-          )
-        )
-          throw new Error("CLOSE_UNVERIFIED");
+    // The task lock protects this observer and its main page together. Unlike
+    // finish, observer cleanup never creates a last-tab keepalive, so it does
+    // not need the cross-task close lock. Slow reads must not block other tasks.
+    try {
+      const epoch = await this.browser.epoch();
+      this.guard(t);
+      if (owned.epoch !== epoch) {
+        owned.closed = true;
+        owned.ownershipExpired = true;
+        delete owned.error;
+        return;
+      }
+      if (!owned.target)
+        throw new Error(
+          "ORGANIZATION_OBSERVER_UNKNOWN: inspect the opening page",
+        );
+      // A previous close may have succeeded even when its acknowledgement failed.
+      const { tabs } = await this.browser.tabs("list");
+      if (!tabs.some((x: any) => x.targetId === owned.target)) {
         owned.closed = true;
         delete owned.error;
-      } catch (e) {
-        owned.error = String(e);
-      } finally {
-        this.guard(t);
-        this.save(t);
+        return;
       }
-    });
+      const page = await this.browser.page(owned.target);
+      const p = await page.read();
+      this.guard(t);
+      if (!same(p.url, t.url!) || p.draft?.trim() || p.attachments)
+        throw new Error("METADATA_PAGE_CHANGED");
+      if (
+        t.binding &&
+        !t.binding.closed &&
+        (t.binding.target === owned.target ||
+          !tabs.some((x: any) => x.targetId === t.binding!.target))
+      ) {
+        // The original target disappeared while its task-owned observer
+        // survived. Transfer its role instead of closing the only page or
+        // rediscovering it later as an unowned user tab.
+        t.binding = { target: owned.target, epoch, owned: true };
+        owned.closed = true;
+        owned.transferredToMain = true;
+        delete owned.error;
+        return;
+      }
+      await this.browser.tabs("close", owned.target);
+      if (
+        (await this.browser.tabs("list")).tabs.some(
+          (x: any) => x.targetId === owned.target,
+        )
+      )
+        throw new Error("CLOSE_UNVERIFIED");
+      owned.closed = true;
+      delete owned.error;
+    } catch (e) {
+      owned.error = String(e);
+    } finally {
+      this.guard(t);
+      this.save(t);
+    }
   }
   private async applyOrganization(t: Task, b: any, naming: Naming) {
     await this.releaseOrganizationObserver(t);
     const check = async () => {
-      const p = await this.observe(t, b),
+      const p = await this.observe(t, b, "naming"),
         r = this.current(t);
       if (!t.url || !r.userMessageId) throw new Error("DELIVERY_NOT_CONFIRMED");
       if (p.draft?.trim() || p.attachments) throw new PageNotIdleError(p);
-      const out = classify(p, t.url, r.userMessageId);
-      if (!["waiting", "complete"].includes(out.state))
-        throw new Error(out.reason || "CONVERSATION_CHANGED");
-      if (r.state === "complete") this.safeCompleted(t, p);
+      // Title ownership is the persisted conversation identity, not the
+      // assistant's rendered text, completion status or composer hydration.
+      // observe() checks that identity before every action; the organizer
+      // separately verifies creation time, project and saved title metadata.
       return p;
     };
     // A second, task-owned page observes persisted metadata while the original
@@ -1505,14 +1595,18 @@ export class Conversation {
       checkpoint?.phase,
     );
     const attempts = (t.organization?.attempts ?? (t.organization ? 1 : 0)) + 1;
+    const startedAt = new Date().toISOString();
     const lastVerified = t.organization?.lastVerified;
     t.organization = {
+      phase: "metadata",
       ...(verificationOnly ? checkpoint : {}),
       verified: false,
       attempts,
       lastVerified,
+      startedAt,
     };
     this.save(t);
+    this.diagnostics.namingProgress(t.id, t.currentRun, t.organization.phase);
     try {
       await check();
       const guarded = {
@@ -1535,21 +1629,21 @@ export class Conversation {
           return result;
         },
       };
-      const metadata =
-        this.current(t).state !== "complete" || verificationOnly
-          ? {
-              session: b.session,
-              read: async () => (await metadataPage()).read(),
-              run: async (...args: string[]) => {
-                const page = await metadataPage();
-                const p = await page.read();
-                if (!same(p.url, t.url!))
-                  throw new Error("METADATA_PAGE_CHANGED");
-                if (p.blocked) throw new Error(p.blocked);
-                return page.run(...args);
-              },
-            }
-          : undefined;
+      const metadata = {
+        session: b.session,
+        read: async () => (await metadataPage()).read(),
+        run: async (...args: string[]) => {
+          const page = await metadataPage();
+          const p = await page.read();
+          if (!same(p.url, t.url!)) throw new Error("METADATA_PAGE_CHANGED");
+          // A response-rendering alert does not invalidate a successful,
+          // identity-checked metadata response. Login/challenge still stop.
+          if (p.blocked && p.blocked !== "Conversation UI reported an error")
+            throw new Error(p.blocked);
+          if (p.draft?.trim() || p.attachments) throw new PageNotIdleError(p);
+          return page.run(...args);
+        },
+      };
       t.organization = await this.organizer(
         guarded,
         t.url!,
@@ -1568,8 +1662,10 @@ export class Conversation {
             verified: false,
             attempts,
             lastVerified,
+            startedAt,
           };
           this.save(t);
+          this.diagnostics.namingProgress(t.id, t.currentRun, progress.phase);
         },
         metadata,
         {
@@ -1592,6 +1688,7 @@ export class Conversation {
       await this.releaseOrganizationObserver(t);
     }
     this.guard(t);
+    t.organization.startedAt = startedAt;
     t.organization.lastVerified = t.organization.verified
       ? {
           observedAt: new Date().toISOString(),
@@ -1601,13 +1698,7 @@ export class Conversation {
         }
       : lastVerified;
     t.organization.attempts = attempts;
-    if (
-      organizationRecovery(t)?.state === "retry_pending" &&
-      attempts <= ORGANIZATION_DELAYS.length
-    )
-      t.organization.nextRetryAt = new Date(
-        Date.now() + ORGANIZATION_DELAYS[attempts - 1],
-      ).toISOString();
+    delete t.organization.nextRetryAt;
     this.save(t);
     return t.organization;
   }

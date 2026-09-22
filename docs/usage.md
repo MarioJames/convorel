@@ -87,7 +87,7 @@ bun --no-env-file src/cli.ts conversation result --id first-question --run RUN_I
 bun --no-env-file src/cli.ts conversation finish --id first-question --run RUN_ID
 ```
 
-先消费、保存回复，再执行 `finish`。它保留会话链接和结果，只关闭经过核验的自有标签页；用户原有标签页不会关闭。输入框缺失或草稿状态未知时仍保留页面；`PAGE_NOT_IDLE` 会列出 `COMPOSER_MISSING`、`DRAFT_UNKNOWN`、`DRAFT_PRESENT`、`ATTACHMENTS_PRESENT`、`GENERATING` 或 `PAGE_BLOCKED` 等具体原因。关闭被此保护拒绝时，`summary.cleanup` 保存页面 target、观测时间及脱敏状态（仅草稿长度，不含正文），可在原任务查询。回复完成、归档成功与页面可安全关闭是独立状态。
+先消费、保存回复，再执行 `finish`。它先检查未完成的命名，再关闭经过核验的自有标签页，保留会话链接和结果；用户原有标签页不会关闭。输入框加载期间最多只读等待 10 秒，不持有跨任务关闭锁；仍然缺失或草稿状态未知时保留页面。`PAGE_NOT_IDLE` 会列出 `COMPOSER_MISSING`、`DRAFT_UNKNOWN`、`DRAFT_PRESENT`、`ATTACHMENTS_PRESENT`、`GENERATING` 或 `PAGE_BLOCKED` 等具体原因。关闭被此保护拒绝时，`summary.cleanup` 保存页面 target、观测时间及脱敏状态（仅草稿长度，不含正文），可在原任务查询。同一用户轮次的 assistant 回复变化可返回 `replyChanged: true` 后安全关闭，但不覆盖原捕获，也不证明最新正文已消费；有后续用户消息时仍拒绝关闭。回复完成、归档成功与页面可安全关闭是独立状态。
 
 ## 配置文件与目录
 
@@ -185,7 +185,7 @@ convorel config set project.name 实际项目名称
 # 可选：convorel config set model '用户明确选择的模型'
 ```
 
-URL 必须来自实际项目页面，URL/name 成对配置。配置项目后直接在该项目的“新建对话”输入框创建；项目入口不匹配则在发送前停止，不在普通会话中创建后移动。标题使用 `MMDD｜TYPE｜Topic`，日期来自会话 `createdAt` 转 `Asia/Shanghai`；默认英文 TYPE，明确要求中文时用 `start --language zh`。创建时通过 `--type`/`--topic` 提供命名信息，首条消息与持久化 URL 确认后立即改名，不等待回复完成；主题不明时省略命名参数，保留原标题。URL 延迟时 `resume`/`wait` 会补做尚未开始的命名。命名失败独立记录在 `organization.error`，检查后用 `organize --id ID --run RUN_ID --type EXP --topic '具体主题'` 显式恢复，不重发消息；命名只改标题，项目归属不符则报错。配置仅来自偏好文件。新 task 保存配置 snapshot，续谈保留原模型/项目，修改配置不会改写旧 task。
+URL 必须来自实际项目页面，URL/name 成对配置。配置项目后直接在该项目的“新建对话”输入框创建；项目入口不匹配则在发送前停止，不在普通会话中创建后移动。标题使用 `MMDD｜TYPE｜Topic`，日期来自会话 `createdAt` 转 `Asia/Shanghai`；默认英文 TYPE，明确要求中文时用 `create --language zh`。创建时通过 `--type`/`--topic` 提供命名信息，首条消息发送成功后，在第一轮 `wait` 正常或超时返回前改名；主题不明时省略命名参数，保留原标题。`start`、`poll`、`resume` 不执行命名；URL 延迟时继续观察原提交，取得 URL 后在 `wait` 返回前命名。命名失败独立记录在 `organization.error`，检查后用 `organize --id ID --run RUN_ID --type EXP --topic '具体主题'` 显式恢复，不重发消息；命名只改标题，项目归属不符则报错。配置仅来自偏好文件。新 task 保存配置 snapshot，续谈保留原模型/项目，修改配置不会改写旧 task。
 
 技能会整理证据、处理意见并清理已完成的自有标签页。等待可以使用宿主后台进程或分段 CLI wait；Herdr 可用时才增强为 service lane，无需安装 Herdr 或记忆服务。
 
@@ -344,7 +344,7 @@ bun --no-env-file src/cli.ts conversation retry --id first-question --run RUN_ID
 
 完整命令见 `bun --no-env-file src/cli.ts --help`。某个命令的用途、参数和退出结果见 `convorel <command> --help`，子命令见 `convorel <group> <command> --help`。
 
-命名遇到首次改名交互之前的临时页面错误、元数据加载超时或 HTTP 429/5xx 时，`wait`/`resume` 自动恢复，总计最多 3 次，后两次间隔至少 5 秒、30 秒；重试次数与时间持久保存。`summary.organization` 单独报告核验状态、次数、错误与下一步，不把回复完成视为命名完成。权限错误、归属变化、标题保存结果不明或观察页清理未完成时停止自动重试，检查后可在原任务显式 `organize`。
+每次 `wait` 返回前检查一次命名，首次改名之前的临时页面错误、元数据加载超时或 HTTP 429/5xx 留给下一次 `wait` 或 `finish` 检查点重试，不设置跨检查点的终身次数上限。`summary.organization` 单独报告核验状态、累计次数、错误与下一步，`retryAt: wait_return` 表示下一次等待返回时检查。权限错误、归属变化、标题编辑中断或保存未核实时停止自动写入，检查后可在原任务显式 `organize`。
 
 监听同一轮回复持续 2 分钟无变化时，先检查会话身份、草稿和附件，再主动刷新原标签页并等待历史加载。刷新只恢复观察，不发送消息；刷新后按原用户消息 ID 判定完成、仍生成或已被后续消息取代。正常长时间思考不算失败，连续 3 次刷新失败则提示检查；`summary.completionProbe` 暴露停滞时间、刷新次数及错误。草稿和附件存在时保留原页并报告延期。`wait` 的总超时仍然生效。
 
@@ -372,7 +372,7 @@ bun --no-env-file src/cli.ts doctor --local true
 - `capture` 要求页面仍是同一会话、提交消息与目标回复都仍挂载、目标回复仍是最终态且渲染文本 hash 与保存的 `replyHash` 一致；点击复制后会再次读取页面并按渲染文本 hash 复核归属，正文变了记 `TARGET_CHANGED`，一次捕获窗口内出现多份不同正文记 `COPY_AMBIGUOUS`。复制控件点下去会短暂换成别的标签，使该轮在约两秒内被读成「非最终态」而正文不变，因此归属按正文判定，最终态只作有界等待（最多约 2.25 秒），不让下一次操作接手半途的页面。其他缺口原因码（例如 `COPY_BUTTON_MISSING`、`COPY_PAYLOAD_EMPTY`、`TARGET_NOT_RENDERED`）同样留在轮次上，`coverage` 汇总为 `current` / `markdown-incomplete` / `incomplete` / `unknown`；对已捕获且正文没变的轮次再执行一次会记为 `unchanged`，不算缺口。
 - `export` 用 `VACUUM INTO` 产出一份独立、已通过 `integrity_check` 的一致性快照（直接复制活动文件会漏掉仍在 WAL 里已提交的字节）：写入过程关在本调用自建的 0700 暂存目录内，发布出的文件为 0600，返回路径、字节数和与系统 `sha256sum` 一致的 SHA-256，并拒绝覆盖已有目标、拒绝落在状态目录或 MCP 允许根内。**导出即扩散**：那份文件包含全部已归档的 prompt 与回复，按敏感数据管理。
 - `history`/`search`/`content --from PATH` 读取指定路径（导出目录或改名后的快照文件），不读偏好、不要求工作区或浏览器；这些命令在 CLI 中先于配置与浏览器初始化派发，因此代码目录被删除、Chrome 已停止时仍能读回内容。写入类命令仍会先确认状态目录不在共享根内。
-- 归档写入失败时先解决存储问题，再对同一轮 resume 或显式 archive。已完成且无待命名操作的 poll/resume 完全在本地补档；待命名时仍访问页面恢复组织并核验，但不重新 Copy 或替换已存回复。缺 Markdown 则需显式 capture，archive 不能生成缺失原文。
+- 归档写入失败时先解决存储问题，再对同一轮 resume 或显式 archive。已完成轮次的 poll/resume 在本地补档，必要时对账遗留观察页；命名单独由 wait/finish 或显式 organize 处理，不重新 Copy 或替换已存回复。缺 Markdown 则需显式 capture，archive 不能生成缺失原文。
 - 归档是任务文档的投影，可用 `archive --all true` 重建；Markdown 同时保存在任务文档中，所以两侧丢任意一侧，另一侧仍保有内容。重复导入相同文档不会新增版本，但会照实报告文档里仍缺的东西——「没写新内容」不等于「已经完整」。数据库和快照都留在私有状态目录，不进入 MCP 允许根，也不上传；当前没有提供按轮次删除内容的命令；不通过删库排障或处理捕获缺口。删除数据库会丢弃全部已归档内容和不可变版本，需要单独明确授权。
 
 ## 开发完成后的结果校验
@@ -454,4 +454,6 @@ convorel config set browser.navigationWaitMs 2000
 
 间隔不会重试失败写入，也不保证规避平台风控。登录、验证码、权限、页面身份变化仍停止处理。绑定页面和新建页面均等待历史就绪；会话恢复排除其他任务的主页面和元数据观察页。发送结果未知时 `wait` 继续有界观察原任务，不自动重发；超时保留 `runState`、投递状态与后续动作。
 
-命名优先精确侧栏入口，不可见时可使用绑定同一会话 ID 的顶部菜单。写前暂时不可见可按 5 秒、30 秒退避，总计最多三次；保存结果未知只核验持久化标题，不重复保存。`summary.replyComplete` 与 `summary.organization` 分别表示回复和命名完成情况：回复完成但命名失败，`resume`/`wait` 返回 2，仍可读取已保存回复。`observerCleanup` 单独报告观察页释放结果，关闭回执丢失可通过原 target 不再存在收敛；身份已过期不关闭当前浏览器中的页面。
+命名优先精确侧栏入口，不可见时可使用绑定同一会话 ID 的顶部菜单。写前暂时不可见可在下一次 wait/finish 检查点再试；保存结果未知只核验持久化标题，不重复保存。`summary.replyComplete` 与 `summary.organization` 分别表示回复和命名完成情况：回复完成但命名失败，`resume`/`wait` 返回 2，仍可读取已保存回复。`observerCleanup` 单独报告观察页释放结果，关闭回执丢失可通过原 target 不再存在收敛；身份已过期不关闭当前浏览器中的页面。
+
+`start` 只发送和确认，`poll`/`resume` 只观察；首次命名延后至第一轮 `wait` 正常或超时返回前，不要求回复完成。URL 延迟时 `wait` 每秒观察。后续每次 `wait` 返回前和 `finish` 前读取当前页面标题，缺失或被自动标题覆盖时各有界补命名一次，不只相信历史 `verified`；不重放中断的标题编辑、不绕过身份/权限检查。命名检查可能使 `wait` 晚于观察超时返回，取消等待时跳过。元数据使用独立任务自有观察页核验，不刷新原回复页；单纯回复加载错误不否定已成功读取的元数据，登录和验证码仍阻断。主页面丢失时，可将存活的任务自有观察页转为主页面，保留归属以便最终安全关闭。

@@ -2,7 +2,11 @@ import { test, expect } from "bun:test";
 import { organizationRecovery } from "../src/organization-recovery.ts";
 import type { Task } from "../src/conversation.ts";
 const task = (organization: any) =>
-  ({ naming: { type: "FIX", topic: "恢复" }, organization }) as Task;
+  ({
+    url: "https://chatgpt.com/c/example",
+    naming: { type: "FIX", topic: "恢复" },
+    organization,
+  }) as Task;
 test("sidebar delay before editing is retryable even with rename progress", () => {
   expect(
     organizationRecovery(

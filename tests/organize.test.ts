@@ -28,6 +28,7 @@ const body = () => ({
 function fixture(
   options: {
     wrongUrl?: boolean;
+    blocked?: string;
     generating?: boolean;
     ignoreRename?: boolean;
     rejectRename?: boolean;
@@ -67,7 +68,7 @@ function fixture(
     read: async () => ({
       url: options.wrongUrl ? "https://chatgpt.com/c/other" : url,
       generating: options.generating ?? false,
-      blocked: null,
+      blocked: options.blocked ?? null,
       hasComposer: true,
     }),
     run: async (...args: string[]) => {
@@ -396,3 +397,42 @@ test("verification-only naming never resubmits an unconfirmed title", async () =
   ).rejects.toThrow("ORGANIZATION_SAVE_UNCONFIRMED");
   expect(b.mutations).toHaveLength(0);
 });
+
+test.each([
+  "Conversation UI reported an error",
+  "Login required",
+  "Human verification required",
+])(
+  "title organization isolates generic render alert from access blocks: %s",
+  async (blocked) => {
+    const b = fixture({ blocked });
+    if (blocked === "Conversation UI reported an error") {
+      expect(
+        (
+          await organizeConversation(
+            b as any,
+            url,
+            { timezone: "Asia/Shanghai", language: "en" },
+            "FIX",
+            "命名",
+            undefined,
+            b as any,
+          )
+        ).verified,
+      ).toBe(true);
+    } else {
+      await expect(
+        organizeConversation(
+          b as any,
+          url,
+          { timezone: "Asia/Shanghai", language: "en" },
+          "FIX",
+          "命名",
+          undefined,
+          b as any,
+        ),
+      ).rejects.toThrow(blocked);
+      expect(b.mutations).toHaveLength(0);
+    }
+  },
+);

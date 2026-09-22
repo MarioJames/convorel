@@ -123,7 +123,7 @@ bunx skills add ./skills --skill chatgpt-review -a codex -g
 
 用 `convorel config set project.url URL`、`convorel config set project.name NAME` 成对设置目标项目，可选 `convorel config set model MODEL`。配置只来自偏好文件，不接受环境覆盖。新 task 保存 snapshot，续谈保持原配置；修改配置不会改写旧任务。未指定模型默认 Latest + Power 末端 Pro，不锁版本。全部配置键及目录参数见[使用指南](usage.md#配置文件与目录)。
 
-创建时通过 `start --type DES --topic '具体主题'` 提供命名信息，首条消息与持久化 URL 确认后立即命名，无需等回复完成。URL 延迟时由 `resume`/`wait` 补做；命名失败记录在 `organization.error`，检查后用 `organize` 显式重试，不重发消息。审查技能使用 `MMDD｜TYPE｜Topic`：日期取会话 `createdAt` 转 `Asia/Shanghai`，默认英文 TYPE；用户明确要求中文时给 `start` 或 `organize` 加 `--language zh`。配置项目时直接使用该项目的“新建对话”入口；命名只改标题，归属不符即报错，不移动会话。主题不明保留原标题，不改置顶、归档等状态。组织失败仍保留错误并尝试安全 finish。
+创建时通过 `create --type DES --topic '具体主题'` 提供命名信息，首次命名放到发送成功后的第一轮 `wait` 正常或超时返回前，无需等回复完成。`start`/`resume` 不改名；URL 延迟时继续观察同一轮，在后续 `wait` 返回前补做；命名失败记录在 `organization.error`，检查后用 `organize` 显式重试，不重发消息。审查技能使用 `MMDD｜TYPE｜Topic`：日期取会话 `createdAt` 转 `Asia/Shanghai`，默认英文 TYPE；用户明确要求中文时给 `create` 或 `organize` 加 `--language zh`。配置项目时直接使用该项目的“新建对话”入口；命名只改标题，归属不符即报错，不移动会话。主题不明保留原标题，不改置顶、归档等状态。组织失败仍保留错误并尝试安全 finish。
 
 Herdr 可选。技能优先复用现有 Herdr 技能或 `herdr --skill`，只有当前 pane 可解析时创建服务 lane；否则用宿主后台进程或分段 `conversation wait --timeout-seconds 60`。一个 run 只保留一个等待者，通知后仍需读取精确 run 的完整结果；未知发送不得重发。
 

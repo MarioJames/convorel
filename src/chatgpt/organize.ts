@@ -176,7 +176,11 @@ export async function organizeConversation(
     const page = await b.read();
     if (conversationId(page.url) !== id)
       throw new Error("Conversation changed; refusing organization");
-    if (page.blocked) throw new Error(page.blocked);
+    if (
+      page.blocked &&
+      !(metadataBrowser && page.blocked === "Conversation UI reported an error")
+    )
+      throw new Error(page.blocked);
     if (page.generating && !metadataBrowser)
       throw new Error(
         "Response is generating; finish monitoring before organizing",
