@@ -180,6 +180,64 @@ test("a diagnostics failure does not change send permission or copy the prompt",
   expect(live.sends).toBe(1);
 });
 
+test("a failed submitting save is not recorded as a persisted phase", async () => {
+  const run = async (enabled: boolean) => {
+    const dir = mkdtempSync(join(tmpdir(), "convorel-diagnostics-save-"));
+    const workspace = join(dir, "code");
+    mkdirSync(workspace);
+    const state = new State(dir);
+    state.write("config", {
+      version: 1,
+      workspace,
+      cdp: "9222",
+      model: "6 Pro",
+    });
+    const write = state.write.bind(state);
+    state.write = ((key: string, value: any) => {
+      if (
+        value?.runs?.some(
+          (item: { state?: string }) => item.state === "submitting",
+        )
+      )
+        throw new Error("disk full before replace");
+      return write(key, value);
+    }) as typeof state.write;
+    const browser = new FakeBrowser();
+    const conversation = new Conversation(state, browser as any, async () => ({
+      observedModel: "6 Pro",
+    }));
+    const task = await sendPrepared(conversation, "save-fail", "plain prompt");
+    return { dir, browser, task };
+  };
+  try {
+    const enabled = await run(true);
+    expect(enabled.browser.sends).toBe(0);
+    expect(enabled.task.runs[0].state).toBe("delivery_unknown");
+    const events = readDiagnostics(enabled.dir, "save-fail").events;
+    expect(
+      events.some(
+        (event) => event.event === "phase" && event.code === "submitting",
+      ),
+    ).toBe(false);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "operation_result",
+        step: "persist",
+        code: "STATE_PERSIST_FAILED",
+      }),
+    );
+    writePreference("diagnostics.enabled", "false");
+    const disabled = await run(false);
+    expect(disabled.browser.sends).toBe(enabled.browser.sends);
+    expect(disabled.task.runs[0].state).toBe(enabled.task.runs[0].state);
+    expect(readDiagnostics(disabled.dir, "save-fail").status).toBe("missing");
+    rmSync(enabled.dir, { recursive: true, force: true });
+    rmSync(disabled.dir, { recursive: true, force: true });
+  } finally {
+    writePreference("diagnostics.enabled", "");
+  }
+});
+
 test("the diagnostics command reads the private store without Chrome", async () => {
   const log = new Diagnostics(root);
   log.rememberPhase(task, run, "prepared");

@@ -920,6 +920,7 @@ export class Conversation {
     if (sha(prompt) !== r.promptHash || !prompt.startsWith(`${r.marker}\n\n`))
       throw new Error("PROMPT_INTEGRITY_FAILED");
     const draftText = (text: string) => text.replace(/\u00a0/g, " ").trim();
+    let submittingSaved = false;
     try {
       const b = recovery?.b ?? (await this.page(t, t.runs.indexOf(r) > 0));
       let p = await this.observe(t, b);
@@ -1028,6 +1029,7 @@ export class Conversation {
       r.submittedAt = new Date().toISOString();
       this.step = "persist";
       this.save(t, false);
+      submittingSaved = true;
       this.guard(t);
       this.step = "send";
       await sendPrompt(b, p);
@@ -1040,7 +1042,8 @@ export class Conversation {
       }
       return t;
     } catch (e) {
-      if (r.state === "submitting") this.notePhase(t.id, r.id, "submitting");
+      if (submittingSaved && r.state === "submitting")
+        this.notePhase(t.id, r.id, "submitting");
       if (r.state === "submitting") r.state = "delivery_unknown";
       if (
         r.userMessageId &&
