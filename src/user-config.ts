@@ -19,6 +19,7 @@ export const settingKeys = [
   "browser.navigationWaitMs",
   "locks.taskWaitMs",
   "release.baseUrl",
+  "diagnostics.enabled",
 ] as const;
 export type SettingKey = (typeof settingKeys)[number];
 const secrets: SettingKey[] = ["tunnel.apiKey"];
@@ -100,7 +101,8 @@ function validate(key: SettingKey, value: string) {
     throw new Error(`INVALID_VALUE: ${key} must not contain a newline or NUL`);
   if (key === "browser.serial" && !["true", "false"].includes(value))
     throw new Error("INVALID_VALUE: browser.serial must be true or false");
-
+  if (key === "diagnostics.enabled" && !["true", "false"].includes(value))
+    throw new Error("INVALID_VALUE: diagnostics.enabled must be true or false");
   if (key === "browser.actionIntervalMs" || key === "browser.navigationWaitMs")
     pacingMilliseconds(key, value);
   if (

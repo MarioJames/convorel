@@ -18,7 +18,7 @@ import { runTunnel, tunnelInstructions, recoverTunnelLock } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
 import { jsonPrinter } from "./output.ts";
 import { preference } from "./user-config.ts";
-
+import { readDiagnostics } from "./diagnostics.ts";
 import { agentBrowserLocation, COMPILED, selfExec } from "./runtime.ts";
 import { conversationConfig } from "./config.ts";
 import { configCommand } from "./config-command.ts";
@@ -91,6 +91,7 @@ skills check|update --agent codex|claude-code|codex,claude-code [--scope user|pr
 skills check|update --dir PATH [--baseline-dir OLD_SKILL]
 start|stop|restart|status [--tunnel-id ID]
 logs [--tunnel-id ID] [--lines NUMBER] [--follow]
+diagnostics --task ID [--run UUID]
 upgrade [--version TAG]
 config list|get KEY|set KEY VALUE|unset KEY|path
 doctor
@@ -127,6 +128,9 @@ its prompt plus the captured Markdown, or the rendered copy until Markdown exist
 'reply' stays empty until Markdown is captured; the rendered body is kept separately as
 'reply_rendered' and is not the archived reply. content --version reads back any single
 archived version, including superseded ones.
+diagnostics reads STATE_DIR/diagnostics.db without Chrome. status is missing, empty or ok.
+complete is false: retained rows are not a full history and do not authorize a retry.
+An unreadable store exits 1 instead of looking like an empty task.
 Exit codes: archive/capture report 1 when the archive failed and 2 on gaps or partial work;
 doctor --local reports 1 when the store fails its own integrity check and 2 when the local
 record is readable but incomplete. Reading commands exits 0 on a successful read.
@@ -154,7 +158,16 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error(
       "ENV_AUTOLOAD_DISABLED_REQUIRED: invoke bun --no-env-file or the installed executable",
     );
-
+  if (area === "diagnostics") {
+    const o = opts(args.slice(1));
+    for (const key of Object.keys(o))
+      if (!["task", "run", "fields"].includes(key))
+        throw new Error(`Unknown diagnostics option --${key}`);
+    jsonPrinter(o.fields)(
+      readDiagnostics(stateDirectory(), required(o, "task"), o.run),
+    );
+    return 0;
+  }
   const conversationOptions = area === "conversation" ? opts(rest) : undefined;
   const print = jsonPrinter(conversationOptions?.fields);
   if (area === "version" || area === "--version") {

@@ -32,7 +32,11 @@ import {
   organizationRecovery,
   ORGANIZATION_DELAYS,
 } from "./organization-recovery.ts";
-
+import {
+  diagnosticCode,
+  Diagnostics,
+  type DiagnosticStep,
+} from "./diagnostics.ts";
 export type { Config } from "./config.ts";
 export interface RejectedSendRecovery {
   expectedUserMessageId: string;
@@ -143,6 +147,9 @@ const same = (a: string, b: string) => {
 const REGISTRY_WAIT_MS = 10_000;
 const TABS_WAIT_MS = 15_000;
 export class Conversation {
+  private readonly diagnostics: Diagnostics;
+  private readonly loggedPhase = new Map<string, string>();
+  private step: DiagnosticStep = "observe";
   constructor(
     public store: State,
     public browser: Browser,
@@ -151,15 +158,40 @@ export class Conversation {
       opts: Record<string, string>,
     ) => Promise<{ observedModel: string }> = ensureModel,
     private organizer: typeof organizeConversation = organizeConversation,
-  ) {}
+  ) {
+    this.diagnostics = new Diagnostics(store.root);
+  }
   get(id: string): Task {
     return this.store.read<Task>("task-" + id);
   }
-  private save(t: Task) {
+  private save(t: Task, note = true) {
     const { archive: _archive, ...document } = t;
-    this.store.write("task-" + t.id, document);
+    try {
+      this.store.write("task-" + t.id, document);
+    } catch (error) {
+      const runId = t.currentRun;
+      if (typeof runId === "string")
+        this.diagnostics.failure({
+          taskId: t.id,
+          runId,
+          event: "operation_result",
+          step: "persist",
+          code: "STATE_PERSIST_FAILED",
+        });
+      throw error;
+    }
+    if (note) this.notePhases(t);
   }
-
+  /** Log a phase only after the task document is durable. Repeated saves of the same phase do not append. */
+  private notePhases(t: Task) {
+    for (const run of t.runs) this.notePhase(t.id, run.id, run.state);
+  }
+  private notePhase(taskId: string, runId: string, state: string) {
+    if (this.loggedPhase.get(runId) === state) return;
+    const recorded = this.diagnostics.rememberPhase(taskId, runId, state);
+    if (recorded === "stored" || recorded === "same" || recorded === "disabled")
+      this.loggedPhase.set(runId, state);
+  }
   /** Serializes one task's browser side effects on its own tab, releasing every
    * session it opened. Different tasks proceed concurrently; config browser.serial=true
    * restores the single global browser lock for environments that cannot. */
@@ -357,6 +389,7 @@ export class Conversation {
     return b;
   }
   private async observe(t: Task, b: any) {
+    this.step = "observe";
     const p: PageState = await b.read();
     this.guard(t);
     const r = this.current(t);
@@ -378,15 +411,23 @@ export class Conversation {
     this.guard(t);
     const r = this.current(t);
     r.error = String(e);
-    r.observationError =
-      observing || e instanceof ObservationError
-        ? {
-            at: new Date().toISOString(),
-            message: String(e),
-            retryable: e instanceof ObservationError,
-          }
-        : undefined;
+    const observation = observing || e instanceof ObservationError;
+    r.observationError = observation
+      ? {
+          at: new Date().toISOString(),
+          message: String(e),
+          retryable: e instanceof ObservationError,
+        }
+      : undefined;
     this.save(t);
+    this.diagnostics.failure({
+      taskId: t.id,
+      runId: r.id,
+      event: observation ? "observe_failed" : "operation_result",
+      step: observation ? "observe" : this.step,
+      code: diagnosticCode(e),
+      retryable: e instanceof ObservationError,
+    });
   }
   private archiveCompleted(t: Task) {
     t.archive = publishSafely(this.store.root, t.id);
@@ -927,7 +968,7 @@ export class Conversation {
           )
           ?.observedModel?.trim() ||
         "";
-
+      this.step = "model";
       const observed = await this.verify(b, {
         url: p.url,
         target: t.binding!.target,
@@ -937,7 +978,7 @@ export class Conversation {
       r.observedModel = observed.observedModel;
       p = await this.observe(t, b);
       checkDraft(p);
-
+      this.step = "fill";
       if (!p.draft?.trim()) await b.run("fill", "#prompt-textarea", prompt);
       this.guard(t);
       p = await this.observe(t, b);
@@ -958,7 +999,7 @@ export class Conversation {
       )
         throw new Error("DRAFT_CHANGED");
       checkDraft(p);
-
+      this.step = "model";
       const finalModel = await this.verify(b, {
         url: p.url,
         target: t.binding!.target,
@@ -981,14 +1022,16 @@ export class Conversation {
       await recovery?.beforeSend();
       r.error = undefined;
       // Durable write precedes the first action capable of submitting a message.
+      // The submitting diagnostic waits until click returns so the sync cannot
+      // widen the gap between the saved intent and the click.
       r.state = "submitting";
       r.submittedAt = new Date().toISOString();
-
-      this.save(t);
+      this.step = "persist";
+      this.save(t, false);
       this.guard(t);
-
+      this.step = "send";
       await sendPrompt(b, p);
-
+      this.notePhase(t.id, r.id, "submitting");
       this.guard(t);
       for (let n = 0; n < 12; n++) {
         await this.reconcile(t, b);
@@ -997,6 +1040,7 @@ export class Conversation {
       }
       return t;
     } catch (e) {
+      if (r.state === "submitting") this.notePhase(t.id, r.id, "submitting");
       if (r.state === "submitting") r.state = "delivery_unknown";
       if (
         r.userMessageId &&
@@ -1300,6 +1344,14 @@ export class Conversation {
         this.save(t);
         return t.cleanup;
       }).catch((error) => {
+        if (typeof t.currentRun === "string")
+          this.diagnostics.failure({
+            taskId: t.id,
+            runId: t.currentRun,
+            event: "operation_result",
+            step: "release",
+            code: diagnosticCode(error),
+          });
         if (error instanceof PageNotIdleError) {
           t.cleanup = {
             closed: false,
@@ -1523,7 +1575,16 @@ export class Conversation {
         },
       );
     } catch (e) {
+      this.step = "naming";
       t.organization = { ...t.organization, verified: false, error: String(e) };
+      if (typeof t.currentRun === "string")
+        this.diagnostics.failure({
+          taskId: t.id,
+          runId: t.currentRun,
+          event: "operation_result",
+          step: "naming",
+          code: diagnosticCode(e),
+        });
     } finally {
       await this.releaseOrganizationObserver(t);
     }
