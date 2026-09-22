@@ -246,31 +246,16 @@ export async function verifyUpgrade(
       /UPGRADE_LAYOUT_UNKNOWN/,
     );
     writeFileSync(layoutFile, layout);
-    const controller = join(bin, "agent-browser"),
-      oldController = readlinkSync(controller);
-    rmSync(controller);
-    symlinkSync("/bin/true", controller);
-    assert.match(
-      await run([...cliArgs, "upgrade", "--version", pkg.version], {
-        failure: true,
-      }),
-      /LINK_NOT_OWNED/,
-    );
-    assert.equal(readlinkSync(cli), active);
-    rmSync(controller);
-    symlinkSync(oldController, controller);
-
     // A higher-version local release proves the no-argument upgrade selects
     // latest. The candidate's version probe is a tiny executable fixture.
     const next = "99.0.1-rc.1";
     const directory = `convorel-${next}-linux-${process.arch}`;
     mkdirSync(join(fixture, directory, "bin"), { recursive: true });
-    for (const name of ["convorel", "agent-browser"])
-      writeFileSync(
-        join(fixture, directory, "bin", name),
-        `#!/bin/sh\necho ${next}\n`,
-        { mode: 0o755 },
-      );
+    writeFileSync(
+      join(fixture, directory, "bin/convorel"),
+      `#!/bin/sh\necho ${next}\n`,
+      { mode: 0o755 },
+    );
     await run([
       "tar",
       "-czf",

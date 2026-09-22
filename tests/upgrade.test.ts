@@ -67,6 +67,7 @@ test("source checkout upgrade gives git pull guidance without downloading", asyn
 
 test("installer keeps prior versions and rolls back failed activation", async () => {
   const {
+    existsSync,
     mkdtempSync,
     mkdirSync,
     writeFileSync,
@@ -107,12 +108,6 @@ test("installer keeps prior versions and rolls back failed activation", async ()
       { mode: 0o755 },
     );
     if (unsafe) symlinkSync("/bin/sh", join(contents, "bin/agent-browser"));
-    else
-      writeFileSync(
-        join(contents, "bin/agent-browser"),
-        "#!/bin/sh\nexit 0\n",
-        { mode: 0o755 },
-      );
     expect(
       (
         await run([
@@ -157,9 +152,7 @@ test("installer keeps prior versions and rolls back failed activation", async ()
     expect(failed.code).not.toBe(0);
     expect(failed.text).toContain("UPGRADE_UNVERIFIED");
     expect(readlinkSync(join(bin, "convorel"))).toBe(current);
-    expect(readlinkSync(join(bin, "agent-browser"))).toBe(
-      current.replace(/convorel$/, "agent-browser"),
-    );
+    expect(existsSync(join(bin, "agent-browser"))).toBe(false);
     expect(readdirSync(join(prefix, "versions")).length).toBe(2);
     await artifact("3.0.0", false, true);
     expect((await install()).text).toContain("ARTIFACT_INVALID");

@@ -26,7 +26,7 @@ The two channels are independent. A browser-only conversation works without the 
 ## Reuse
 
 - Browser model checks and observed page extraction derive from `MarioJames/skill-foundry/skills/chatgpt-review` (Apache-2.0).
-- `agent-browser` 0.34.0 remains the browser controller. CDP is its transport, not a second competing controller.
+- `agent-browser` remains the browser controller. `init` finds the command on `PATH`, checks that it runs, and saves its absolute path in `browser.executable`. CDP is its transport, not a second competing controller. The release does not include the controller.
 - The SDK v1 maintenance line is retained to match the inspected existing MCP design. It provides standard stdio framing, discovery and tool validation; we do not implement MCP JSON-RPC manually.
 - Sensitive-file patterns draw from `XiaoDuoYa/codex-with-chatgpt` (MIT). Its desktop browser, Cloudflare and OAuth deployment are not copied.
 - No mandatory Herdr or memory database. Stdout JSON and process exit status are the integration contract. Optional Herdr guidance is loaded from the skill reference only when needed and reuses the installed Herdr skill/CLI; an unresolved caller falls back to host processes or bounded waits. Notifications never replace an exact run-bound result.
@@ -119,7 +119,7 @@ Reads observe the live filesystem. Per-file hashes and timestamps identify obser
 
 ## Distribution
 
-A standalone Bun package with source, lockfile, CLI, the chatgpt-review skill and references, tests, CI, architecture, security and setup docs. The skills install command copies the complete bundled skill tree, supports Codex/Claude Code individually or together and user/project scope (default user), or an explicit `--dir` skill root, and rejects pre-existing same-name canonical or selected-Agent destinations before installation. It runs before State/config initialization and verifies the installed entry point. setup optionally installs after initialization and before doctor when --agent is supplied. Skills CLI can also install the skill independently; neither route requires a runtime adjacent to the skill. Linux is the initial validated platform. Package installation can include the pinned agent-browser binary without downloading a browser. Chrome and tunnel-client remain user-controlled prerequisites. Publishing npm/GitHub releases is separate from local implementation.
+A standalone Bun package with source, lockfile, CLI, the chatgpt-review skill and references, tests, CI, architecture, security and setup docs. The skills install command copies the complete bundled skill tree, supports Codex/Claude Code individually or together and user/project scope (default user), or an explicit `--dir` skill root, and rejects pre-existing same-name canonical or selected-Agent destinations before installation. It runs before State/config initialization and verifies the installed entry point. setup optionally installs after initialization and before doctor when --agent is supplied. Skills CLI can also install the skill independently; neither route requires a runtime adjacent to the skill. Linux is the initial validated platform. Chrome, agent-browser and tunnel-client remain user-controlled prerequisites. Publishing npm/GitHub releases is separate from local implementation.
 
 ## Sources
 

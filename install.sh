@@ -25,7 +25,7 @@ usage() {
 install.sh [--version TAG] [--prefix DIR] [--bin-dir DIR] [--release-base URL] [--uninstall]
   --version TAG     install a specific tag, e.g. v0.2.0 (default: latest release)
   --prefix DIR      installation directory (default: ~/.local/lib/convorel)
-  --bin-dir DIR     directory to place the convorel and agent-browser links
+  --bin-dir DIR     directory to place the convorel link
   --dist-dir DIR    use already built artifacts from DIR instead of downloading
   --release-base URL  release download base (default: GitHub Releases)
   --uninstall       remove the installed executables only
@@ -156,12 +156,10 @@ fetch() {
 # Validate all destinations before any download or change to an active link.
 mkdir -p "$install_dir" "$bin_dir"
 [ ! -L "$install_dir/versions" ] || die "INSTALL_PATH_INVALID: versions must not be a symlink"
-for name in convorel agent-browser; do
-  link="$bin_dir/$name"
-  if [ -e "$link" ] || [ -L "$link" ]; then
-    owned_link "$link" || die "LINK_NOT_OWNED: refusing to replace $link"
-  fi
-done
+link="$bin_dir/convorel"
+if [ -e "$link" ] || [ -L "$link" ]; then
+  owned_link "$link" || die "LINK_NOT_OWNED: refusing to replace $link"
+fi
 staging=""
 source_dir=""
 target=""
@@ -169,17 +167,14 @@ link_staging=""
 committed=0
 switched=0
 old_convorel=""
-old_browser=""
 [ ! -L "$bin_dir/convorel" ] || old_convorel="$(readlink "$bin_dir/convorel")"
-[ ! -L "$bin_dir/agent-browser" ] || old_browser="$(readlink "$bin_dir/agent-browser")"
 cleanup() {
   status=$?
   trap - EXIT
   if [ "$committed" = 0 ]; then
     if [ "$switched" = 1 ]; then
-      for name in convorel agent-browser; do
+      for name in convorel; do
         old="$old_convorel"
-        [ "$name" != agent-browser ] || old="$old_browser"
         if [ -n "$old" ]; then
           ln -s -- "$old" "$link_staging/rollback-$name"
           mv -Tf -- "$link_staging/rollback-$name" "$bin_dir/$name"
@@ -240,9 +235,8 @@ tar -tvzf "$source_dir/$archive" > "$staging/types"
 awk 'substr($0,1,1) != "-" && substr($0,1,1) != "d" {exit 1}' "$staging/types" || die "ARTIFACT_INVALID: archive contains links or special files"
 tar -xzf "$source_dir/$archive" -C "$staging" --no-same-owner --no-same-permissions
 extracted="$staging/${archive%.tar.gz}"
-[ -f "$extracted/bin/convorel" ] && [ -x "$extracted/bin/convorel" ] &&
-  [ -f "$extracted/bin/agent-browser" ] && [ -x "$extracted/bin/agent-browser" ] ||
-  die "ARTIFACT_INVALID: the archive does not contain both executables"
+[ -f "$extracted/bin/convorel" ] && [ -x "$extracted/bin/convorel" ] ||
+  die "ARTIFACT_INVALID: the archive does not contain bin/convorel"
 installed="$(timeout 30 "$extracted/bin/convorel" --version)" || die "VERSION_MISMATCH: downloaded binary could not report its version"
 [ "$installed" = "$release" ] || die "VERSION_MISMATCH: downloaded binary reports $installed, expected $release"
 
@@ -253,19 +247,20 @@ mv -- "$extracted"/* "$target/"
 json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//\"/\\\"}"; printf '%s' "$value"; }
 printf '{"version":1,"binDir":"%s"}\n' "$(json_escape "$bin_dir")" > "$staging/layout.json"
 link_staging="$(mktemp -d "$bin_dir/.convorel-links.XXXXXXXX")"
-for name in convorel agent-browser; do
-  ln -s -- "$target/bin/$name" "$link_staging/$name"
-done
+ln -s -- "$target/bin/convorel" "$link_staging/convorel"
 switched=1
-for name in convorel agent-browser; do
-  mv -Tf -- "$link_staging/$name" "$bin_dir/$name"
-done
+mv -Tf -- "$link_staging/convorel" "$bin_dir/convorel"
 installed="$(timeout 30 "$bin_dir/convorel" --version)" || die "UPGRADE_UNVERIFIED: installed binary failed"
 [ "$installed" = "$release" ] || die "UPGRADE_UNVERIFIED: installed binary version differs"
 mv -Tf -- "$staging/layout.json" "$install_dir/layout.json"
 committed=1
+if owned_link "$bin_dir/agent-browser"; then
+  rm -f -- "$bin_dir/agent-browser"
+  say "removed the previously bundled agent-browser link"
+fi
 [ -z "$old_convorel" ] || say "previous release retained at $old_convorel"
 say "installed convorel $installed -> $bin_dir/convorel"
+say "install agent-browser separately; init records the command it finds on PATH"
 case ":$PATH:" in *":$bin_dir:"*) ;; *)
   say "add it to PATH with: export PATH=\"$bin_dir:\$PATH\""
   ;;

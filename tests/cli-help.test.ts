@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { childEnv } from "../src/command.ts";
@@ -8,7 +14,14 @@ import { helpTopics, renderHelp } from "../src/cli-help.ts";
 const cli = join(import.meta.dir, "../src/cli.ts");
 const root = mkdtempSync(join(tmpdir(), "convorel-cli-help-"));
 const project = join(root, "project");
+const browserBin = join(root, "bin");
 mkdirSync(project);
+mkdirSync(browserBin);
+writeFileSync(
+  join(browserBin, "agent-browser"),
+  "#!/bin/sh\nprintf '%s\\n' 'agent-browser 9.9.9'\n",
+  { mode: 0o755 },
+);
 
 async function run(args: string[]) {
   const child = Bun.spawn(
@@ -24,7 +37,7 @@ async function run(args: string[]) {
     ],
     {
       cwd: join(import.meta.dir, ".."),
-      env: childEnv(),
+      env: { ...childEnv(), PATH: browserBin },
       stdout: "pipe",
       stderr: "pipe",
     },

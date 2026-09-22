@@ -12,7 +12,7 @@ Retain upstream license notices when adapting code. Do not commit task state, co
 
 ## Releasing
 
-Releases are standalone Linux executables built by `.github/workflows/release.yml`, never a manual upload. `bun run dist` produces `dist/convorel-<version>-linux-{x64,arm64}.tar.gz` plus `sha256sums.txt`; each archive carries `bin/convorel`, the pinned `bin/agent-browser` and license notices. `bun run test:install` builds the current platform, runs `install.sh --dist-dir`, and drives the installed executable offline; it rewrites `dist/`, so run it before `bun run dist` when both are needed.
+Releases are standalone Linux executables built by `.github/workflows/release.yml`, never a manual upload. `bun run dist` produces `dist/convorel-<version>-linux-{x64,arm64}.tar.gz` plus `sha256sums.txt`; each archive carries `bin/convorel` and license notices. `agent-browser` is detected on `PATH` by `init` and is not part of the archive. `bun run test:install` builds the current platform, runs `install.sh --dist-dir`, and drives the installed executable offline; it rewrites `dist/`, so run it before `bun run dist` when both are needed.
 
 To publish: bump `version` in `package.json` on `main`, commit, then push a tag `v<version>` (a tag containing `-` becomes a prerelease). The workflow refuses a tag that does not match `package.json`, reruns check/format/package/install acceptance, attests provenance for every artifact, and creates the GitHub Release with an install snippet and checksums. `install.sh` resolves `latest` through `sha256sums.txt`, so every release must ship that file. Rerunning the workflow on the same tag replaces the assets.
 

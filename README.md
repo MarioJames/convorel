@@ -56,7 +56,7 @@ Convorel 把 ChatGPT 接入本地开发流程。让 Codex 或 Claude Code 带着
 
 ### 1. 安装
 
-从 GitHub Release 安装独立可执行文件，自带固定版本的浏览器控制器，不需要 Bun 或 Node：
+从 GitHub Release 安装独立可执行文件，不需要 Bun 或 Node。浏览器控制使用本机 PATH 上的 `agent-browser`，`init` 会检测并记下它的路径：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash

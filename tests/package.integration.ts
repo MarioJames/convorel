@@ -159,6 +159,12 @@ try {
       `import {command} from ${JSON.stringify(join(installed, "src/command.ts"))}; console.log(await command(['agent-browser','--version']));`,
     ],
     temp,
+    {
+      env: {
+        ...env,
+        PATH: `${join(consumer, "node_modules/.bin")}:${process.env.PATH ?? ""}`,
+      },
+    },
   );
   assert.match(browserVersion, /agent-browser 0\.34\.0/);
   writeFileSync(join(workspace, "proof.txt"), "packaged MCP evidence\n");
@@ -202,7 +208,7 @@ try {
         "Claude skill link and repeat-install overwrite protection",
         "space paths",
         "non-project cwd",
-        "packaged agent-browser",
+        "PATH agent-browser",
         "SDK stdio read",
       ],
     }),

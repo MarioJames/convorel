@@ -22,7 +22,7 @@ flowchart LR
 | 网页对话            | 已登录浏览器、CDP、可用模型                                    | 你发送的提示词和上下文   |
 | 网页对话 + 本地代码 | 上述条件，以及 tunnel-client、隧道凭据和 ChatGPT developer app | 允许目录中通过过滤的内容 |
 
-**仅打开 CDP 不会启用代码访问。** 网页对话无需本项目使用 API key；隧道需要自己的 runtime API key。无需 OpenAI 桌面端、Herdr 或记忆服务，也不需要全局安装 agent-browser。
+**仅打开 CDP 不会启用代码访问。** 网页对话无需本项目使用 API key；隧道需要自己的 runtime API key。无需 OpenAI 桌面端、Herdr 或记忆服务。浏览器操作使用本机已安装的 `agent-browser`，`init` 会检测它并保存路径。
 
 ## 快速开始
 
@@ -34,7 +34,7 @@ flowchart LR
 curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-安装脚本下载当前架构的 Release 压缩包，按该版本的 `sha256sums.txt` 校验后解压到 `~/.local/lib/convorel`，并把 `convorel` 与固定版本的 `agent-browser` 链接到 `~/.local/bin`；不使用 sudo。仅支持参数 `--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`，安装选项不接受环境输入。卸载只移除可执行文件，不动会话状态、偏好和已安装技能。产物带 GitHub 构建来源证明，可用 `gh attestation verify 压缩包 --repo MarioJames/convorel` 核验。
+安装脚本下载当前架构的 Release 压缩包，按该版本的 `sha256sums.txt` 校验后解压到 `~/.local/lib/convorel`，并把 `convorel` 链接到 `~/.local/bin`；不使用 sudo，也不安装 `agent-browser`。仅支持参数 `--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`，安装选项不接受环境输入。卸载只移除可执行文件，不动会话状态、偏好和已安装技能。产物带 GitHub 构建来源证明，可用 `gh attestation verify 压缩包 --repo MarioJames/convorel` 核验。
 
 从源码运行时：`git clone https://github.com/MarioJames/convorel.git`，以下命令把 `convorel` 换成 `bun --no-env-file src/cli.ts`，初始化改用 `bun --no-env-file setup.ts`（它会先执行 `bun install --frozen-lockfile`）。
 
@@ -109,7 +109,7 @@ convorel --config-dir /private/config --state-dir /private/state conversation li
 | `tunnel.id`                    | 默认隧道 ID；单次命令可用 `--tunnel-id` 指定                       |
 | `tunnel.apiKey`                | 隧道运行时密钥，配置输出不回显                                     |
 | `mcp.roots`                    | 允许读取的目录 JSON 数组                                           |
-| `browser.executable`           | agent-browser 控制器的可执行文件路径，不是 Chrome 路径             |
+| `browser.executable`           | `init` 保存的 `agent-browser` 绝对路径，不是 Chrome 路径           |
 | `browser.serial`               | `true` 或 `false`。`true` 使用全局浏览器操作锁                     |
 | `browser.actionIntervalMs`     | 动作间隔，1–10000 的整数毫秒，默认 750                             |
 | `browser.navigationWaitMs`     | 导航或新建页面后的等待，1–10000 的整数毫秒，默认 1500              |

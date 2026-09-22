@@ -3,12 +3,13 @@
 import { strict as assert } from "node:assert";
 import {
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
@@ -39,6 +40,15 @@ const cliArgs = [
   state,
 ];
 for (const directory of [home, workspace, shared]) mkdirSync(directory);
+const controller = join(
+  source,
+  "node_modules/agent-browser/bin",
+  `agent-browser-${platform}`,
+);
+const controllerBin = join(temp, "controller");
+mkdirSync(controllerBin);
+symlinkSync(controller, join(controllerBin, "agent-browser"));
+env.PATH = `${controllerBin}:${env.PATH ?? ""}`;
 // Prove uninstall never reaches conversation state, preferences or skills.
 mkdirSync(join(home, ".local/share/convorel"), { recursive: true });
 writeFileSync(join(home, ".local/share/convorel/keep.json"), "{}\n");
@@ -98,14 +108,10 @@ try {
   const reported = JSON.parse(await run([...cliArgs, "version"]));
   assert.equal(reported.version, pkg.version);
   assert.equal(reported.runtime, "standalone");
-  assert.ok(
-    existsSync(reported.browserController) &&
-      lstatSync(reported.browserController).size > 1_000_000,
-    "the installed controller must be the packaged native binary",
-  );
-  assert.match(
-    await run([join(bin, "agent-browser"), "--version"]),
-    /0\.34\.0/,
+  assert.equal(existsSync(join(bin, "agent-browser")), false);
+  assert.equal(
+    statSync(reported.browserController).ino,
+    statSync(controller).ino,
   );
 
   await verifyUpgrade(run, prefix, bin, dist);
@@ -303,7 +309,7 @@ try {
       passed: true,
       platform,
       checks: [
-        "standalone archive with pinned browser controller",
+        "standalone archive without a bundled browser controller",
         "offline install from a local directory",
         "standalone version check, upgrade, failure preservation and retained releases",
         "config preferences read back by a re-entered MCP child",

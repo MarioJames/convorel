@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Release artifacts for GitHub Releases: bun run dist [target,...]
 // Each target becomes convorel-<version>-<platform>.tar.gz carrying the standalone
-// executable and the pinned browser controller, so an install needs no Bun or Node.
+// executable. agent-browser is not included; init finds the one on PATH.
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -15,7 +15,6 @@ import { childEnv } from "../src/command.ts";
 const root = resolve(import.meta.dir, "..");
 const out = join(root, "dist");
 const pkg = await Bun.file(join(root, "package.json")).json();
-const agentBrowserVersion = pkg.dependencies["agent-browser"];
 const commit = process.env.GITHUB_SHA || "development";
 const targets = (process.argv[2] || "bun-linux-x64,bun-linux-arm64")
   .split(",")
@@ -61,27 +60,12 @@ for (const target of targets) {
   );
   const code = await build.exited;
   if (code) throw new Error(`BUILD_FAILED: ${target} exited ${code}`);
-  // agent-browser ships every platform binary inside one package, so the
-  // sidecar is the exact version bun.lock pinned; no download can drift.
-  const controller = join(
-    root,
-    "node_modules/agent-browser/bin",
-    `agent-browser-${platform}`,
-  );
-  try {
-    copyFileSync(controller, join(staging, "bin/agent-browser"));
-  } catch (error: any) {
-    throw new Error(
-      `AGENT_BROWSER_ARTIFACT_MISSING: ${controller} (${error.code}); run bun install`,
-    );
-  }
   chmodSync(join(staging, "bin/convorel"), 0o755);
-  chmodSync(join(staging, "bin/agent-browser"), 0o755);
   for (const file of ["LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.md"])
     copyFileSync(join(root, file), join(staging, "share/doc/convorel", file));
   writeFileSync(
     join(staging, "share/doc/convorel/versions.txt"),
-    `convorel ${pkg.version}\nagent-browser ${agentBrowserVersion}\nbun runtime ${target}\ncommit ${commit}\n`,
+    `convorel ${pkg.version}\nbun runtime ${target}\ncommit ${commit}\n`,
   );
   const archive = `${directory}.tar.gz`,
     tar = Bun.spawn(["tar", "-czf", archive, "-C", out, directory], {
@@ -103,7 +87,6 @@ console.log(
   JSON.stringify({
     version: pkg.version,
     commit,
-    agentBrowser: agentBrowserVersion,
     built: targets,
     directory: out,
     artifacts: [

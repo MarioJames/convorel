@@ -1,8 +1,6 @@
 import { runtimePathArgs } from "./paths.ts";
 import { preference } from "./user-config.ts";
-import { createRequire } from "node:module";
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 // Bun's standalone executable serves embedded modules and --asset files from a
 // virtual root, where neither node_modules resolution nor ../ relative paths work.
@@ -38,59 +36,39 @@ function interpret(path: string): string[] {
   const bun = COMPILED ? Bun.which("bun") : process.execPath;
   if (!bun)
     throw new Error(
-      "BUN_REQUIRED: install bun, configure browser.executable with the native binary, or add agent-browser to PATH",
+      "BUN_REQUIRED: install bun, or configure browser.executable with the native agent-browser binary",
     );
   return [bun, "--no-env-file", path];
+}
+
+/** The saved controller, or the agent-browser command currently on PATH. */
+export function agentBrowserExecutable() {
+  const configured = preference("browser.executable");
+  if (configured) return configured;
+  const found = Bun.which("agent-browser");
+  if (!found)
+    throw new Error(
+      "AGENT_BROWSER_UNAVAILABLE: install agent-browser and put it on PATH, then run init",
+    );
+  return found;
 }
 
 /** Where the controller resolves to, reported by a diagnostic that must not fail. */
 export function agentBrowserLocation() {
   try {
-    return agentBrowserInvocation()[0];
+    return agentBrowserExecutable();
   } catch {
     return "unresolved";
   }
 }
 
 let browser: string[] | undefined;
-/** The browser controller is a pinned native binary or the packaged JS launcher. */
+/** Use the controller init saved, otherwise the agent-browser command on PATH. */
 export function agentBrowserInvocation(): string[] {
-  if (!browser) {
-    const sidecar = () => {
-      // The release layout installs the native binary beside the real
-      // executable, so a PATH symlink has to be resolved before looking beside it.
-      const path = join(
-        dirname(realpathSync(process.execPath)),
-        "agent-browser",
-      );
-      return existsSync(path) ? path : undefined;
-    };
-    const packaged = () => {
-      try {
-        return join(
-          dirname(
-            createRequire(import.meta.url).resolve(
-              "agent-browser/package.json",
-            ),
-          ),
-          "bin/agent-browser.js",
-        );
-      } catch {
-        return undefined;
-      }
-    };
-    // Without the sidecar check a global agent-browser would outrank the version
-    // this package pins, so it only applies to an installed standalone binary.
-    const candidates = [
-      preference("browser.executable"),
-      ...(COMPILED ? [sidecar()] : [packaged(), sidecar()]),
-      Bun.which("agent-browser") || undefined,
-    ].filter((path): path is string => !!path);
-    if (!candidates.length)
-      throw new Error(
-        "AGENT_BROWSER_UNAVAILABLE: reinstall convorel or configure browser.executable",
-      );
-    browser = interpret(candidates[0]);
-  }
+  if (!browser) browser = interpret(agentBrowserExecutable());
   return browser;
+}
+
+export function resetAgentBrowserInvocation() {
+  browser = undefined;
 }

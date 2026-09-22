@@ -31,7 +31,7 @@ const configRules = [
   "  tunnel.id                     tunnel_ plus 32 hex digits. A command's --tunnel-id overrides it once.",
   "  tunnel.apiKey                 Runtime tunnel key. Command output says only whether it is set.",
   "  mcp.roots                     JSON array of 1 to 16 absolute paths or ~/ paths.",
-  "  browser.executable            agent-browser controller path, not the Chrome path.",
+  "  browser.executable            Absolute agent-browser path saved by init. It is not Chrome.",
   "  browser.serial                true or false. true uses one global browser lock.",
   "  browser.actionIntervalMs      Integer milliseconds from 1 to 10000. Default 750.",
   "  browser.navigationWaitMs      Integer milliseconds from 1 to 10000. Default 1500.",
@@ -665,7 +665,7 @@ const pages: Page[] = [
     [
       "setup --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claude-code]",
     ],
-    "Save the workspace and Chrome endpoint, optionally install the bundled skill, then run doctor. convorel setup does not install dependencies.",
+    "Find agent-browser on PATH, save its path, then save the workspace and Chrome endpoint. It optionally installs the bundled skill and runs doctor. convorel setup does not install dependencies or agent-browser.",
     [
       [
         "--workspace PATH",
@@ -682,13 +682,14 @@ const pages: Page[] = [
     ],
     [
       "bun --no-env-file setup.ts is the source-checkout bootstrap. It installs the locked dependencies and then runs this command.",
+      "agent-browser must already be on PATH. init runs it once and saves that absolute path as browser.executable. Later commands use the saved path.",
       "Model and project preferences are changed with config set, not with setup flags.",
     ],
   ),
   page(
     ["init"],
     ["init --workspace PATH --cdp PORT_OR_HTTP"],
-    "Save the workspace and Chrome endpoint in this state directory. An existing binding to a different workspace or endpoint is refused.",
+    "Find agent-browser on PATH, check that it runs, and save its absolute path. Then save the workspace and Chrome endpoint. An existing binding to a different workspace or endpoint is refused.",
     [
       ["--workspace PATH", "Absolute project directory."],
       [
@@ -698,6 +699,7 @@ const pages: Page[] = [
     ],
     [
       "The state directory must be outside the workspace. Use another --state-dir for a second binding. Set model, project, and other preferences with config set.",
+      "If browser.executable is already set, init checks that saved path instead of searching PATH again. A missing or unidentified agent-browser stops init before the workspace binding is written.",
     ],
   ),
   page(

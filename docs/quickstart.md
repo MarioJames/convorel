@@ -4,7 +4,7 @@ Runnable v0.2 commands; consult validation.md for the verified environment and r
 
 ## Prerequisites
 
-- Linux x64 or arm64 (glibc), Git, an installed Google Chrome. Standalone installation and upgrade also require `flock` from util-linux. A source checkout additionally needs Bun >= 1.3 and Node >= 24 (agent-browser package requirement).
+- Linux x64 or arm64 (glibc), Git, an installed Google Chrome, and `agent-browser` on `PATH`. Standalone installation and upgrade also require `flock` from util-linux. A source checkout additionally needs Bun >= 1.3 and Node >= 24.
 - Your own ChatGPT account with access to the selected model. The default selects Latest and the Pro endpoint of Power without pinning a version. Override with `convorel config set model MODEL`; other visible models are verified after manual selection.
 - For code tools: your own OpenAI tunnel, runtime key and ChatGPT developer app. Browser-only conversation does not need these.
 
@@ -14,7 +14,7 @@ Runnable v0.2 commands; consult validation.md for the verified environment and r
 curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-The installer downloads the release archive for the current architecture, verifies it against that release's `sha256sums.txt`, unpacks it under `~/.local/lib/convorel` and links `convorel` plus its pinned `agent-browser` into `~/.local/bin`. Its only installer options are `--version vX.Y.Z`, `--prefix PATH`, `--bin-dir PATH`, `--dist-dir PATH`, `--uninstall` and `--release-base URL`; installer options are not read from environment variables. It never uses sudo or touches conversation state, preferences or installed skills. Release artifacts carry GitHub build provenance: `gh attestation verify convorel-<version>-linux-x64.tar.gz --repo MarioJames/convorel`. No published npm package is assumed.
+The installer downloads the release archive for the current architecture, verifies it against that release's `sha256sums.txt`, unpacks it under `~/.local/lib/convorel` and links `convorel` into `~/.local/bin`. It does not install `agent-browser`. Its only installer options are `--version vX.Y.Z`, `--prefix PATH`, `--bin-dir PATH`, `--dist-dir PATH`, `--uninstall` and `--release-base URL`; installer options are not read from environment variables. It never uses sudo or touches conversation state, preferences or installed skills. Release artifacts carry GitHub build provenance: `gh attestation verify convorel-<version>-linux-x64.tar.gz --repo MarioJames/convorel`. No published npm package is assumed.
 
 From a source checkout, `bun --no-env-file setup.ts ...` runs `bun install --frozen-lockfile` before the same initialization. The commands below use the installed `convorel`; in a checkout substitute `bun --no-env-file src/cli.ts`.
 
@@ -37,7 +37,7 @@ convorel setup --workspace /absolute/path/to/repo --cdp 9222
 
 Preferences default to `~/.config/convorel/preferences.json`; task state defaults to `~/.local/share/convorel`. Use `convorel [--config-dir PATH] [--state-dir PATH] COMMAND` to select different directories, with global options before the command. Keep both directories outside MCP-shared roots. Configuration comes only from the preferences file, with no environment override. Use separate configuration and state directories for independently configured workspaces.
 
-`setup` initializes private configuration, optionally installs the skill and checks CDP/MCP; the source bootstrap additionally installs locked dependencies. Agent skill installation is described below. Missing CDP produces a nonzero doctor result while preserving configuration. Bun, Git and Chrome remain user-managed prerequisites.
+`setup` finds `agent-browser` on `PATH`, saves that path, initializes private configuration, optionally installs the skill and checks CDP/MCP; the source bootstrap additionally installs locked dependencies. Agent skill installation is described below. Missing `agent-browser` stops initialization before the workspace binding is saved. Missing CDP produces a nonzero doctor result while preserving configuration. Bun, Git, Chrome and agent-browser remain user-managed prerequisites.
 
 ## Manage a persistent conversation
 

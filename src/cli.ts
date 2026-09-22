@@ -17,9 +17,15 @@ import { serve } from "./mcp.ts";
 import { runTunnel, tunnelInstructions, recoverTunnelLock } from "./tunnel.ts";
 import { command, required, childEnv } from "./command.ts";
 import { jsonPrinter } from "./output.ts";
-import { preference } from "./user-config.ts";
+import { preference, writePreference } from "./user-config.ts";
 import { readDiagnostics } from "./diagnostics.ts";
-import { agentBrowserLocation, COMPILED, selfExec } from "./runtime.ts";
+import {
+  agentBrowserExecutable,
+  agentBrowserLocation,
+  COMPILED,
+  resetAgentBrowserInvocation,
+  selfExec,
+} from "./runtime.ts";
 import { renderHelp } from "./cli-help.ts";
 import { conversationConfig } from "./config.ts";
 import { configCommand } from "./config-command.ts";
@@ -567,6 +573,14 @@ export async function main(args = process.argv.slice(2)) {
         );
     const config: Config = { version: 1, workspace, cdp };
     const effective = conversationConfig(config);
+    const executable = agentBrowserExecutable();
+    const identified = (await command([executable, "--version"])).trim();
+    if (!/^agent-browser\s+\S+/.test(identified))
+      throw new Error(
+        `AGENT_BROWSER_UNAVAILABLE: ${executable} did not identify itself as agent-browser`,
+      );
+    const recorded = writePreference("browser.executable", executable);
+    resetAgentBrowserInvocation();
     await store.locked(async () => {
       if (store.has("config")) {
         const old = store.read<Config>("config");
@@ -581,6 +595,7 @@ export async function main(args = process.argv.slice(2)) {
       ...effective,
       modelPolicy: effective.model || "latest-pro",
       stateDirectory: store.root,
+      agentBrowser: recorded.value,
     });
     return 0;
   }
