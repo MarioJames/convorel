@@ -102,19 +102,26 @@ convorel --config-dir /private/config --state-dir /private/state conversation li
 
 配置只从偏好文件读取，不接受环境覆盖。用 `config path` 查看文件位置，`config list`/`config get KEY` 查看配置，`config set KEY VALUE` 写入，`config unset KEY` 删除。配置键如下：
 
-| 配置键                         | 含义                                                   |
-| ------------------------------ | ------------------------------------------------------ |
-| `model`                        | 模型选择；未设置时使用 Latest + Power 末端 Pro         |
-| `project.url` / `project.name` | 目标项目 URL 与名称，必须成对配置                      |
-| `tunnel.id`                    | 默认隧道 ID；单次命令可用 `--tunnel-id` 指定           |
-| `tunnel.apiKey`                | 隧道运行时密钥，配置输出不回显                         |
-| `mcp.roots`                    | 允许读取的目录 JSON 数组                               |
-| `browser.executable`           | agent-browser 控制器的可执行文件路径，不是 Chrome 路径 |
-| `browser.serial`               | `true` 使用全局浏览器操作锁；`false` 按任务并行        |
-| `locks.taskWaitMs`             | 同任务操作锁的最大等待毫秒数，正整数                   |
-| `release.baseUrl`              | 版本检查与升级的发布下载基址，HTTP(S) URL              |
+| 配置键                         | 含义                                                               |
+| ------------------------------ | ------------------------------------------------------------------ |
+| `model`                        | 模型选择；未设置时使用 Latest + Power 末端 Pro                     |
+| `project.url` / `project.name` | 目标项目 URL 与名称，必须成对配置                                  |
+| `tunnel.id`                    | 默认隧道 ID；单次命令可用 `--tunnel-id` 指定                       |
+| `tunnel.apiKey`                | 隧道运行时密钥，配置输出不回显                                     |
+| `mcp.roots`                    | 允许读取的目录 JSON 数组                                           |
+| `browser.executable`           | agent-browser 控制器的可执行文件路径，不是 Chrome 路径             |
+| `browser.serial`               | `true` 或 `false`。`true` 使用全局浏览器操作锁                     |
+| `browser.actionIntervalMs`     | 动作间隔，1–10000 的整数毫秒，默认 750                             |
+| `browser.navigationWaitMs`     | 导航或新建页面后的等待，1–10000 的整数毫秒，默认 1500              |
+| `locks.taskWaitMs`             | 同任务操作锁的最大等待毫秒数，正整数                               |
+| `release.baseUrl`              | HTTP(S) 基址，不能带凭据、query 或 fragment                        |
+| `diagnostics.enabled`          | 未设置或 `true` 时记录诊断；`false` 关闭。其他值或偏好读失败也关闭 |
 
-例如 `convorel config set browser.serial true`、`convorel config set locks.taskWaitMs 15000`。新任务读取当前配置并保存 snapshot；已有任务续谈保持原模型、项目等快照，修改配置不会迁移旧任务。
+例如 `convorel config set browser.serial true`、`convorel config set locks.taskWaitMs 15000`。配置值不能包含换行或 NUL。`tunnel.id` 是 `tunnel_` 加 32 位十六进制。`mcp.roots` 是 1–16 个绝对路径或 `~/` 路径的 JSON 数组。`tunnel.apiKey` 在配置输出中不回显。新任务读取当前配置并保存 snapshot；已有任务续谈保持原模型、项目等快照，修改配置不会迁移旧任务。
+
+`diagnostics --task ID [--run UUID] [--fields LIST]` 读取状态目录中的 `diagnostics.db`，不打开浏览器。`status` 为 `missing`、`empty` 或 `ok`，`complete` 恒为 false；这些记录不是完整历史，也不授权重试或重发。读不了库时退出 1。
+
+`conversation wait --timeout-seconds SECONDS` 限制本地等待，默认 1800。取值必须是大于 0、不超过 86400 的有限数值。超时只停止本地监视，不停止网页生成。
 
 ## 升级与版本检查
 

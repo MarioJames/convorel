@@ -20,7 +20,7 @@ convorel --help
 convorel init --workspace /absolute/project --cdp 9222
 ```
 
-Convorel 仅从偏好文件读取配置，不接受环境覆盖，不把个人配置写入技能。用 `convorel config set project.url URL` 和 `convorel config set project.name NAME` 成对设置项目；不要只提供其中一个或猜项目 URL。模型可选，默认 Latest + Power 末端 Pro；用户明确选择的模型通过 `convorel config set model MODEL` 配置。其他配置键为 `tunnel.id`、`tunnel.apiKey`、`mcp.roots`、`browser.executable`（agent-browser 控制器路径）、`browser.serial`（`true`/`false`）、`locks.taskWaitMs` 和 `release.baseUrl`。
+Convorel 仅从偏好文件读取配置，不接受环境覆盖，不把个人配置写入技能。用 `convorel config set project.url URL` 和 `convorel config set project.name NAME` 成对设置项目；不要只提供其中一个或猜项目 URL。模型可选，默认 Latest + Power 末端 Pro；用户明确选择的模型通过 `convorel config set model MODEL` 配置。其他配置键为 `tunnel.id`（`tunnel_` 加 32 位十六进制）、`tunnel.apiKey`、`mcp.roots`（1–16 个绝对路径或 `~/` 路径的 JSON 数组）、`browser.executable`（agent-browser 控制器路径）、`browser.serial`（`true`/`false`）、`browser.actionIntervalMs`（默认 750，1–10000）、`browser.navigationWaitMs`（默认 1500，1–10000）、`locks.taskWaitMs`（正整数）、`release.baseUrl`（不含凭据、query、fragment 的 HTTP(S) URL）和 `diagnostics.enabled`（未设置或 `true` 时记录，`false` 关闭；其他值或偏好读取失败也关闭）。`diagnostics --task ID [--run UUID] [--fields LIST]` 读取私有诊断库，不打开浏览器，也不授权重试或重发。
 
 新 task 保存配置 snapshot，续谈保留既有模型/项目；后续修改配置或重新初始化不会迁移旧 task。新任务显式使用 `create --workspace PATH`，避免默认工作区和实际审查对象不同。先用 `conversation status --id ID --workspace PATH` 核对绑定；不匹配时返回 `workspaceMismatch` 和退出码 2。仅未发送的首轮可用 `rebind-workspace --id ID --run RUN_ID --from-workspace OLD --workspace NEW` 修正元数据，原 prompt/run 保留。已发送或投递未知时检查原 prompt 的路径/revision 并继续同一 run；不改状态 JSON、不创建重复审查。工作区绑定不等于 MCP 允许根，也不会改写 prompt。`doctor` 仅验证本地 CDP/MCP，不证明 ChatGPT 已取得代码访问；不要擅自安装工具、扩大共享根或启动重复隧道。
 

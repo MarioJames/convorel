@@ -105,9 +105,28 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
         }),
       ),
     );
-    const listed = await run("list", "r1", ["--fields", "id,state"]);
-    expect(listed.code).toBe(0);
-    expect(listed.value).toEqual([{ id: "task", state: "waiting" }]);
+    const listChild = Bun.spawn(
+      [
+        process.execPath,
+        "--no-env-file",
+        join(import.meta.dir, "../src/cli.ts"),
+        "--state-dir",
+        store.root,
+        "--config-dir",
+        join(root, "prefs"),
+        "conversation",
+        "list",
+        "--fields",
+        "id,state",
+      ],
+      { env: childEnv(), stdout: "pipe", stderr: "pipe" },
+    );
+    const [listOut, listCode] = await Promise.all([
+      new Response(listChild.stdout).text(),
+      listChild.exited,
+    ]);
+    expect(listCode).toBe(0);
+    expect(JSON.parse(listOut)).toEqual([{ id: "task", state: "waiting" }]);
     for (const fields of ["", "id,", "summary.state"]) {
       const invalid = await run("finish", "r1", ["--fields", fields]);
       expect(invalid.code).toBe(1);

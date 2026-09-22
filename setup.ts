@@ -10,7 +10,7 @@ if (major < 1 || (major === 1 && minor < 3))
   throw new Error("Bun >= 1.3 required");
 if (process.argv.includes("--help")) {
   console.log(
-    "bun --no-env-file setup.ts [--config-dir PATH] [--state-dir PATH] --workspace PATH --cdp PORT [--agent codex|claude-code|codex,claude-code]\nInstalls locked local dependencies, initializes private state, optionally installs the bundled skill, and checks CDP/MCP. Model/project preferences use convorel config set.",
+    "bun --no-env-file setup.ts [--config-dir PATH] [--state-dir PATH] --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claude-code]\nInstalls locked local dependencies, then runs convorel setup. convorel setup itself does not install dependencies. It initializes private state, optionally installs the bundled skill, and checks CDP/MCP. Model/project preferences use convorel config set.",
   );
 } else {
   const args = consumeRuntimeArgs(process.argv.slice(2));
