@@ -342,7 +342,7 @@ bun --no-env-file src/cli.ts conversation retry --id first-question --run RUN_ID
 
 同一允许范围内切换审查项目，在 prompt 中提供新的完整路径，并为新任务显式指定对应 `--workspace`，无需重新初始化。`--state-dir PATH` 用于隔离任务状态、默认工作区和 CDP 配置；`--config-dir PATH` 选择独立偏好文件，两者必须放在命令前。确需独立配置与状态时，使用 MCP 允许目录之外的持久私有目录，例如 `convorel --config-dir /private/config --state-dir /private/state setup --workspace /absolute/project --cdp 9222`。不同读取边界的连接应分别配置允许根和独立隧道。
 
-完整命令见 `bun --no-env-file src/cli.ts --help`。
+完整命令见 `bun --no-env-file src/cli.ts --help`。某个命令的用途、参数和退出结果见 `convorel <command> --help`，子命令见 `convorel <group> <command> --help`。
 
 命名遇到首次改名交互之前的临时页面错误、元数据加载超时或 HTTP 429/5xx 时，`wait`/`resume` 自动恢复，总计最多 3 次，后两次间隔至少 5 秒、30 秒；重试次数与时间持久保存。`summary.organization` 单独报告核验状态、次数、错误与下一步，不把回复完成视为命名完成。权限错误、归属变化、标题保存结果不明或观察页清理未完成时停止自动重试，检查后可在原任务显式 `organize`。
 

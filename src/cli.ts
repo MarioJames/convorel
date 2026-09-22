@@ -20,6 +20,7 @@ import { jsonPrinter } from "./output.ts";
 import { preference } from "./user-config.ts";
 import { readDiagnostics } from "./diagnostics.ts";
 import { agentBrowserLocation, COMPILED, selfExec } from "./runtime.ts";
+import { renderHelp } from "./cli-help.ts";
 import { conversationConfig } from "./config.ts";
 import { configCommand } from "./config-command.ts";
 import { preferenceDirectory } from "./user-config.ts";
@@ -81,13 +82,6 @@ async function promptInput(o: Record<string, string>) {
   return new TextDecoder("utf-8", { fatal: true }).decode(
     Buffer.concat(chunks),
   );
-}
-const helpGroups = ["conversation", "skills", "config", "mcp", "tunnel"];
-function isHelpRequest(args: string[]) {
-  if (!args.length) return true;
-  if (["help", "--help", "-h"].includes(args[0])) return true;
-  if (args.includes("--help") || args.includes("-h")) return true;
-  return args.length === 1 && helpGroups.includes(args[0]);
 }
 const conversationFlags: Record<string, string[]> = {
   list: ["fields"],
@@ -159,102 +153,14 @@ function rejectUnknown(
           : `Unknown ${command} option --${key}`,
       );
 }
-const help = `convorel ${packageInfo.version} (Linux, ${COMPILED ? "standalone" : "source"})
-help|-h|--help
-setup --workspace PATH --cdp PORT_OR_HTTP [--agent codex|claude-code|codex,claude-code]
-init --workspace PATH --cdp PORT_OR_HTTP
-skills install --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH]
-skills install --dir PATH
-skills check|update --agent codex|claude-code|codex,claude-code [--scope user|project] [--cwd PATH] [--baseline-dir OLD_SKILL]
-skills check|update --dir PATH [--baseline-dir OLD_SKILL]
-start|stop|restart|status [--tunnel-id ID]
-logs [--tunnel-id ID] [--lines NUMBER] [--follow]
-diagnostics --task ID [--run UUID] [--fields LIST]
-upgrade [--version TAG]
-config list|get KEY|set KEY VALUE|unset KEY|path
-doctor
-version [--check]|--version
-conversation list
-conversation create --id ID (--prompt TEXT | --prompt-stdin true) [--type TYPE --topic TOPIC [--language en|zh]] [--request-id KEY] [--workspace PATH]
-conversation followup --id ID (--prompt TEXT | --prompt-stdin true) --request-id KEY [--workspace PATH]
-conversation start --id ID --run UUID [--workspace PATH]
-conversation migrate --id ID
-conversation status|resume|result --id ID [--run UUID]
-conversation wait --id ID [--run UUID] [--timeout-seconds SECONDS]
-conversation retry --id ID --run UUID [--workspace PATH]
-conversation recover-send --id ID --run UUID --expected-user-message ID --expected-url URL --prompt-file FILE --evidence-file FILE --rejected-at UNIX_MS --confirm-cloudflare-challenge true --reason TEXT [--workspace PATH]
-conversation clear-draft --id ID --run UUID --expected-draft-file FILE
-conversation rebind-workspace --id ID --run UUID --from-workspace PATH --workspace PATH
-conversation status --id ID [--run UUID] [--workspace EXPECTED_PATH]
-conversation finish --id ID --run UUID
-conversation attach --id ID --url CONVERSATION --user-message ID
-conversation organize --id ID --run UUID --type TYPE --topic TOPIC [--language en|zh]
-conversation archive --id ID | --all true
-conversation capture --id ID [--run UUID] [--workspace PATH]
-conversation history --id ID [--run UUID] [--coverage false] [--from PATH]
-conversation search --query TEXT [--task ID] [--role user|assistant] [--limit N] [--from PATH]
-conversation content --version UUID [--from PATH]
-conversation export --directory PATH
-doctor --local true
-help, -h, and --help print this text and do not initialize state, install skills,
-check versions, open a browser, start MCP, or write preferences.
-A bare conversation, skills, config, mcp, or tunnel prints this text.
-bun --no-env-file setup.ts installs locked dependencies and then runs setup.
-convorel setup does not install dependencies. --cdp is PORT_OR_HTTP for both.
-create/followup persist complete prompts in private STATE_DIR/tasks.db without browser access.
-Naming on create and organize is one optional group: --type and --topic together,
-with --language en|zh defaulting to en. followup rejects naming flags.
-start reads the exact saved run; repeating it never resends an already-started run.
-wait --timeout-seconds defaults to 1800. The value must be finite, greater than 0,
-and at most 86400. It stops local waiting only.
-Legacy JSON tasks are read-only until explicit migrate; stop old task writers before migration.
-The archive is a private SQLite store at STATE_DIR/conversations.db: prompts, copied Markdown,
-content versions and gaps. history/search/content --from PATH reads an exported archive
-or a renamed snapshot with no config, workspace or browser. Search uses FTS5 trigrams, or a
-literal scan below three characters, and reports only the versions a run currently selects:
-its prompt plus the captured Markdown, or the rendered copy until Markdown exists.
-'reply' stays empty until Markdown is captured; the rendered body is kept separately as
-'reply_rendered' and is not the archived reply. content --version reads back any single
-archived version, including superseded ones.
-diagnostics reads STATE_DIR/diagnostics.db without Chrome. status is missing, empty or ok.
-complete is false: retained rows are not a full history and do not authorize a retry.
-diagnostics.enabled unset or true records events; false disables recording. Any other
-stored value, or a failed preference read, also disables it.
-An unreadable store exits 1 instead of looking like an empty task.
-Exit codes: archive/capture report 1 when the archive failed and 2 on gaps or partial work;
-doctor --local reports 1 when the store fails its own integrity check and 2 when the local
-record is readable but incomplete. Reading commands exits 0 on a successful read.
-diagnostics and all conversation commands: [--fields id,currentRun,summary] selects
-top-level JSON fields. Lists select fields per item; missing fields are null.
-Exit codes are unchanged.
-mcp serve [--roots JSON_ARRAY]
-tunnel instructions|doctor|run|recover-lock [--tunnel-id ID]
-Configuration: convorel config set KEY VALUE. Keys: model, project.url, project.name,
-tunnel.id, tunnel.apiKey, mcp.roots, browser.executable, browser.serial,
-browser.actionIntervalMs, browser.navigationWaitMs, locks.taskWaitMs,
-release.baseUrl, diagnostics.enabled.
-Unset model: Latest + maximum Pro. project.url and project.name are both set or both empty.
-tunnel.id is tunnel_ plus 32 hex digits. --tunnel-id overrides it for one command.
-tunnel.apiKey is never echoed. mcp.roots is a JSON array of 1 to 16 absolute or ~/ paths.
-browser.serial and diagnostics.enabled accept true or false.
-browser.actionIntervalMs defaults to 750 and browser.navigationWaitMs to 1500;
-both are integers from 1 to 10000. locks.taskWaitMs is a positive integer.
-release.baseUrl is an HTTP(S) URL without credentials, query, or fragment.
-Preference values must not contain a newline or NUL. config path prints the preferences file.
-recover-lock --task ID | --watch-task ID | --registry true | --tabs true | --name NAME
-Pass exactly one selector. --registry and --tabs accept only true.
-Reclaims only a lock whose recorded process identity is dead; never a live owner's.
-Global options before COMMAND: --state-dir PATH --config-dir PATH.
-Defaults: ~/.local/share/convorel and ~/.config/convorel.
-Invoke as: bun --no-env-file src/cli.ts ... or the installed executable.
-No command installs system tools or creates OpenAI resources.`;
 export async function main(args = process.argv.slice(2)) {
   args = consumeRuntimeArgs(args);
-  const [area, sub, ...rest] = args;
-  if (isHelpRequest(args)) {
-    console.log(help);
+  const rendered = renderHelp(args);
+  if (rendered !== null) {
+    console.log(rendered);
     return 0;
   }
+  const [area, sub, ...rest] = args;
   if (!process.execArgv.includes("--no-env-file"))
     throw new Error(
       "ENV_AUTOLOAD_DISABLED_REQUIRED: invoke bun --no-env-file or the installed executable",

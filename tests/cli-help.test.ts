@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { childEnv } from "../src/command.ts";
+import { helpTopics, renderHelp } from "../src/cli-help.ts";
 
 const cli = join(import.meta.dir, "../src/cli.ts");
 const root = mkdtempSync(join(tmpdir(), "convorel-cli-help-"));
@@ -40,13 +41,38 @@ function errorOf(stderr: string) {
   return JSON.parse(stderr).error as string;
 }
 
-test("help requests print usage and do not create private directories", async () => {
+test("each command help explains that command and does not create private directories", async () => {
+  const rootHelp = renderHelp(["--help"])!;
+  expect(rootHelp).toContain("conversation start --id ID --run UUID");
+  expect(rootHelp).toContain("convorel <command> --help");
+  expect(rootHelp).toContain("diagnostics.enabled");
+  for (const topic of helpTopics()) {
+    const text = renderHelp(topic.args);
+    expect(text, topic.args.join(" ")).toContain(topic.usage);
+    expect(text).not.toBe(rootHelp);
+    expect(rootHelp).toContain(topic.usage);
+  }
+  const wait = renderHelp(["conversation", "wait", "--help"])!;
+  expect(wait).toContain("at most 86400");
+  expect(wait).toContain("generation in the browser continues");
+  expect(wait).not.toContain("mcp serve");
+  const configSet = renderHelp([
+    "config",
+    "set",
+    "model",
+    "help-must-not-write",
+    "--help",
+  ])!;
+  expect(configSet).toContain("browser.actionIntervalMs");
+  expect(configSet).not.toContain("conversation create");
+  expect(renderHelp(["help", "diagnostics"])).toContain("--fields LIST");
+  expect(() => renderHelp(["nope", "--help"])).toThrow("Unknown help topic");
   for (const args of [
     ["--help"],
     ["-h"],
     ["help"],
     ["conversation"],
-    ["conversation", "--help"],
+    ["conversation", "wait", "--help"],
     ["diagnostics", "--help"],
     ["config", "set", "model", "help-must-not-write", "--help"],
     ["config", "unset", "model", "--help"],
@@ -59,19 +85,8 @@ test("help requests print usage and do not create private directories", async ()
   ]) {
     const result = await run(args);
     expect(result.status, args.join(" ")).toBe(0);
-    expect(result.stdout, args.join(" ")).toContain(
-      "conversation wait --id ID [--run UUID] [--timeout-seconds SECONDS]",
-    );
-    expect(result.stdout).toContain(
-      "diagnostics --task ID [--run UUID] [--fields LIST]",
-    );
-    expect(result.stdout).toContain(
-      "[--type TYPE --topic TOPIC [--language en|zh]]",
-    );
-    expect(result.stdout).toContain("diagnostics.enabled");
-    expect(result.stdout).toContain("browser.actionIntervalMs");
-    expect(result.stdout).toContain("browser.navigationWaitMs");
     expect(result.stderr, args.join(" ")).toBe("");
+    expect(result.stdout.length, args.join(" ")).toBeGreaterThan(40);
   }
   expect(existsSync(join(root, "config"))).toBe(false);
   expect(existsSync(join(root, "state"))).toBe(false);
