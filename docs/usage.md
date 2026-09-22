@@ -316,6 +316,8 @@ convorel conversation result --id first-question --run RUN_ID --fields reply
 
 省略时返回完整输出；列表逐项筛选，`wait` 每次报告均筛选，嵌套对象（例如 `summary`）完整保留。不存在的字段返回 `null`，不支持点路径、表达式或记录过滤。字段名只允许字母、数字、下划线，不能以数字开头；空字段或非法语法在执行操作前报错。筛选只影响 stdout，不改保存的数据、stderr 错误或退出码；即使省略 `workspaceMismatch`，绑定不匹配仍退出 2。`wait` 的状态字段位于顶层，`status` 的状态字段位于 `summary` 内。
 
+`conversation list/status/result` 从本地持久记录读取，无需连接 Chrome；原工作区已删除或初始化配置缺失时仍可用。显式传入 `status --workspace` 时仍核验给定工作区。`result` 保留本地归档补写及独立 `archive` 回执；过期 run、未完成结果和私有目录位于 MCP 共享根内仍会被拒绝。
+
 `start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅完成时退出 0，未完成或需要处理时退出 2；`status` 退出 0 只表示读取本地状态成功。参数、锁等错误可退出 1。完整回复必须通过同一轮次的 `result` 取得。短暂观察失败最多连续尝试三次，期间保留已确认投递事实，不重复发送；登录、页面身份和草稿问题需要先检查处理。
 
 新任务可以用 `conversation create --workspace /absolute/project` 显式保存任务工作区；省略时使用初始化的默认工作区，不从当前目录或 prompt 推断。`followup`/`start`/`retry --workspace PATH` 只断言已有绑定，发现不同就拒绝操作。`status --workspace PATH` 返回 `workspaceMismatch`，不匹配时退出 2，且不修改任务或页面。

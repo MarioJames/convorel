@@ -1,5 +1,27 @@
 # 验证记录
 
+## 2026-09-22：目录与模块重组
+
+以 `2e4ba20` 的命名检查点/释放实现为源码基线，保留同期 `9e524a5` 的 v0.2.5 版本提交。`src/` 按 cli、conversation、archive、browser、workspace、mcp、config、storage、service、distribution 分组，根目录 TypeScript 文件从 31 个减少到 6 个；`tests/` 根目录从 29 个减少到仅保留 preload，显式浏览器/打包/安装/升级验收归入 integration。根 cli.ts 与 runtime.ts 的安装和子进程重入位置保持稳定，临时兼容转发入口已删除。
+
+原 1757 行会话文件拆为 543 行协调者及投递、恢复、观察、命名、捕获和释放模块；协调者保留私有状态提交和锁边界，以窄接口闭包连接行为模块。归档保留单连接、单 publish 事务，schema DDL 字节一致，静态 SQL 对比仅缩进不同。Workspace 仍持有唯一文件策略和根身份，Git 通过窄接口复用；历史查询的缓存与预算只属于一次观察。哈希、进程环境、绝对路径检查和任务锁分别归到共享原语与 storage；86 个源码模块的静态运行时导入检查未发现循环。
+
+业务调整仅增加 `conversation list/status/result` 的本地分派：原工作区删除或 init 配置缺失后仍能读取保存记录，不初始化浏览器。显式 status workspace 校验、精确 run 校验、结果完整性/哈希、私有目录检查及 result 的归档回执保持；结果验证由协调者与 CLI 复用同一纯函数。新增回归先在旧分派下因缺少 config.json 失败，再在新路径通过。
+
+验证执行于上述基线加本次未提交工作树：
+
+- `bun run check`：320 pass / 0 fail / 2911 expect，35 个测试文件。相对原 319/2884，仅增加上述回归的 1 项/27 断言；原用例名全部保留。清理未使用测试导入后，相关 46 项/283 断言再次通过。
+- `tsc --noEmit --noUnusedLocals` 与 `bun run format:check`：通过。
+- `bun run test:package`：真实 tarball 安装、空配置下技能安装、带空格路径、非项目 cwd、PATH 浏览器控制器和 SDK stdio 读取通过。
+- `bun run test:install`：Linux x64 standalone 编译、安装、升级、失败保护、历史版本保留、MCP 子进程配置重入、后台服务生命周期、校验和拒绝及卸载数据保留通过；其中调用完整 `verifyUpgrade`（包含安装锁验收），无需另跑相同升级场景。
+- `bun run test:browser --chrome <已安装 Chromium>`：真实独立 Chromium 与本地页面 fixture 通过，初始/峰值/收尾页数为 1/3/1，pageErrors 为空；覆盖中法英 DOM、发送阻挡、复制与归属竞态、生成失败恢复、关闭与自有页面恢复。CDP 使用临时 `127.0.0.1:55821`，测试 finally 已关闭自有 Chromium，验证 CDP 不再可达，并释放控制器 daemon 和临时 profile。此项目没有新增前端服务；该验收不等于用重构后的 CLI 跑了一次真实 ChatGPT 业务会话。
+
+三条 Qoder CLI lane 均按用户指定的 Qwen3.8-Flash / Extra High 执行，CoW 固定基线与各自写入隔离。提交已导出为 bundle、集成并核验，三张任务标签页、三个 CoW view 和固定基线均已回收；交接与导出保存在工作区外。测试仅使用自有临时状态；真实任务数据库、归档、浏览器登录态和用户配置未迁移或清理。本地构建产物仍位于忽略的 dist/。
+
+交付结果复核使用原 ChatGPT 审查会话续谈。审查确认目录、职责、事务、会话协议及本地查询方向符合目标，但发现迁移脚本误把 Workspace.normalize 的 `startsWith("../")` 改成 `startsWith("../..")`，判为一处策略偏移；前置检查仍拒绝父目录段，未证明存在可利用越界。已恢复原条件，逐项检查 src/tests/scripts 的非导入相对路径字面量，未发现第二处同类误改；Workspace 保留的 13 个方法按语法树打印后与基线完全一致。恢复既有安全防线使用原 Workspace/access/Git/MCP 回归验证，没有添加只复述该条件的测试。另采纳两项局部建议：capture 上下文仅接收 stateRoot，释放模块注释明确 hydration 等待在跨任务锁外。修正后重新执行上述全量检查、打包、安装/升级及 Chromium 验收。按审查给出的单点修正收敛条件完成本地核验，没有再请求一轮全面审查。
+
+完整 Markdown 已取得，归档 stored、gaps 为空；审查自有页面已关闭，organizationPending=false、replyChanged=false，持久审查记录和共享浏览器登录态保留。真实页面恢复时发生的临时 UI 错误在发送前被拦截；确认仍为 prepared、原目标空草稿且未生成后刷新该自有页，再 retry 同一 run，未换任务或重复发送。限制：只执行本机 Linux x64 standalone 验收；其他发布平台未在本机运行。
+
 ## 2026-09-22：命名检查点与标签页释放
 
 将首次命名移到发送成功后的第一轮 `wait` 正常或超时返回前；`start`、`poll`、`resume` 不再改名。后续 wait/finish 读取当前标题并有界补命名，包括已被自动标题覆盖的情况。前置临时故障不再因早期次数耗尽而永久遗漏；编辑中断及不明保存仍保留阶段，不自动重放写入。观察失败超时、连续三次观察失败和回复生成错误均有相应回归；登录、验证码、身份变化仍阻断编辑。

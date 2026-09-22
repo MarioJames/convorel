@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, isAbsolute } from "node:path";
 
 export type RuntimePaths = { configDir?: string; stateDir?: string };
 let selected: RuntimePaths = {};
@@ -38,4 +38,18 @@ export function consumeRuntimeArgs(input: string[]) {
   }
   setRuntimePaths(paths);
   return args;
+}
+
+export function fullPath(path: string) {
+  if (
+    typeof path !== "string" ||
+    !path ||
+    path.includes("\\") ||
+    path.includes("\0") ||
+    path.split("/").includes("..")
+  )
+    throw new Error("ACCESS_DENIED");
+  const expanded = path.startsWith("~/") ? homedir() + path.slice(1) : path;
+  if (!isAbsolute(expanded)) throw new Error("ABSOLUTE_PATH_REQUIRED");
+  return resolve(expanded);
 }

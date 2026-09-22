@@ -1,4 +1,4 @@
-# Architecture and v0.1 decisions
+# Architecture
 
 Status: the content archive below was reviewed with ChatGPT as a post-development result check, using read-only MCP evidence from the working tree; its confirmed findings are fixed and the remainder is recorded as open verification in validation.md. The reviewer did not run local tests or open the browser. Implementation evidence and live-browser limits are tracked in validation.md.
 
@@ -22,6 +22,31 @@ flowchart LR
 ```
 
 The two channels are independent. A browser-only conversation works without the tunnel. Code access requires a running tunnel-client and a configured ChatGPT developer app. Opening CDP alone does not configure MCP.
+
+## 代码组织与依赖方向
+
+项目保持单个 Bun/TypeScript 包。`src/cli.ts` 是稳定的源码和编译入口，`src/runtime.ts` 保留子进程重入与安装资源的位置基准。目录按业务能力划分：
+
+| 目录                | 职责                                                   |
+| ------------------- | ------------------------------------------------------ |
+| `src/cli/`          | 参数、命令族分派、输出与帮助目录；按命令需要初始化依赖 |
+| `src/conversation/` | 会话操作协调、投递与恢复、观察、命名、捕获、释放和等待 |
+| `src/archive/`      | 数据库生命周期、内容投影、查询与一致性导出             |
+| `src/browser/`      | CDP 控制、动作节奏及 `chatgpt/` 页面适配               |
+| `src/workspace/`    | 工作区身份、统一访问策略、文件证据与只读 Git 查询      |
+| `src/mcp/`          | MCP 协议接入和工具输入/输出 schema                     |
+| `src/config/`       | 用户偏好、校验与会话配置快照                           |
+| `src/storage/`      | 持久任务、私有状态、任务锁与诊断                       |
+| `src/service/`      | 隧道和自有进程生命周期                                 |
+| `src/distribution/` | 运行时升级与技能安装、同步                             |
+
+CLI 装配会话、归档和服务能力；会话协调者调用浏览器、存储和归档衔接；MCP 依赖 workspace。哈希和进程环境等基础能力独立于 workspace 与浏览器配置。任务锁由会话和归档共同使用，不属于归档业务。纯类型引用不会加载会话执行器。
+
+会话的拆分不分散发送许可和状态提交权。操作协调者仍负责精确 run/attempt、锁顺序、发送前持久化和归属核验；命名、capture、归档与 cleanup 继续分别报告结果。未知发送只能观察，归档失败不会重新授予发送许可。归档的单次 publish 仍由同一连接、同一事务提交，导出保留一致性快照与无覆盖发布协议。
+
+Workspace 保留文件安全策略和根身份；`git.ts` 接受窄接口复用它们，负责工作树状态与 diff；`git-history.ts` 提供历史查询入口，`git-observation.ts` 的缓存和预算仅属于一次观察。拆分没有增加第二套路径策略。
+
+`tests/` 按业务能力组织行为用例，`tests/integration/` 集中显式执行的浏览器、打包、安装和升级验收，`tests/support/` 提供实际共享的测试工厂。测试文件拆分必须保留全部场景；同一并发用例内的参与者继续共享原本需要竞争的资源。`tests/preload.ts` 仍由 `bunfig.toml` 加载，临时配置与状态不使用真实用户数据库。
 
 ## Reuse
 

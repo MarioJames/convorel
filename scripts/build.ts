@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { childEnv } from "../src/command.ts";
+import { childEnv } from "../src/process.ts";
 const root = resolve(import.meta.dir, "..");
 const out = join(root, "dist");
 const pkg = await Bun.file(join(root, "package.json")).json();

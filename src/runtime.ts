@@ -1,5 +1,5 @@
 import { runtimePathArgs } from "./paths.ts";
-import { preference } from "./user-config.ts";
+import { preference } from "./config/preferences.ts";
 import { join, resolve } from "node:path";
 
 // Bun's standalone executable serves embedded modules and --asset files from a
