@@ -22,6 +22,46 @@ export interface PageState {
   attachments?: boolean;
   sendReady?: boolean;
 }
+/** Safe to persist: no draft, response text, URL parameters or alert content. */
+export class PageNotIdleError extends Error {
+  readonly observedAt: string;
+  readonly reasons: string[];
+  readonly page: {
+    hasComposer: boolean;
+    draftLength: number | null;
+    attachments: boolean | null;
+    generating: boolean;
+    blocked: boolean;
+  };
+  constructor(p: PageState) {
+    const reasons = [
+      ...(!p.hasComposer ? ["COMPOSER_MISSING"] : []),
+      ...(p.draft === undefined
+        ? ["DRAFT_UNKNOWN"]
+        : p.draft.trim()
+          ? ["DRAFT_PRESENT"]
+          : []),
+      ...(p.attachments ? ["ATTACHMENTS_PRESENT"] : []),
+      ...(p.generating ? ["GENERATING"] : []),
+      ...(p.blocked ? ["PAGE_BLOCKED"] : []),
+    ];
+    const page = {
+      hasComposer: p.hasComposer,
+      draftLength: p.draft?.length ?? null,
+      attachments: p.attachments ?? null,
+      generating: p.generating,
+      blocked: !!p.blocked,
+    };
+    const observedAt = new Date().toISOString();
+    super(
+      `PAGE_NOT_IDLE: ${reasons.join(", ")}; ${JSON.stringify({ observedAt, ...page })}`,
+    );
+    this.observedAt = observedAt;
+    this.reasons = reasons;
+    this.page = page;
+  }
+}
+
 export type Outcome = {
   state: "waiting" | "complete" | "blocked" | "superseded";
   reason?: string;

@@ -87,7 +87,7 @@ bun --no-env-file src/cli.ts conversation result --id first-question --run RUN_I
 bun --no-env-file src/cli.ts conversation finish --id first-question --run RUN_ID
 ```
 
-先消费、保存回复，再执行 `finish`。它保留会话链接和结果，只关闭经过核验的自有标签页；用户原有标签页不会关闭。
+先消费、保存回复，再执行 `finish`。它保留会话链接和结果，只关闭经过核验的自有标签页；用户原有标签页不会关闭。输入框缺失或草稿状态未知时仍保留页面；`PAGE_NOT_IDLE` 会列出 `COMPOSER_MISSING`、`DRAFT_UNKNOWN`、`DRAFT_PRESENT`、`ATTACHMENTS_PRESENT`、`GENERATING` 或 `PAGE_BLOCKED` 等具体原因。关闭被此保护拒绝时，`summary.cleanup` 保存页面 target、观测时间及脱敏状态（仅草稿长度，不含正文），可在原任务查询。回复完成、归档成功与页面可安全关闭是独立状态。
 
 ## 配置文件与目录
 
@@ -421,3 +421,7 @@ bun --no-env-file src/cli.ts conversation recover-send \
 通过后在发送边界持久保存 `sendRecoveries`（旧 user ID、旧/新 attempt、原因、target/URL、四字段证据和操作者确认），继续使用同一 task/run/request/prompt，只点击一次。退出码与 `start` 相同；提交异常保留未知投递，不自动再发。发送前失败保留 `blocked` 和旧 user ID，已填入的草稿留待检查，不变成普通 `retry` 可用的 `prepared`。重复调用必须重新满足全部条件；旧证据不能授权另一次发送。普通 `retry`、`resume` 语义不变。
 
 当前浏览器适配器没有与发送动作绑定的响应元数据观察，仍可能把新的乐观 DOM 消息标成 `confirmed`。恢复后必须由同一 run 的 `resume`/`result` 确认完整回复；不能把命令退出 0 当作业务审查已完成。
+
+命名重新验证失败时，`organization.lastVerified` 保留上次成功的主题、标题和核验时间；相同命名请求的状态为 `revalidation_failed`，当前 `verified` 仍为 false，不把历史成功当成本次核验通过。改成新主题后，历史记录仍保留，但不代表新主题已验证。
+
+停滞回复刷新后，只要重新识别到原提交消息，就继续按回复内容判断等待或完成，不要求输入框同时恢复。`REFRESH_HISTORY_UNAVAILABLE` 专指未识别到原提交消息；输入框缺失仍可能阻止后续发送、整理或关闭，不触发重发。

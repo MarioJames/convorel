@@ -57,6 +57,7 @@ export function conversationStatus(task: Task) {
     error: run.error ?? null,
     organization: organizationRecovery(task),
     completionProbe: run.completionProbe ?? null,
+    cleanup: task.cleanup ?? null,
     ...(task.archive ? { archive: task.archive } : {}),
   };
 }

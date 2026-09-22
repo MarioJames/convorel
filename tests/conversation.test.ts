@@ -1785,13 +1785,19 @@ for (const failure of [
   });
 }
 
-for (const remote of ["complete", "waiting", "superseded"]) {
+for (const remote of [
+  "complete",
+  "complete-without-composer",
+  "waiting",
+  "superseded",
+]) {
   test(`stalled stream refreshes and reconciles without resending: ${remote}`, async () => {
     const { state, browser, conversation } = setup();
     const first = await conversation.start("stalled", "Review");
     const original = browser.pages.get(first.binding!.target);
     const saved = structuredClone(original);
-    if (remote === "complete") {
+    if (remote.startsWith("complete")) {
+      saved.hasComposer = remote !== "complete-without-composer";
       saved.generating = false;
       saved.messages.push({
         id: "a1",
@@ -1824,13 +1830,13 @@ for (const remote of ["complete", "waiting", "superseded"]) {
     const result = await conversation.resume(first.id);
     expect(reloads).toBe(1);
     expect(result.runs[0].state).toBe(
-      remote === "complete"
+      remote.startsWith("complete")
         ? "complete"
         : remote === "superseded"
           ? "superseded"
           : "waiting",
     );
-    if (remote === "complete")
+    if (remote.startsWith("complete"))
       expect(result.runs[0].reply?.text).toBe("Persisted answer");
 
     expect(browser.targets).toHaveLength(1);
@@ -2145,4 +2151,88 @@ test("browser.serial restores a single global browser lock across different task
     writePreference("locks.taskWaitMs", "");
     g.releaseAll();
   }
+});
+
+test("finish persists a redacted missing-composer diagnosis without closing the page", async () => {
+  const { browser, conversation } = setup();
+  const t = await conversation.start("missing-composer", "Review");
+  browser.complete();
+  await conversation.poll(t.id);
+  const p = browser.pages.get(t.binding!.target);
+  p.hasComposer = false;
+  p.draft = "private draft text";
+  await expect(conversation.finish(t.id, t.currentRun)).rejects.toThrow(
+    "COMPOSER_MISSING",
+  );
+  const cleanup = conversation.get(t.id).cleanup;
+  expect(cleanup).toMatchObject({
+    closed: false,
+    target: t.binding!.target,
+    page: {
+      hasComposer: false,
+      draftLength: 18,
+      generating: false,
+      blocked: false,
+    },
+  });
+  expect(cleanup.reasons).toContain("DRAFT_PRESENT");
+  expect(JSON.stringify(cleanup)).not.toContain("private draft text");
+  expect(Date.parse(cleanup.observedAt)).toBeGreaterThan(0);
+  expect(browser.targets).toHaveLength(1);
+  expect(conversationStatus(conversation.get(t.id)).cleanup).toEqual(cleanup);
+  p.hasComposer = true;
+  delete p.draft;
+  await expect(conversation.finish(t.id, t.currentRun)).rejects.toThrow(
+    "DRAFT_UNKNOWN",
+  );
+  expect(browser.targets).toHaveLength(1);
+  p.draft = "";
+  expect((await conversation.finish(t.id, t.currentRun)).closed).toBe(true);
+});
+
+test("failed organization revalidation retains the last verified naming, including after a new request", async () => {
+  const { state, browser } = setup();
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+    async () => ({ verified: true, title: "0922｜OPT｜原主题" }) as any,
+  );
+  const t = await conversation.start(
+    "revalidation",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "OPT", topic: "原主题" },
+  );
+  browser.complete();
+  await conversation.poll(t.id);
+  browser.pages.get(t.binding!.target).hasComposer = false;
+  const result = await conversation.organize(
+    t.id,
+    t.currentRun,
+    "OPT",
+    "原主题",
+  );
+  expect(result.verified).toBe(false);
+  expect(result.lastVerified).toMatchObject({
+    title: "0922｜OPT｜原主题",
+    naming: { type: "OPT", topic: "原主题" },
+  });
+  expect(result.error).toContain("COMPOSER_MISSING");
+  expect(conversationStatus(conversation.get(t.id)).organization).toMatchObject(
+    { state: "revalidation_failed", lastVerified: result.lastVerified },
+  );
+  const changed = await conversation.organize(
+    t.id,
+    t.currentRun,
+    "OPT",
+    "新主题",
+  );
+  expect(changed.verified).toBe(false);
+  expect(changed.lastVerified).toEqual(result.lastVerified);
+  expect(conversationStatus(conversation.get(t.id)).organization!.state).toBe(
+    "needs_attention",
+  );
 });

@@ -9,6 +9,7 @@ import {
 import { Workspace, sha } from "./workspace.ts";
 import {
   classify,
+  PageNotIdleError,
   conversationId,
   type Message,
   type PageState,
@@ -436,7 +437,6 @@ export class Conversation {
         if (!same(p.url, t.url!)) throw new Error("CONVERSATION_CHANGED");
         if (p.blocked) throw new Error("NEEDS_ATTENTION: " + p.blocked);
         if (
-          p.hasComposer &&
           p.messages.some((m) => m.role === "user" && m.id === r.userMessageId)
         ) {
           probe.failures = 0;
@@ -1193,12 +1193,13 @@ export class Conversation {
       throw new Error("RESULT_NOT_COMPLETE");
     if (
       !p.hasComposer ||
+      p.draft === undefined ||
       p.draft?.trim() ||
       p.attachments ||
       p.generating ||
       p.blocked
     )
-      throw new Error("PAGE_NOT_IDLE");
+      throw new PageNotIdleError(p);
     const out = classify(p, t.url, r.userMessageId),
       branch = p.messages
         .slice(p.messages.findIndex((m) => m.id === r.userMessageId))
@@ -1271,6 +1272,19 @@ export class Conversation {
         };
         this.save(t);
         return t.cleanup;
+      }).catch((error) => {
+        if (error instanceof PageNotIdleError) {
+          t.cleanup = {
+            closed: false,
+            target: binding.target,
+            error: error.message,
+            reasons: error.reasons,
+            observedAt: error.observedAt,
+            page: error.page,
+          };
+          this.save(t);
+        }
+        throw error;
       });
     });
   }
@@ -1314,7 +1328,7 @@ export class Conversation {
       const p = await this.observe(t, b),
         r = this.current(t);
       if (!t.url || !r.userMessageId) throw new Error("DELIVERY_NOT_CONFIRMED");
-      if (p.draft?.trim() || p.attachments) throw new Error("PAGE_NOT_IDLE");
+      if (p.draft?.trim() || p.attachments) throw new PageNotIdleError(p);
       const out = classify(p, t.url, r.userMessageId);
       if (!["waiting", "complete"].includes(out.state))
         throw new Error(out.reason || "CONVERSATION_CHANGED");
@@ -1350,7 +1364,8 @@ export class Conversation {
       throw new Error("METADATA_PAGE_UNAVAILABLE");
     };
     const attempts = (t.organization?.attempts ?? (t.organization ? 1 : 0)) + 1;
-    t.organization = { verified: false, attempts };
+    const lastVerified = t.organization?.lastVerified;
+    t.organization = { verified: false, attempts, lastVerified };
     this.save(t);
     try {
       await check();
@@ -1402,7 +1417,11 @@ export class Conversation {
         naming.topic,
         (progress) => {
           this.guard(t);
-          t.organization = { ...structuredClone(progress), verified: false };
+          t.organization = {
+            ...structuredClone(progress),
+            verified: false,
+            lastVerified,
+          };
           this.save(t);
         },
         metadata,
@@ -1436,6 +1455,14 @@ export class Conversation {
         });
     }
     this.guard(t);
+    t.organization.lastVerified = t.organization.verified
+      ? {
+          observedAt: new Date().toISOString(),
+          naming: { ...naming, language: naming.language ?? "en" },
+          title: t.organization.title,
+          project: t.organization.project,
+        }
+      : lastVerified;
     t.organization.attempts = attempts;
     if (!t.organization.verified && attempts <= ORGANIZATION_DELAYS.length)
       t.organization.nextRetryAt = new Date(
@@ -1463,8 +1490,19 @@ export class Conversation {
       });
       this.begin(t);
       const b = await this.page(t);
+      if (t.organization?.verified && !t.organization.lastVerified) {
+        t.organization.lastVerified = {
+          observedAt: t.organization.verifiedAt ?? null,
+          naming: t.naming
+            ? { ...t.naming, language: t.naming.language ?? "en" }
+            : null,
+          title: t.organization.title,
+          project: t.organization.project,
+        };
+      }
       t.naming = { type, topic, language };
-      t.organization = undefined;
+      // A new attempt does not erase evidence from the last successful one.
+      t.organization = { lastVerified: t.organization?.lastVerified };
       return this.applyOrganization(t, b, t.naming);
     });
   }

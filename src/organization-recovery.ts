@@ -20,14 +20,23 @@ export function organizationRecovery(task: Task) {
     attempts < ORGANIZATION_ATTEMPTS &&
     (!task.organizationObservation ||
       task.organizationObservation.closed === true);
+  const previous = o?.lastVerified;
+  const revalidation =
+    previous?.naming &&
+    previous.naming.type === task.naming.type &&
+    previous.naming.topic === task.naming.topic &&
+    previous.naming.language === (task.naming.language ?? "en");
   return {
+    lastVerified: previous ?? null,
     state: o?.verified
       ? "verified"
       : !o
         ? "pending"
         : retryable
           ? "retry_pending"
-          : "needs_attention",
+          : revalidation
+            ? "revalidation_failed"
+            : "needs_attention",
     attempts,
     limit: ORGANIZATION_ATTEMPTS,
     nextRetryAt: retryable ? (o?.nextRetryAt ?? null) : null,
