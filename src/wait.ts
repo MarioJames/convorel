@@ -56,12 +56,22 @@ export async function waitForConversation(
       }
       const r = t.runs.find((r) => r.id === run);
       if (t.currentRun !== run || !r) throw new Error("STALE_RUN");
-      report(conversationStatus(t));
-      if (r.state === "complete") return 0;
-      if (r.state !== "waiting") return 2;
+      const summary = conversationStatus(t);
+      report(summary);
+      const retryNaming = summary.organization?.state === "retry_pending";
+      if (r.state === "complete" && !retryNaming) return 0;
+      if (r.state !== "waiting" && r.state !== "complete") return 2;
+      const delay = retryNaming
+        ? Math.max(
+            1,
+            Date.parse(
+              summary.organization!.nextRetryAt ?? new Date().toISOString(),
+            ) - Date.now(),
+          )
+        : 60000;
       try {
         await sleep(
-          Math.min(60000, Math.max(1, deadline - Date.now())),
+          Math.min(delay, Math.max(1, deadline - Date.now())),
           undefined,
           { signal },
         );

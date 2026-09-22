@@ -194,3 +194,43 @@ test("waiting retries only observation failures and stops after three consecutiv
     rmSync(root, { recursive: true, force: true });
   }
 }, 10000);
+
+test("completed replies keep waiting for scheduled naming recovery", async () => {
+  const root = mkdtempSync(join(tmpdir(), "convorel-watch-name-"));
+  const store = new State(root);
+  let calls = 0;
+  try {
+    const code = await waitForConversation(
+      store,
+      {
+        get: unusedGet,
+        poll: async () =>
+          ({
+            config: { workspace: root },
+            workspaceId: "fixture",
+            currentRun: "r1",
+            naming: { type: "FIX", topic: "Naming" },
+            organization:
+              ++calls === 1
+                ? {
+                    verified: false,
+                    attempts: 1,
+                    error: "Error: Conversation UI reported an error",
+                    nextRetryAt: new Date(0).toISOString(),
+                  }
+                : { verified: true, attempts: 2 },
+            runs: [{ id: "r1", state: "complete" }],
+          }) as any,
+      },
+      "task",
+      "r1",
+      1,
+      new AbortController().signal,
+      () => {},
+    );
+    expect(code).toBe(0);
+    expect(calls).toBe(2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

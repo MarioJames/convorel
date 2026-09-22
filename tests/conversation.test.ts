@@ -3,6 +3,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sha } from "../src/workspace.ts";
 import { State } from "../src/state.ts";
 import { Conversation } from "../src/conversation.ts";
 import { ObservationError } from "../src/browser.ts";
@@ -1683,6 +1684,233 @@ test("naming waits for the persisted URL and failures never undo delivery or res
   expect(conversation.result(first.id, first.currentRun).reply.text).toBe(
     "Answer",
   );
+});
+
+test("transient naming failures back off, survive restart and recover after completion without resending", async () => {
+  const { state, browser } = setup();
+  let calls = 0;
+  const organizer = async () => {
+    if (++calls < 3) throw new Error("Conversation UI reported an error");
+    return { verified: true } as any;
+  };
+  const create = () =>
+    new Conversation(
+      state,
+      browser as any,
+      async () => ({ observedModel: "6 Pro" }),
+      organizer,
+    );
+  let conversation = create();
+  const first = await conversation.start(
+    "retry-name",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "FIX", topic: "恢复命名" },
+  );
+  expect(conversationStatus(first).organization).toMatchObject({
+    state: "retry_pending",
+    attempts: 1,
+  });
+  await conversation.poll(first.id);
+  expect(calls).toBe(1);
+  const due = () => {
+    const t = conversation.get(first.id);
+    t.organization.nextRetryAt = new Date(0).toISOString();
+    state.write("task-" + first.id, t);
+  };
+  due();
+  conversation = create();
+  await conversation.resume(first.id);
+  expect(calls).toBe(2);
+  due();
+  browser.complete();
+  // Persist completion first to exercise the completed-run fast path.
+  const t = conversation.get(first.id);
+  t.runs[0].state = "complete";
+  t.runs[0].reply = {
+    id: "a1",
+    role: "assistant",
+    text: "Answer",
+    final: true,
+  };
+  t.runs[0].branch = ["u1", "a1"];
+  t.runs[0].replyHash = sha("Answer");
+  state.write("task-" + first.id, t);
+  const recovered = await conversation.resume(first.id);
+  expect(recovered.organization.verified).toBe(true);
+  expect(calls).toBe(3);
+  await conversation.poll(first.id);
+  expect(calls).toBe(3);
+  expect(browser.sends).toBe(1);
+});
+
+for (const failure of [
+  "Conversation UI reported an error",
+  "Title save was not acknowledged",
+  "Project membership does not match",
+]) {
+  test(`naming recovery bounds attempts and preserves unsafe failures: ${failure}`, async () => {
+    const { state, browser } = setup();
+    let calls = 0;
+    const conversation = new Conversation(
+      state,
+      browser as any,
+      async () => ({ observedModel: "6 Pro" }),
+      async () => {
+        calls++;
+        throw new Error(failure);
+      },
+    );
+    const first = await conversation.start(
+      "bounded-name",
+      "Review",
+      "initial",
+      false,
+      undefined,
+      { type: "FIX", topic: "恢复命名" },
+    );
+    for (let i = 0; i < 5; i++) {
+      const t = conversation.get(first.id);
+      t.organization.nextRetryAt = new Date(0).toISOString();
+      state.write("task-" + first.id, t);
+      await conversation.poll(first.id);
+    }
+    expect(calls).toBe(failure === "Conversation UI reported an error" ? 3 : 1);
+    expect(
+      conversationStatus(conversation.get(first.id)).organization,
+    ).toMatchObject({ state: "needs_attention" });
+    expect(browser.sends).toBe(1);
+  });
+}
+
+for (const remote of ["complete", "waiting", "superseded"]) {
+  test(`stalled stream refreshes and reconciles without resending: ${remote}`, async () => {
+    const { state, browser, conversation } = setup();
+    const first = await conversation.start("stalled", "Review");
+    const original = browser.pages.get(first.binding!.target);
+    const saved = structuredClone(original);
+    if (remote === "complete") {
+      saved.generating = false;
+      saved.messages.push({
+        id: "a1",
+        role: "assistant",
+        text: "Persisted answer",
+        final: true,
+      });
+    } else if (remote === "superseded") {
+      saved.generating = false;
+      saved.messages.push({
+        id: "other",
+        role: "user",
+        text: "Another question",
+        final: true,
+      });
+    }
+    let reloads = 0;
+    browser.gate = async (where) => {
+      if (where === "run:reload:" + first.binding!.target) {
+        reloads++;
+        Object.assign(original, structuredClone(saved));
+      }
+    };
+    await conversation.poll(first.id);
+    expect(reloads).toBe(0);
+    const t = conversation.get(first.id);
+    expect(t.runs[0].completionProbe).toBeDefined();
+    t.runs[0].completionProbe!.unchangedSince = new Date(0).toISOString();
+    state.write("task-" + first.id, t);
+    const result = await conversation.resume(first.id);
+    expect(reloads).toBe(1);
+    expect(result.runs[0].state).toBe(
+      remote === "complete"
+        ? "complete"
+        : remote === "superseded"
+          ? "superseded"
+          : "waiting",
+    );
+    if (remote === "complete")
+      expect(result.runs[0].reply?.text).toBe("Persisted answer");
+
+    expect(browser.targets).toHaveLength(1);
+    expect(browser.sends).toBe(1);
+  });
+}
+
+test("stalled refresh preserves drafts, bounds navigation and never resends", async () => {
+  const { state, browser, conversation } = setup();
+  const first = await conversation.start("stalled-limit", "Review");
+  const p = browser.pages.get(first.binding!.target);
+  let reloads = 0;
+  browser.gate = async (where) => {
+    if (where.startsWith("run:reload:")) reloads++;
+  };
+  const due = () => {
+    const t = conversation.get(first.id);
+    t.runs[0].completionProbe!.unchangedSince = new Date(0).toISOString();
+    t.runs[0].completionProbe!.lastRefreshedAt = new Date(0).toISOString();
+    state.write("task-" + first.id, t);
+  };
+  due();
+  p.draft = "User draft";
+  await conversation.poll(first.id);
+  expect(reloads).toBe(0);
+  expect(p.draft).toBe("User draft");
+  p.draft = "";
+  // A healthy long-running Pro response may survive more than three refreshes.
+  for (let n = 0; n < 4; n++) {
+    due();
+    await conversation.poll(first.id);
+  }
+  expect(reloads).toBe(4);
+  browser.gate = async (where) => {
+    if (where.startsWith("run:reload:")) {
+      reloads++;
+      throw new ObservationError("Transport unavailable");
+    }
+  };
+  for (let n = 0; n < 3; n++) {
+    due();
+    await expect(conversation.poll(first.id)).rejects.toThrow(
+      "Transport unavailable",
+    );
+  }
+  due();
+  await expect(conversation.poll(first.id)).rejects.toThrow("STALLED_REPLY");
+  expect(reloads).toBe(7);
+  expect(browser.sends).toBe(1);
+});
+
+test("missing owned creation can be replaced only before the first send", async () => {
+  const { state, browser } = setup();
+  let ready = false;
+  const conversation = new Conversation(state, browser as any, async () => {
+    if (!ready) throw new Error("Model control unavailable");
+    return { observedModel: "6 Pro" };
+  });
+  const first = await conversation.start("recreate", "Review");
+  expect(first.runs[0].state).toBe("prepared");
+  expect(browser.sends).toBe(0);
+  browser.targets = [];
+  ready = true;
+  const recovered = await conversation.retry(first.id, first.currentRun);
+  expect(recovered.runs[0].state).toBe("waiting");
+  expect(recovered.pageRecreations).toBe(1);
+  expect(recovered.currentRun).toBe(first.currentRun);
+  expect(browser.sends).toBe(1);
+});
+
+test("unknown submission cannot recreate a missing new conversation", async () => {
+  const { browser, conversation } = setup();
+  browser.delayedUrl = true;
+  browser.failSend = true;
+  const first = await conversation.start("no-recreate", "Review");
+  expect(first.runs[0].state).toBe("delivery_unknown");
+  browser.targets = [];
+  await expect(conversation.resume(first.id)).rejects.toThrow("OPEN_UNKNOWN");
+  expect(browser.targets).toHaveLength(0);
+  expect(browser.sends).toBe(1);
 });
 
 test("invalid initial naming stops before creating a browser page", async () => {

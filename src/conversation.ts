@@ -26,6 +26,10 @@ import {
   type ArchiveNotice,
 } from "./post-archive.ts";
 import { conversationConfig, type Config } from "./config.ts";
+import {
+  organizationDue,
+  ORGANIZATION_DELAYS,
+} from "./organization-recovery.ts";
 export type { Config } from "./config.ts";
 export interface RejectedSendRecovery {
   expectedUserMessageId: string;
@@ -54,6 +58,14 @@ export interface Run {
   lastObservedAt?: string;
   observationError?: { at: string; message: string; retryable: boolean };
   submittedAt?: string;
+  completionProbe?: {
+    fingerprint: string;
+    unchangedSince: string;
+    lastRefreshedAt?: string;
+    refreshes: number;
+    failures: number;
+    error?: string;
+  };
   sendRecoveries?: {
     at: string;
     priorUserMessageId: string;
@@ -99,6 +111,7 @@ export interface Task {
   url?: string;
   binding?: Binding;
   opening?: boolean;
+  pageRecreations?: number;
   currentRun: string;
   attemptId: string;
   runs: Run[];
@@ -231,6 +244,23 @@ export class Conversation {
         throw new Error("TARGET_NAVIGATED");
       return { target: previous.targetId, created: false };
     }
+    if (
+      !t.url &&
+      t.binding?.owned &&
+      !t.opening &&
+      !t.binding.closed &&
+      t.binding.epoch === epoch &&
+      !tabs.some((x: any) => x.targetId === t.binding!.target) &&
+      t.runs.length === 1 &&
+      this.current(t).state === "prepared" &&
+      !this.current(t).submittedAt &&
+      !this.current(t).userMessageId &&
+      (t.pageRecreations ?? 0) < 2
+    ) {
+      t.pageRecreations = (t.pageRecreations ?? 0) + 1;
+      t.binding = undefined;
+      this.save(t);
+    }
     if (!t.url && (t.opening || t.binding))
       throw new Error(
         "OPEN_UNKNOWN: inspect the created page; no automatic replacement",
@@ -356,16 +386,84 @@ export class Conversation {
     t.archive = publishSafely(this.store.root, t.id);
     return t;
   }
+  private async refreshStalledReply(t: Task, b: any, page: PageState) {
+    const r = this.current(t);
+    const fingerprint = (p: PageState) =>
+      sha(
+        JSON.stringify([
+          p.generating,
+          p.messages.map((m) => [m.id, m.role, m.text, m.final, m.error]),
+        ]),
+      );
+    const current = fingerprint(page);
+    if (!r.completionProbe || r.completionProbe.fingerprint !== current) {
+      r.completionProbe = {
+        fingerprint: current,
+        unchangedSince: new Date().toISOString(),
+        refreshes: 0,
+        failures: 0,
+      };
+      return page;
+    }
+    const probe = r.completionProbe;
+    if (
+      Date.now() - Date.parse(probe.lastRefreshedAt ?? probe.unchangedSince) <
+      120000
+    )
+      return page;
+    if (probe.failures >= 3)
+      throw new Error(
+        "STALLED_REPLY: three refresh attempts failed; inspect the original conversation",
+      );
+    // Refresh is never a send. Preserve user input and recheck target/branch just
+    // before navigation; unknown delivery is never permission to recreate.
+    const before = await this.observe(t, b);
+    if (fingerprint(before) !== current) return before;
+    if (before.draft?.trim() || before.attachments) {
+      probe.error =
+        "STALLED_REPLY: refresh deferred to preserve draft or attachments";
+      return before;
+    }
+    probe.lastRefreshedAt = new Date().toISOString();
+    probe.refreshes++;
+    delete probe.error;
+    this.save(t); // Durable budget before navigation, including process interruption.
+    try {
+      await b.run("reload");
+      for (let n = 0; n < 80; n++) {
+        const p: PageState = await b.read();
+        this.guard(t);
+        if (!same(p.url, t.url!)) throw new Error("CONVERSATION_CHANGED");
+        if (p.blocked) throw new Error("NEEDS_ATTENTION: " + p.blocked);
+        if (
+          p.hasComposer &&
+          p.messages.some((m) => m.role === "user" && m.id === r.userMessageId)
+        ) {
+          probe.failures = 0;
+          return p;
+        }
+        await Bun.sleep(500);
+      }
+      throw new ObservationError(
+        "REFRESH_HISTORY_UNAVAILABLE: delivery remains confirmed; do not resend",
+      );
+    } catch (e) {
+      probe.failures++;
+      probe.error = String(e);
+      this.save(t);
+      throw e;
+    }
+  }
   private async reconcile(t: Task, b: any) {
     // A completed reply is durable. Recovery may finish pending organization,
     // but must not replace its captured bytes with a fresh DOM observation.
     if (this.current(t).state === "complete") {
-      if (t.naming && !t.organization)
+      if (t.naming && organizationDue(t))
         await this.applyOrganization(t, b, t.naming);
       return this.archiveCompleted(t);
     }
-    const r = this.current(t),
-      p = await this.observe(t, b);
+    const r = this.current(t);
+    let p = await this.observe(t, b);
     if (!r.userMessageId || !t.url) {
       const found = p.messages.filter(
         (m) => m.role === "user" && m.text.includes(r.marker),
@@ -410,6 +508,8 @@ export class Conversation {
         }
       });
     }
+    if (classify(p, t.url!, r.userMessageId).state === "waiting")
+      p = await this.refreshStalledReply(t, b, p);
     const outcome = classify(p, t.url!, r.userMessageId);
     r.state = outcome.state;
     r.error = outcome.reason;
@@ -425,7 +525,7 @@ export class Conversation {
       await this.attemptCapture(t, b, r);
     if (
       t.naming &&
-      !t.organization &&
+      organizationDue(t) &&
       ["waiting", "complete"].includes(r.state)
     )
       await this.applyOrganization(t, b, t.naming);
@@ -889,7 +989,7 @@ export class Conversation {
       const t = this.get(id);
       if (
         this.current(t, run).state === "complete" &&
-        (!t.naming || t.organization)
+        (!t.naming || !organizationDue(t))
       )
         return this.archiveCompleted(t);
       this.begin(t);
@@ -1249,7 +1349,8 @@ export class Conversation {
       }
       throw new Error("METADATA_PAGE_UNAVAILABLE");
     };
-    t.organization = { verified: false };
+    const attempts = (t.organization?.attempts ?? (t.organization ? 1 : 0)) + 1;
+    t.organization = { verified: false, attempts };
     this.save(t);
     try {
       await check();
@@ -1335,6 +1436,11 @@ export class Conversation {
         });
     }
     this.guard(t);
+    t.organization.attempts = attempts;
+    if (!t.organization.verified && attempts <= ORGANIZATION_DELAYS.length)
+      t.organization.nextRetryAt = new Date(
+        Date.now() + ORGANIZATION_DELAYS[attempts - 1],
+      ).toISOString();
     this.save(t);
     return t.organization;
   }
@@ -1351,12 +1457,15 @@ export class Conversation {
       const t = this.get(id);
       const r = this.current(t, run);
       if (!t.url || !r.userMessageId) throw new Error("DELIVERY_NOT_CONFIRMED");
-      this.begin(t);
-      return this.applyOrganization(t, await this.page(t), {
-        type,
-        topic,
+      conversationTitle("2000-01-01T00:00:00Z", type, topic, {
+        timezone: "Asia/Shanghai",
         language,
       });
+      this.begin(t);
+      const b = await this.page(t);
+      t.naming = { type, topic, language };
+      t.organization = undefined;
+      return this.applyOrganization(t, b, t.naming);
     });
   }
 }

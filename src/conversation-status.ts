@@ -1,3 +1,4 @@
+import { organizationRecovery } from "./organization-recovery.ts";
 import type { Task } from "./conversation.ts";
 
 /** A projection of durable facts, not a second state machine. */
@@ -54,6 +55,8 @@ export function conversationStatus(task: Task) {
     lastObservedAt: run.lastObservedAt ?? null,
     observationError: run.observationError ?? null,
     error: run.error ?? null,
+    organization: organizationRecovery(task),
+    completionProbe: run.completionProbe ?? null,
     ...(task.archive ? { archive: task.archive } : {}),
   };
 }
