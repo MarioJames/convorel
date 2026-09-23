@@ -327,7 +327,13 @@ test("ordinary many-object repositories remain readable before and after packing
     (await ws.history().read({ filePath: "sources/1499.txt" })).content,
   ).toBe("unique fixture 1499");
   expect((await ws.status()).dirty).toBe(false);
-  git("gc", "--quiet");
+  // This fixture exercises packed reads, not garbage collection/expiry.
+  git("repack", "-ad");
+  expect(
+    readdirSync(join(root, ".git/objects/pack")).some((name) =>
+      name.endsWith(".pack"),
+    ),
+  ).toBe(true);
   expect(
     (await ws.history().read({ filePath: "sources/1499.txt" })).content,
   ).toBe("unique fixture 1499");
