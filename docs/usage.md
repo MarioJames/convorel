@@ -67,7 +67,7 @@ convorel setup --workspace /absolute/path/to/your-project --cdp 9222
 
 ### 4. 发起第一次讨论
 
-直接使用 CLI，通过 stdin 将完整请求写入任务数据库，无需临时文件：
+直接使用 CLI，通过 stdin 提交目标、约束和验收要求，无需重复工具读取指引或创建临时文件：
 
 ```bash
 bun --no-env-file src/cli.ts conversation create \
@@ -78,7 +78,7 @@ bun --no-env-file src/cli.ts conversation create \
 PROMPT
 ```
 
-创建只入库，不访问浏览器。短文本也可用 `--prompt '完整文本'`。任务及各轮 prompt、配置和状态保存到私有 `tasks.db`；内容检索归档继续使用独立的 `conversations.db`。
+创建只入库，不访问浏览器。短文本也可用 `--prompt '任务目标'`。每轮保存原始 `input`、版本化 `promptContext`（绑定工作区与通用工具指引）和最终 `prompt`；发送及重试沿用这份文本，升级不重写已有轮次。续谈的新轮次自动使用当前指引。网页版接收的是普通用户消息，不是真正的 system role；任务特有的比较版本、文件引用和约束仍由调用方提供，源码不会自动内嵌。数据保存到私有 `tasks.db`，内容归档继续使用独立的 `conversations.db`。
 
 从输出中复制 `currentRun`，将下面的 `RUN_ID` 替换为该值：
 
@@ -244,28 +244,22 @@ convorel stop
 
 对话中直接给出项目路径，例如：
 
-> 请审查 `/home/your-name/workspaces/my-project`。先调用 workspace_info 核对目录，再读取相关文件；引用文件路径和返回的 SHA-256。
+> 请审查 `/home/your-name/workspaces/my-project`。先调用 capabilities 核对目录，再读取相关文件；引用文件路径和返回的 SHA-256。
 
-| MCP 工具           | 用途                                                                             |
-| ------------------ | -------------------------------------------------------------------------------- |
-| `workspace_info`   | 允许根、项目身份、HEAD/分支、Git 可用性，以及实际服务版本、能力版本和工具清单    |
-| `tree`             | 结构化目录条目和目录树文本，明确深度、扫描限制及分页；取代独立目录列表           |
-| `find_files`       | 按文件名或相对路径 glob 定位文件，支持深度及分页                                 |
-| `read_file`        | 按行读取当前 UTF-8 文件、文档或文本报告，返回整文件 SHA-256                      |
-| `search_workspace` | 在指定目录和文件 glob 内搜索字面量，返回匹配行、上下文、文件 hash 和续读位置     |
-| `read_image`       | 按需读取 PNG/JPEG/WebP 截图或图片，返回原生 MCP 图片内容及 hash，最大 1 MiB      |
-| `git_status`       | 分页读取经过路径过滤的工作区状态                                                 |
-| `git_diff`         | 工作区/暂存区/相对 HEAD 的文件清单和可续读的单文件 patch                         |
-| `git_log`          | 分页查看提交历史、提交身份、作者及父提交，标明浅克隆限制                         |
-| `git_show`         | 查看一次提交的元信息、完整提交说明、文件统计和可续读 patch；合并提交可选择父提交 |
-| `git_compare`      | 比较两个版本，区分端点差异与从共同祖先起的变化                                   |
-| `git_read_file`    | 按行读取指定提交中的文件，包括当前已经删除的文件                                 |
+| MCP 工具       | 用途                                                           |
+| -------------- | -------------------------------------------------------------- |
+| `capabilities` | 允许根、项目身份、HEAD、服务版本、可用命令及参数 schema        |
+| `exec`         | 受控命令字符串：文件/目录/搜索/Git 操作，以及隔离 Bun 构建测试 |
+| `artifact`     | 读取文本报告或 PNG/JPEG/WebP 图片，图片另附原生 image 内容     |
+| `memory`       | 按后端与本地共享配置只读搜索、读取历史记忆                     |
+
+`tree`、`find_files`、`search_workspace`、`read_file`、`git_status`、`git_diff`、`git_log`、`git_show`、`git_compare`、`git_read_file` 是 `exec` 内的 operation，不是独立 MCP 工具。参数与 schema 从 `capabilities.execution.commands` 获取，例如 `exec(command="read_file --path '/absolute/project/package.json' --startLine 1 --maxLines 20")`；结果读取 `execution.result`，产物元数据读取 `artifact.result`。
 
 工具使用完整 `path`，支持绝对路径和 `~/`；Git 工具的 `path` 必须是真实仓库根目录，`filePath`/`patchFile` 是仓库相对路径。远端不能增加允许根或扩大本地配置。所有工具声明严格 MCP `outputSchema` 并返回对应的 `structuredContent`；图片另附原生 image 内容。
 
-`workspace_info` 不传路径时返回 `workspace: null` 和允许根 `{ path, rootId }`；传目录路径时返回所属工作区详情。`server.capabilityVersion` 为 `evidence-v2`，`server.tools` 反映当前进程实现。连接器缓存旧定义时，在插件管理页面刷新工具定义；仅重启本地进程不能证明客户端缓存已经刷新。
+`capabilities` 不传路径时返回 `workspace: null` 和允许根 `{ path, rootId }`；传目录路径时返回所属工作区详情。`server.capabilityVersion` 为 `functions-v1`，`server.tools` 反映当前进程实现。连接器缓存旧定义时，在插件管理页面刷新工具定义；仅重启本地进程不能证明客户端缓存已经刷新。
 
-所有工具统一返回 `rootId`（配置的允许根）、`workspaceId` 和 `workspacePath`（所属工作区的 ID 与完整路径）；`workspace_info` 将后三个字段放在 `workspace` 内。工作区取允许根内最近的 `.git` 标记所在目录，兼容普通仓库、嵌套仓库和 Git worktree；没有标记时使用允许根，不向允许根外追溯。标记仅用于归属识别，不证明 Git 可用，Git 操作仍执行原有存储边界检查。读取同一仓库的文件、子目录和 Git 历史时，工作区 ID 保持一致；`path` 仍表示本次查询范围，相对文件名仍相对于该范围。允许根包含多个仓库时，在根上查询表示整个根的范围，不宣称所有结果属于某个子仓库。ID 仅用于证据关联，不用于认证；目录移动或仓库边界变化后应重新核对身份。
+文件与 Git 证据返回 `rootId`（配置的允许根）、`workspaceId` 和 `workspacePath`（所属工作区的 ID 与完整路径）；`capabilities` 将后三个字段放在 `workspace` 内。工作区取允许根内最近的 `.git` 标记所在目录，兼容普通仓库、嵌套仓库和 Git worktree；没有标记时使用允许根，不向允许根外追溯。标记仅用于归属识别，不证明 Git 可用，Git 操作仍执行原有存储边界检查。读取同一仓库的文件、子目录和 Git 历史时，工作区 ID 保持一致；`path` 仍表示本次查询范围，相对文件名仍相对于该范围。允许根包含多个仓库时，在根上查询表示整个根的范围，不宣称所有结果属于某个子仓库。ID 仅用于证据关联，不用于认证；目录移动或仓库边界变化后应重新核对身份。
 
 ### 按问题取证
 
@@ -273,7 +267,7 @@ convorel stop
 - **核实实现**：`search_workspace(path, query, pattern, contextLines)` 返回区分大小写的字面量匹配；按 `nextOffset` 续查，用 `read_file` 展开关键上下文。`textTruncated` 表示摘录不完整。`scanTruncated`、`depthLimited` 或 `skippedFiles` 非零时，不能断言“整个项目不存在”；缩小目录/文件范围或调整深度后再查。
 - **最近改了什么**：先 `git_log(path, limit)`，再 `git_show(path, ref)`；工作区干净和相对 HEAD 的 diff 为空，只代表当前未提交变更情况。首次提交比较空树，合并提交默认比较第一父提交，可指定 `parent`。
 - **交付相对基线改了什么**：`git_compare(path, base, head, mode)`，`mode=direct` 比较两个端点；`mode=merge-base` 比较共同祖先到 head。用返回的完整 SHA 固定后续调用，并通过 `git_read_file(path, ref, filePath)` 读取对应版本，避免混用当前文件。
-- **验证依据是什么**：本地 Agent 提供目标、约束、比较基线、实际结果和验证摘要，需要时再用 `read_file` 读取报告/日志，用 `read_image` 读取截图。产物路径必须已获准共享并通过相同忽略规则；不要为了报告开放整个私有任务目录。工具不执行测试，文件/截图 hash 也不证明它对应哪次运行；摘要应注明执行命令、版本、时间和结果。
+- **验证依据是什么**：本地 Agent 提供目标、约束、比较基线、实际结果和验证摘要，需要时再用 `artifact(kind="text", path=...)` 读取报告/日志，用 `artifact(kind="image", path=...)` 读取截图。产物路径必须已获准共享并通过相同忽略规则；不要为了报告开放整个私有任务目录。`exec` 可执行已公布的隔离构建/测试；检查退出码、超时和输出限制，文件/截图 hash 本身不证明它对应哪次运行。摘要应注明执行命令、版本、时间和结果。
 
 ### 完整性与续读
 
@@ -324,7 +318,7 @@ convorel conversation result --id first-question --run RUN_ID --fields reply
 
 新任务可以用 `conversation create --workspace /absolute/project` 显式保存任务工作区；省略时使用初始化的默认工作区，不从当前目录或 prompt 推断。`followup`/`start`/`retry --workspace PATH` 只断言已有绑定，发现不同就拒绝操作。`status --workspace PATH` 返回 `workspaceMismatch`，不匹配时退出 2，且不修改任务或页面。
 
-尚未发送的首轮（`prepared`、无已确认消息和会话 URL）可显式修正绑定，保留原 run 和 prompt，不修改全局配置、不发送：
+尚未发送的首轮（`prepared`、无提交时间、已确认消息和会话 URL）可显式修正绑定，保留原 run 和任务原文，不修改全局配置、不发送：
 
 ```bash
 bun --no-env-file src/cli.ts conversation rebind-workspace \
@@ -332,7 +326,7 @@ bun --no-env-file src/cli.ts conversation rebind-workspace \
   --from-workspace /previous/default --workspace /absolute/project
 ```
 
-已发送或投递未知的轮次不允许改绑。应检查保存的 prompt 是否准确指定了实际项目和 revision，并继续观察同一 run；不要手改 JSON 或另建同需求任务。工作区绑定仅是任务元数据，不会改写 prompt、扩大 MCP 允许根或证明远端读取了代码。
+已发送或投递未知的轮次不允许改绑。应检查保存的 prompt 是否准确指定了实际项目和 revision，并继续观察同一 run；不要手改 JSON 或另建同需求任务。含内置指引的轮次会同步更新工作区路径和最终 prompt，旧 prompt/hash 保存在 `workspaceBindingChange` 中；历史轮次没有内置指引时保留原文本。改绑不修改浏览器草稿；旧草稿会阻止后续发送，必须另行核对处理。绑定不扩大 MCP 允许根，也不证明远端已读取代码。
 
 新建页可能恢复旧草稿。普通 `retry` 会保留不匹配草稿并返回 `DRAFT_CHANGED`。先检查并备份完整草稿；仅在用户明确授权删除该副本后执行：
 

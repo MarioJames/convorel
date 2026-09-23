@@ -20,7 +20,7 @@ const conversation = [
       taskId,
       [
         "--prompt TEXT",
-        "Whole prompt. Use this or --prompt-stdin, not both. The text must be non-empty and at most 100000 bytes.",
+        "Task objective, constraints and acceptance criteria. Runtime workspace/tool guidance is added automatically. Use this or --prompt-stdin, not both; non-empty, at most 100000 bytes.",
       ],
       [
         "--prompt-stdin true",
@@ -49,7 +49,7 @@ const conversation = [
       fields,
     ],
     [
-      "The saved prompt is prefixed with a run marker. Copy currentRun from the output and pass it to conversation start.",
+      "Stores the original input, versioned workspace/tool guidance and complete rendered prompt with a run marker. start/retry send that snapshot without rebuilding it. This is a normal ChatGPT user message, not a system-role message. Copy currentRun and pass it to conversation start.",
     ],
   ),
   page(
@@ -62,7 +62,7 @@ const conversation = [
       taskId,
       [
         "--prompt TEXT",
-        "Whole new prompt. Use this or --prompt-stdin, not both.",
+        "This turn's task request. Current runtime guidance is included in the new run snapshot. Use this or --prompt-stdin, not both.",
       ],
       ["--prompt-stdin true", "Read the new prompt from a pipe."],
       [
@@ -238,7 +238,7 @@ const conversation = [
     [
       "conversation rebind-workspace --id ID --run UUID --from-workspace PATH --workspace PATH",
     ],
-    "Change the project bound to a task that has not been sent. The prompt, run id, and global config stay as they are.",
+    "Change the project bound to an unsent task. Updates generated workspace context and audits the old prompt; the original task request, run id and global config stay unchanged. Historical prompts without generated context are preserved.",
     [
       taskId,
       runOpt(true),
@@ -247,7 +247,7 @@ const conversation = [
       fields,
     ],
     [
-      "The only eligible run is a prepared first run with no confirmed user message and no conversation URL. A sent or delivery-unknown run is refused.",
+      "The only eligible run is a prepared first run with no send timestamp, confirmed user message or conversation URL. Existing browser drafts are never rewritten; a stale draft will block start until separately reconciled.",
     ],
   ),
   page(

@@ -22,17 +22,17 @@ convorel init --workspace /absolute/project --cdp 9222
 
 Convorel 仅从偏好文件读取配置，不接受环境覆盖，不把个人配置写入技能。用 `convorel config set project.url URL` 和 `convorel config set project.name NAME` 成对设置项目；不要只提供其中一个或猜项目 URL。模型可选，默认 Latest + Power 末端 Pro；用户明确选择的模型通过 `convorel config set model MODEL` 配置。其他配置键为 `tunnel.id`（`tunnel_` 加 32 位十六进制）、`tunnel.apiKey`、`mcp.roots`（1–16 个绝对路径或 `~/` 路径的 JSON 数组）、`mcp.memoryRoots`（明确共享的规范 OpenViking URI 子树 JSON 数组，未设置不开放）、`mcp.memoryExecutable`（可选的 ov CLI 绝对路径）、`mcp.execDependencyRoots`（允许隔离构建读取的 node_modules 完整目录 JSON 数组，未设置不挂载）、`browser.executable`（`init` 保存的 agent-browser 绝对路径）、`browser.serial`（`true`/`false`）、`browser.actionIntervalMs`（默认 750，1–10000）、`browser.navigationWaitMs`（默认 1500，1–10000）、`locks.taskWaitMs`（正整数）、`release.baseUrl`（不含凭据、query、fragment 的 HTTP(S) URL）和 `diagnostics.enabled`（未设置或 `true` 时记录，`false` 关闭；其他值或偏好读取失败也关闭）。`diagnostics --task ID [--run UUID] [--fields LIST]` 读取私有诊断库，不打开浏览器，也不授权重试或重发。
 
-新 task 保存配置 snapshot，续谈保留既有模型/项目；后续修改配置或重新初始化不会迁移旧 task。新任务显式使用 `create --workspace PATH`，避免默认工作区和实际审查对象不同。先用 `conversation status --id ID --workspace PATH` 核对绑定；不匹配时返回 `workspaceMismatch` 和退出码 2。仅未发送的首轮可用 `rebind-workspace --id ID --run RUN_ID --from-workspace OLD --workspace NEW` 修正元数据，原 prompt/run 保留。已发送或投递未知时检查原 prompt 的路径/revision 并继续同一 run；不改状态 JSON、不创建重复审查。工作区绑定不等于 MCP 允许根，也不会改写 prompt。`doctor` 仅验证本地 CDP/MCP，不证明 ChatGPT 已取得代码访问；不要擅自安装工具、扩大共享根或启动重复隧道。
+新 task 保存配置 snapshot，续谈保留既有模型/项目；后续修改配置或重新初始化不会迁移旧 task。新任务显式使用 `create --workspace PATH`，避免默认工作区和实际审查对象不同。先用 `conversation status --id ID --workspace PATH` 核对绑定；不匹配时返回 `workspaceMismatch` 和退出码 2。仅未发送的首轮可用 `rebind-workspace --id ID --run RUN_ID --from-workspace OLD --workspace NEW` 修正绑定，任务原文和 run 保留；含内置指引时更新生成的工作区上下文并记录旧 prompt/hash。已发送或投递未知时检查原 prompt 的路径/revision 并继续同一 run；不改状态 JSON、不创建重复审查。工作区绑定不等于 MCP 允许根；改绑不会改写已有浏览器草稿，旧草稿需另行核对处理。`doctor` 仅验证本地 CDP/MCP，不证明 ChatGPT 已取得代码访问；不要擅自安装工具、扩大共享根或启动重复隧道。
 
 ## 准备和发送
 
 先用 `conversation list`，再用 `conversation status --id ID` 匹配需求和工作区；已有 active run 继续观察，已有适用结果直接复用。
 
-按 [review-prompt.md](review-prompt.md) 编写完整请求，补齐用户已确认的方向、实际决策、约束、项目路径/revision、文件引用、验证摘要和未决问题。先检查请求文本与引用，再通过 stdin 直接入库，不创建 `/tmp` 或其他 prompt 交接文件。Convorel 只附加关联 marker，不添加审查规则或源码。
+按 [review-prompt.md](review-prompt.md) 只编写本轮目标、已确认的方向、约束、验收要求及必要的 revision、文件引用、验证摘要和未决问题。绑定工作区及通用工具指引由 Convorel 自动附加，不复制命令手册。先检查请求与引用，再通过 stdin 直接入库，不创建 `/tmp` 或其他 prompt 交接文件。每轮保存原始 `input`、版本化 `promptContext` 和最终 `prompt`，重试沿用已保存文本；续谈新轮次使用当前指引。源码不自动内嵌，运行时也不决定审查人设和业务方向。
 
 ```bash
 convorel conversation create --id ID --prompt-stdin true --workspace /absolute/project --type DES --topic '具体主题' <<'PROMPT'
-完整请求文本（包含用户已确认的方向和证据引用）。
+本轮目标、约束、验收要求和必要证据引用。
 PROMPT
 ```
 
@@ -57,7 +57,7 @@ convorel conversation start --id ID --run NEW_RUN_ID
 
 旧 JSON 任务仍可读取；执行前需要 `convorel conversation migrate --id ID`。先确认该任务旧 CLI 操作和等待者均已结束，迁移会拒绝持有中的任务/等待锁。迁移保留原 JSON 字节并记录 hash，重复迁移不覆盖数据库；若旧版本后来改写原文件，新版本报 `LEGACY_TASK_CHANGED` 并停止，须保留双方记录核对，不能手改 hash 或删文件规避。配置和锁仍用私有文件；`conversations.db` 继续是独立内容归档，归档失败不改变 `tasks.db` 的投递状态。不要让旧版本继续操作已迁移任务。
 
-使用新协议前核对实际 CLI 的 `--help` 是否包含 `conversation create`；仅更新技能不代表运行时已更新。旧运行时应先升级，或显式使用已验证的新源码入口，不回退到临时 prompt 文件。
+使用前核对实际 CLI 的 `conversation create --help` 是否说明自动附加 workspace/tool guidance 并保存 input/context/rendered prompt；仅更新技能不代表运行时已更新。缺少自动指引的旧运行时应先升级，或显式使用已验证的新源码入口，不把精简目标直接当作已附完整上下文，也不回退到临时 prompt 文件。
 
 ## 等待与恢复
 

@@ -16,6 +16,7 @@ import { safeCompleted } from "./observation.ts";
 import { validateNaming } from "./organization.ts";
 import type { Naming, Page, Run, Task } from "./types.ts";
 import type { DiagnosticStep } from "../storage/diagnostics.ts";
+import { composePrompt, promptContext, validPrompt } from "./prompt.ts";
 
 export interface SubmissionContext {
   readonly store: State;
@@ -109,12 +110,15 @@ export function createSubmission(ctx: SubmissionContext) {
       t.attemptId = randomUUID();
       const runId = randomUUID(),
         marker = `[CONVOREL:${runId}]`;
-      const prompt = `${marker}\n\n${input}`;
+      const context = promptContext(t.config.workspace);
+      const prompt = composePrompt(marker, input, context);
       t.currentRun = runId;
       t.runs.push({
         id: runId,
         requestId,
         inputHash,
+        input,
+        promptContext: context,
         prompt,
         promptHash: sha(prompt),
         marker,
@@ -160,19 +164,30 @@ export function createSubmission(ctx: SubmissionContext) {
     if (
       r.state !== "prepared" ||
       r.userMessageId ||
+      r.submittedAt ||
       t.runs.length !== 1 ||
       t.url
     )
       throw new Error("RUN_NOT_PREPARED");
     ctx.checkWorkspace(t, from);
     const workspace = ctx.workspace(path);
+    if (r.promptContext && !validPrompt(r))
+      throw new Error("PROMPT_INTEGRITY_FAILED");
     t.workspaceBindingChange = {
       from: t.config.workspace,
       to: workspace.root,
       at: new Date().toISOString(),
+      ...(r.promptContext
+        ? { priorPrompt: r.prompt, priorPromptHash: r.promptHash }
+        : {}),
     };
     t.config.workspace = workspace.root;
     t.workspaceId = workspace.id;
+    if (r.promptContext) {
+      r.promptContext = { ...r.promptContext, workspace: workspace.root };
+      r.prompt = composePrompt(r.marker, r.input!, r.promptContext);
+      r.promptHash = sha(r.prompt);
+    }
     ctx.begin(t);
     return t;
   }
@@ -226,8 +241,7 @@ export function createSubmission(ctx: SubmissionContext) {
   ) {
     const r = ctx.current(t),
       prompt = r.prompt;
-    if (sha(prompt) !== r.promptHash || !prompt.startsWith(`${r.marker}\n\n`))
-      throw new Error("PROMPT_INTEGRITY_FAILED");
+    if (!validPrompt(r)) throw new Error("PROMPT_INTEGRITY_FAILED");
     const draftText = (text: string) => text.replace(/\u00a0/g, " ").trim();
     let submittingSaved = false;
     try {

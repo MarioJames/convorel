@@ -2,6 +2,7 @@ import type { Message, PageState } from "../browser/chatgpt/page.ts";
 import type { ArchiveNotice } from "../archive/post-archive.ts";
 import type { Config } from "../config/config.ts";
 import type { DiagnosticStep } from "../storage/diagnostics.ts";
+import type { PromptContext } from "./prompt.ts";
 
 export type { DiagnosticStep };
 
@@ -28,6 +29,9 @@ export interface Run {
   id: string;
   requestId: string;
   inputHash: string;
+  /** Original request and frozen runtime guidance; absent on historical runs. */
+  input?: string;
+  promptContext?: PromptContext;
   prompt: string;
   promptHash: string;
   marker: string;
@@ -113,7 +117,13 @@ export interface Task {
   cleanup?: any;
   /** Outcome of this operation only; never persisted as source state. */
   archive?: ArchiveNotice;
-  workspaceBindingChange?: { from: string; to: string; at: string };
+  workspaceBindingChange?: {
+    from: string;
+    to: string;
+    at: string;
+    priorPrompt?: string;
+    priorPromptHash?: string;
+  };
 }
 /** The page handle Browser.page() attaches to one target, narrowed to the
  * three members conversation flows actually use. */

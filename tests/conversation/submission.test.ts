@@ -7,6 +7,8 @@ import { State } from "../../src/storage/state.ts";
 import { Conversation } from "../../src/conversation/conversation.ts";
 import { conversationStatus } from "../../src/conversation/status.ts";
 import { conversationHarness } from "../support/conversation.ts";
+import { composePrompt } from "../../src/conversation/prompt.ts";
+import { sha } from "../../src/hash.ts";
 
 const { setup, start, home, ws, completedWithClaimedTab } =
   conversationHarness();
@@ -137,13 +139,18 @@ test("a fresh task never fills or sends into a redirected non-ChatGPT page", asy
   expect([...browser.pages.values()][0].draft).toBe("");
 });
 
-test("caller content is relayed intact with only a run correlation marker", async () => {
+test("task-only requests send frozen workspace guidance and preserve verbatim input on every run", async () => {
   const { browser, conversation } = setup();
   const input = "请解释这个算法。\n\n```ts\nconst n = 2;\n```\n";
   const first = await start(conversation, "question", input);
-  const expected = `[CONVOREL:${first.currentRun}]\n\n${input}`;
-  expect(first.runs[0].prompt).toBe(expected);
-  expect([...browser.pages.values()][0].messages[0].text).toBe(expected);
+  const run = first.runs[0];
+  expect(run.input).toBe(input);
+  expect(run.promptContext).toMatchObject({ version: 1, workspace: ws() });
+  expect(run.promptContext!.instructions).toContain("capabilities");
+  expect(run.promptContext!.instructions).toContain("execution.result");
+  expect(run.prompt).toContain(JSON.stringify(ws()));
+  expect(run.prompt.endsWith(input)).toBe(true);
+  expect([...browser.pages.values()][0].messages[0].text).toBe(run.prompt);
   browser.complete();
   await conversation.poll("question", first.currentRun);
   const nextInput = "补充问题：为什么？\n";
@@ -154,12 +161,62 @@ test("caller content is relayed intact with only a run correlation marker", asyn
     "second-question",
     true,
   );
-  expect(next.runs.at(-1)!.prompt).toBe(
-    `[CONVOREL:${next.currentRun}]\n\n${nextInput}`,
-  );
+  expect(next.runs.at(-1)!.input).toBe(nextInput);
+  expect(next.runs.at(-1)!.promptContext).toEqual(run.promptContext);
+  expect(next.runs.at(-1)!.prompt.endsWith(nextInput)).toBe(true);
+  expect(next.runs[0].prompt).toBe(run.prompt);
   expect([...browser.pages.values()][0].messages.at(-1).text).toBe(
     next.runs.at(-1)!.prompt,
   );
+});
+
+test("reopened queued runs and retries send their saved guidance even when the runtime template differs", async () => {
+  const { state, browser, conversation } = setup();
+  const task = await conversation.create("frozen-guidance", "Only the goal");
+  const r = task.runs[0];
+  r.promptContext!.instructions = "Saved guidance from an earlier release";
+  r.prompt = composePrompt(r.marker, r.input!, r.promptContext!);
+  r.promptHash = sha(r.prompt);
+  state.write("task-" + task.id, task);
+  const reopened = new Conversation(state, browser as any, async () => ({
+    observedModel: "6 Pro",
+  }));
+  expect((await reopened.create(task.id, "Only the goal")).runs[0].prompt).toBe(
+    r.prompt,
+  );
+  browser.sendReady = false;
+  await reopened.start(task.id, task.currentRun);
+  expect(browser.sends).toBe(0);
+  [...browser.pages.values()][0].sendReady = true;
+  await reopened.retry(task.id, task.currentRun);
+  expect(browser.sends).toBe(1);
+  expect([...browser.pages.values()][0].messages[0].text).toBe(r.prompt);
+});
+
+test("a changed request snapshot is rejected before opening or sending", async () => {
+  const { state, browser, conversation } = setup();
+  const task = await conversation.create("corrupt-guidance", "Original goal");
+  task.runs[0].input = "Changed goal";
+  state.write("task-" + task.id, task);
+  await expect(conversation.start(task.id, task.currentRun)).rejects.toThrow(
+    "PROMPT_INTEGRITY_FAILED",
+  );
+  expect(browser.targets).toHaveLength(0);
+  expect(browser.sends).toBe(0);
+});
+
+test("a queued historical run without context keeps its exact original prompt", async () => {
+  const { state, browser, conversation } = setup();
+  const task = await conversation.create("historical-prompt", "Original goal");
+  const r = task.runs[0];
+  delete r.input;
+  delete r.promptContext;
+  r.prompt = `${r.marker}\n\nOriginal goal`;
+  r.promptHash = sha(r.prompt);
+  state.write("task-" + task.id, task);
+  await conversation.start(task.id, task.currentRun);
+  expect([...browser.pages.values()][0].messages[0].text).toBe(r.prompt);
+  expect(conversation.get(task.id).runs[0].promptContext).toBeUndefined();
 });
 
 test("followup restores a closed conversation after page loading and retains earlier runs", async () => {
@@ -467,7 +524,7 @@ test("workspace snapshots can be selected explicitly and mismatch cannot silentl
   expect(browser.sends).toBe(0);
 });
 
-test("explicit prepared workspace correction retains prompt/run and rejects stale binding or uncertain delivery", async () => {
+test("explicit unsent workspace correction updates context, retains request/run and audits the old prompt", async () => {
   const { state, browser, conversation } = setup();
   const other = join(ws(), "other");
   mkdirSync(other);
@@ -481,7 +538,14 @@ test("explicit prepared workspace correction retains prompt/run and rejects stal
   );
   expect(corrected.config.workspace).toBe(other);
   expect(corrected.workspaceId).not.toBe(t.workspaceId);
-  expect(corrected.runs).toEqual(t.runs);
+  expect(corrected.runs[0].input).toBe(t.runs[0].input);
+  expect(corrected.runs[0].promptContext!.workspace).toBe(other);
+  expect(corrected.runs[0].prompt).toContain(JSON.stringify(other));
+  expect(corrected.workspaceBindingChange!.priorPrompt).toBe(t.runs[0].prompt);
+  expect(corrected.workspaceBindingChange!.priorPromptHash).toBe(
+    t.runs[0].promptHash,
+  );
+  expect([...browser.pages.values()][0].draft).toBe("Old draft");
   expect(corrected.currentRun).toBe(t.currentRun);
   expect(state.read<any>("config").workspace).toBe(ws());
   await expect(

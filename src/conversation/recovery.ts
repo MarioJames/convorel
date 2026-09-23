@@ -3,6 +3,7 @@ import { sha } from "../hash.ts";
 import type { Browser } from "../browser/browser.ts";
 import { safeCompleted } from "./observation.ts";
 import type { Page, RejectedSendRecovery, Task } from "./types.ts";
+import { validPrompt } from "./prompt.ts";
 
 export interface RecoveryContext {
   get: (id: string) => Task;
@@ -46,9 +47,10 @@ export function createRecovery(ctx: RecoveryContext) {
     conversationId(t.url);
     if (
       sha(options.input) !== r.inputHash ||
-      sha(r.prompt) !== r.promptHash ||
-      r.marker !== `[CONVOREL:${r.id}]` ||
-      r.prompt !== `${r.marker}\n\n${options.input}`
+      !validPrompt(r) ||
+      (r.promptContext
+        ? r.input !== options.input
+        : r.prompt !== `${r.marker}\n\n${options.input}`)
     )
       throw new Error("RECOVERY_PROMPT_MISMATCH");
     const evidence = Array.isArray(options.evidence)
