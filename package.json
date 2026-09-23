@@ -1,6 +1,6 @@
 {
   "name": "convorel",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "让编码 Agent 与 ChatGPT 围绕真实代码持续协作，将独立意见带回本地实现与验证。",
   "type": "module",
   "license": "Apache-2.0",
