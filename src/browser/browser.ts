@@ -115,8 +115,19 @@ export class Browser {
     return createHash("sha256").update(x.webSocketDebuggerUrl).digest("hex");
   }
   async invoke(session: string, pin: boolean, ...args: string[]) {
+    return this.dispatch(session, pin, args);
+  }
+  private async dispatch(
+    session: string,
+    pin: boolean,
+    args: string[],
+    beforeDispatch?: () => Promise<void>,
+  ) {
     this.sessions.add(session);
     return this.pacing.run(args, async () => {
+      // A pacing delay can outlive the state that authorized the action.
+      // This callback must only observe; paced mutations would re-enter the lock.
+      await beforeDispatch?.();
       const x = JSON.parse(
         await this.execute(
           this.argv(
@@ -188,6 +199,10 @@ export class Browser {
     if (args[0] === "close" && !args[1])
       throw new Error("EXPLICIT_TARGET_REQUIRED");
     return this.invoke("tabs", false, "tab", ...args);
+  }
+  async closeTab(target: string, beforeClose: () => Promise<void>) {
+    if (!/^[a-zA-Z0-9-]+$/.test(target)) throw new Error("INVALID_TARGET");
+    return this.dispatch("tabs", false, ["tab", "close", target], beforeClose);
   }
   async page(target: string) {
     if (!/^[a-zA-Z0-9-]+$/.test(target)) throw new Error("INVALID_TARGET");

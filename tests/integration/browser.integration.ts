@@ -227,6 +227,34 @@ try {
     new URL("../fixtures/localized-controls.html", import.meta.url).href,
   );
   const localizedPage = await controller.page(localizedTab.targetId);
+  await localizedPage.run(
+    "eval",
+    `window.savedComposer = document.querySelector('#prompt-textarea').outerHTML; document.querySelector('#prompt-textarea').outerHTML = '<textarea id="prompt-textarea"></textarea>'`,
+  );
+  for (const attribute of ["disabled", "readonly", "aria-disabled"]) {
+    await localizedPage.run(
+      "eval",
+      `document.querySelector('#prompt-textarea').setAttribute(${JSON.stringify(attribute)}, 'true')`,
+    );
+    assert.equal(
+      (await localizedPage.run("eval", projectComposerScript())).result
+        .editable,
+      false,
+      attribute + " composer must not be ready",
+    );
+    await localizedPage.run(
+      "eval",
+      `document.querySelector('#prompt-textarea').removeAttribute(${JSON.stringify(attribute)})`,
+    );
+  }
+  assert.equal(
+    (await localizedPage.run("eval", projectComposerScript())).result.editable,
+    true,
+  );
+  await localizedPage.run(
+    "eval",
+    `document.querySelector('#prompt-textarea').outerHTML = window.savedComposer; delete window.savedComposer`,
+  );
   for (const locale of ["zh-CN", "fr", "en"]) {
     await localizedPage.run(
       "eval",
@@ -245,6 +273,11 @@ try {
     assert.equal(project.projectName, "Agent reviews");
     assert.equal(project.composerCount, 1);
     assert.equal(project.editable, true);
+    assert.equal(
+      project.messageCount,
+      2,
+      "existing history cannot be a new project chat",
+    );
     await localizedPage.run("click", "#model");
     const menu = (await localizedPage.run("eval", MODEL_SCRIPT)).result;
     assert.equal(menu.menuLabel, "6 Pro");

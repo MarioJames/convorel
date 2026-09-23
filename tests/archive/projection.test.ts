@@ -124,3 +124,66 @@ test("run metadata refreshes even when no content version is created", () => {
   });
   a.close();
 });
+
+test("a colliding run from another task rejects the whole publication without changing archived history", async () => {
+  const state = new State(root),
+    archive = new Archive(root);
+  const first = taskDoc();
+  first.runs[0].reply.markdown = "Answer A";
+  state.write("task-review", first);
+  expect((await publishTask(root, first.id)).status).toBe("stored");
+  const before = archive.history(first.id),
+    stats = archive.stats();
+  const second = structuredClone(first);
+  second.id = "other";
+  second.runs[0].reply.markdown = "Answer B";
+  // One valid run precedes the conflict, so rejection must also roll it back.
+  second.runs.unshift({
+    ...structuredClone(second.runs[0]),
+    id: "unique",
+    requestId: "unique",
+  });
+  state.write("task-other", second);
+  const result = await publishTask(root, second.id);
+  expect(result.status).toBe("failed");
+  expect(result.error).toContain("ARCHIVE_RUN_TASK_CONFLICT");
+  expect(archive.history(first.id)).toEqual(before);
+  expect(archive.stats()).toEqual(stats);
+  archive.close();
+});
+
+test("A-B-A reactivation preserves content IDs while updating active metadata and the next predecessor", () => {
+  const archive = new Archive(root),
+    task = taskDoc();
+  const publish = (text: string, hash: string) => {
+    task.runs[0].reply.markdown = text;
+    task.runs[0].reply.text = text;
+    task.runs[0].replyHash = sha(text);
+    archive.publish(task, hash);
+    return archive.history(task.id).turns[0];
+  };
+  const a = publish("A", "a"),
+    b = publish("B", "b"),
+    reverted = publish("A", "a-again");
+  for (const key of ["reply_version_id", "rendered_version_id"] as const) {
+    expect(reverted[key]).toBe(a[key]);
+    expect(archive.contentVersion(a[key])).toMatchObject({
+      selected_by: 1,
+      superseded_at: null,
+      text: "A",
+    });
+    expect(archive.contentVersion(b[key]).superseded_at).toBeTruthy();
+    expect(archive.contentVersion(b[key]).selected_by).toBe(0);
+  }
+  const c = publish("C", "c");
+  expect(archive.contentVersion(c.reply_version_id).supersedes).toBe(
+    a.reply_version_id,
+  );
+  expect(archive.contentVersion(c.rendered_version_id).supersedes).toBe(
+    a.rendered_version_id,
+  );
+  expect(archive.contentVersion(b.reply_version_id).supersedes).toBe(
+    a.reply_version_id,
+  );
+  archive.close();
+});

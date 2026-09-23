@@ -196,3 +196,25 @@ test("finish reports pending naming even when an interrupted edit has no error t
     organizationPending: true,
   });
 });
+
+test.each(["draft", "last-tab"])(
+  "finish revalidates %s after action pacing",
+  async (activity) => {
+    const { browser, conversation } = setup();
+    const t = await start(conversation, "paced-close", "Review");
+    browser.complete();
+    await conversation.poll(t.id);
+    const target = t.binding!.target;
+    browser.gate = async (where) => {
+      if (where !== "before-close:" + target) return;
+      if (activity === "draft")
+        browser.pages.get(target).draft = "New user work";
+      else
+        browser.targets = browser.targets.filter((x) => x.targetId === target);
+    };
+    await expect(conversation.finish(t.id)).rejects.toThrow(
+      activity === "draft" ? "DRAFT_PRESENT" : "KEEPALIVE_UNVERIFIED",
+    );
+    expect(browser.targets.map((x) => x.targetId)).toContain(target);
+  },
+);

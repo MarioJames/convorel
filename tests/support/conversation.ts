@@ -28,6 +28,11 @@ export class FakeBrowser {
   async release() {
     this.releases++;
   }
+  async closeTab(target: string, beforeClose: () => Promise<void>) {
+    if (this.gate) await this.gate("before-close:" + target);
+    await beforeClose();
+    return this.tabs("close", target);
+  }
   async tabs(...args: string[]) {
     if (args[0] === "list") return { tabs: this.targets };
     if (args[0] === "new") {

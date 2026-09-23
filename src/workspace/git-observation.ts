@@ -10,6 +10,7 @@ import {
   textBlob,
 } from "./git-output.ts";
 import { selectGitPatch } from "./git-patch.ts";
+import { policyText } from "./policy.ts";
 export type HistoryAccess = {
   root: string;
   id: string;
@@ -165,7 +166,7 @@ export class Observation {
           (this.policyBytes += blob.length) > MAX_FILE
         )
           throw new Error("POLICY_UNREADABLE");
-        content = textBlob(blob);
+        content = policyText(blob);
       } catch {
         throw new Error("POLICY_UNREADABLE");
       }

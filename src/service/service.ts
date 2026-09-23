@@ -1,3 +1,4 @@
+import { orphanGroup } from "../process-lifecycle.ts";
 // Background service manager for the tunnel client: start, stop, status, logs.
 // It re-enters `tunnel run` as a detached supervisor whose output lands in a
 // private log file, and relies on the registry record that supervisor writes.
@@ -7,7 +8,6 @@ import {
   existsSync,
   openSync,
   readFileSync,
-  readdirSync,
   renameSync,
   statSync,
 } from "node:fs";
@@ -44,78 +44,6 @@ function alive(entry?: { pid?: number; identity?: string } | null) {
     if (e.code !== "ENOENT") throw e;
     return false;
   }
-}
-
-type ProcessOwner = { pid: number; identity: string };
-
-/** Capture ownership before TERM can remove the session/group leader. */
-function orphanGroup(leader: ProcessOwner) {
-  const unverified = () =>
-    new Error(
-      "SERVICE_STOP_UNVERIFIED: cannot prove ownership of the remaining client processes",
-    );
-  const inspect = (pid: number) => {
-    try {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      const identity = processIdentity(pid);
-      if (identity.split(":")[1] !== fields[19]) throw unverified();
-      return {
-        pid,
-        identity,
-        live: !["Z", "X"].includes(fields[0]),
-        group: Number(fields[2]),
-        session: Number(fields[3]),
-      };
-    } catch (error: any) {
-      if (error.code !== "ENOENT") throw error;
-    }
-  };
-  const inGroup = (p: NonNullable<ReturnType<typeof inspect>>) =>
-    p.group === leader.pid && p.session === leader.pid;
-  const scan = () =>
-    readdirSync("/proc")
-      .filter((name) => /^[0-9]+$/.test(name))
-      .map((name) => inspect(Number(name)))
-      .filter((p): p is NonNullable<typeof p> => !!p?.live && inGroup(p));
-  const before = inspect(leader.pid);
-  if (!before?.live || before.identity !== leader.identity || !inGroup(before))
-    throw unverified();
-  const members = scan();
-  if (
-    !alive(leader) ||
-    !members.some((p) => p.pid === leader.pid && p.identity === leader.identity)
-  )
-    throw unverified();
-  const owned = new Map(members.map((p) => [p.pid, p.identity]));
-  const remaining = () => {
-    // Never infer ownership from an old PGID after its leader has exited. A
-    // new member (or recycled PID/PGID) makes the result uncertain, not stopped.
-    const current = scan();
-    if (current.some((p) => owned.get(p.pid) !== p.identity))
-      throw unverified();
-    for (const member of members) {
-      const p = inspect(member.pid);
-      if (p?.live && p.identity === member.identity && !inGroup(p))
-        throw unverified();
-    }
-    return current;
-  };
-  return {
-    alive: () => remaining().length > 0,
-    signal(signal: NodeJS.Signals) {
-      for (const member of remaining()) {
-        const current = inspect(member.pid);
-        if (!current?.live || current.identity !== member.identity) continue;
-        if (!inGroup(current)) throw unverified();
-        try {
-          process.kill(member.pid, signal);
-        } catch (error: any) {
-          if (error.code !== "ESRCH") throw error;
-        }
-      }
-    },
-  };
 }
 
 /** Serialize short lifecycle operations separately from the running client's lock. */

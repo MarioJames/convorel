@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawnManaged } from "../process-lifecycle.ts";
 import { State, processIdentity } from "../storage/state.ts";
 import { Workspace } from "../workspace/workspace.ts";
 import { sha } from "../hash.ts";
@@ -126,29 +126,21 @@ export async function runTunnel(
       ...childEnv(),
       CONTROL_PLANE_API_KEY: apiKey,
     };
-    const child = spawn(
-      "tunnel-client",
-      [action, ...flags, ...(action === "doctor" ? ["--explain"] : [])],
-      { cwd: registry.root, env, stdio: "inherit", detached: true },
+    const managed = spawnManaged(
+      [
+        "tunnel-client",
+        action,
+        ...flags,
+        ...(action === "doctor" ? ["--explain"] : []),
+      ],
+      { cwd: registry.root, env, stdio: "inherit" },
     );
-    const exited = new Promise<number>((yes, no) => {
-      child.once("error", no);
-      child.once("exit", (code) => yes(code ?? 1));
-    });
-    void exited.catch(() => {});
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const child = managed.child;
+    let stopError: unknown;
     const stop = () => {
-      if (timer) return;
-      if (child.pid) {
-        try {
-          process.kill(-child.pid, "SIGTERM");
-        } catch {}
-        timer = setTimeout(() => {
-          try {
-            process.kill(-child.pid!, "SIGKILL");
-          } catch {}
-        }, 8000);
-      }
+      void managed.dispose().catch((error) => {
+        stopError = error;
+      });
     };
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
@@ -159,28 +151,25 @@ export async function runTunnel(
           pid: child.pid,
           identity: processIdentity(child.pid),
         });
-      const code = await exited;
+      const code = await managed.exited.catch((error) => {
+        if (stopError) throw stopError;
+        if (child.signalCode) return 1;
+        throw error;
+      });
+      await managed.dispose();
       registry.write(key, {
         ...base,
         exitCode: code,
         exitedAt: new Date().toISOString(),
       });
       return code;
-    } catch (e) {
-      stop();
-      await exited.catch(() => {});
-      throw e;
     } finally {
-      if (timer) {
-        clearTimeout(timer);
-        // The leader may exit on TERM while a child ignores it. Finish the
-        // same process group before releasing ownership of this tunnel.
-        try {
-          process.kill(-child.pid!, "SIGKILL");
-        } catch {}
+      try {
+        await managed.dispose();
+      } finally {
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
       }
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
     }
   }, key);
 }

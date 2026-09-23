@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { configDirectory } from "../paths.ts";
 import { join } from "node:path";
 import { State } from "../storage/state.ts";
+import { withSyncLock } from "../storage/sync-lock.ts";
 import { fullPath } from "../paths.ts";
 import { projectId } from "../browser/chatgpt/organize.ts";
 import { parseMemoryRoots } from "./mcp.ts";
@@ -178,11 +179,13 @@ export function preference(key: SettingKey): string | undefined {
 export function writePreference(key: SettingKey, value: string) {
   if (["browser.executable", "mcp.memoryExecutable"].includes(key) && value)
     value = fullPath(value);
-  const all = { ...current(), [key]: value };
-  if (value === "") delete all[key];
-  else validate(key, value);
-  publish(all);
-  return { key, ...mask(key, all[key]) };
+  return withSyncLock(preferenceFile() + ".mutex.sqlite", () => {
+    const all = { ...current(), [key]: value };
+    if (value === "") delete all[key];
+    else validate(key, value);
+    publish(all);
+    return { key, ...mask(key, all[key]) };
+  });
 }
 
 function publish(values: Partial<Record<SettingKey, string>>) {

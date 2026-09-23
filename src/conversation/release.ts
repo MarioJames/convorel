@@ -26,6 +26,45 @@ export interface ReleaseContext {
   recordDiagnosticFailure: (input: DiagnosticFailure) => void;
 }
 
+/** Caller holds the cross-task close lock. Every owned-page close, including
+ * observer retries, uses this same last-tab protection. */
+export async function preserveLastTab(
+  ctx: Pick<ReleaseContext, "browser" | "writeKeepalive">,
+  target: string,
+  epoch: string,
+) {
+  const { tabs } = await ctx.browser.tabs("list");
+  if (tabs.some((tab: any) => tab.targetId !== target)) return;
+  ctx.writeKeepalive({ version: 1, opening: true, epoch });
+  const keepalive = await ctx.browser.tabs("new", "about:blank");
+  if (!keepalive.targetId || keepalive.targetId === target)
+    throw new Error("KEEPALIVE_UNVERIFIED");
+  ctx.writeKeepalive({ version: 1, target: keepalive.targetId, epoch });
+  if (
+    !(await ctx.browser.tabs("list")).tabs.some(
+      (tab: any) => tab.targetId === keepalive.targetId,
+    )
+  )
+    throw new Error("KEEPALIVE_UNVERIFIED");
+}
+
+/** Read-only preflight inside the pacing lock: creating a new tab here would
+ * recursively acquire that lock. If the keepalive vanished, preserve the target. */
+export async function verifyCloseTarget(
+  browser: Browser,
+  target: string,
+  epoch: string,
+) {
+  if (epoch !== (await browser.epoch()))
+    throw new Error("BROWSER_RESTARTED: ownership expired");
+  if (
+    !(await browser.tabs("list")).tabs.some(
+      (tab: any) => tab.targetId !== target,
+    )
+  )
+    throw new Error("KEEPALIVE_UNVERIFIED");
+}
+
 /** Wait for hydration outside the cross-task lock, then serialize last-tab
  * keepalive, closing and close verification inside that lock. */
 export function createRelease(ctx: ReleaseContext) {
@@ -84,29 +123,16 @@ export function createRelease(ctx: ReleaseContext) {
         const b = await ctx.browser.page(binding.target);
         ctx.guard(t);
         completedPage(t, await ctx.observe(t, b), ctx.current(t));
-        if (tabs.length === 1) {
-          ctx.writeKeepalive({
-            version: 1,
-            opening: true,
-            epoch: binding.epoch,
-          });
-          const k = await ctx.browser.tabs("new", "about:blank");
-          ctx.guard(t);
-          ctx.writeKeepalive({
-            version: 1,
-            target: k.targetId,
-            epoch: binding.epoch,
-          });
-        }
+        await preserveLastTab(ctx, binding.target, binding.epoch);
+        ctx.guard(t);
         // Closing an idle owned tab does not overwrite its durable reply. A
         // later assistant rendering in the same user turn is not user work.
-        const changed = replyChanged(
-          t,
-          await ctx.observe(t, b),
-          ctx.current(t),
-        );
-        ctx.guard(t);
-        await ctx.browser.tabs("close", binding.target);
+        let changed = false;
+        await ctx.browser.closeTab(binding.target, async () => {
+          await verifyCloseTarget(ctx.browser, binding.target, binding.epoch);
+          changed = replyChanged(t, await ctx.observe(t, b), ctx.current(t));
+          ctx.guard(t);
+        });
         ctx.guard(t);
         tabs = (await ctx.browser.tabs("list")).tabs;
         if (tabs.some((x: any) => x.targetId === binding.target))

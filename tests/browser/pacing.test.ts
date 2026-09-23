@@ -253,3 +253,34 @@ test("failed preflight leaves the write untouched and command duration counts be
     f.restore();
   }
 });
+
+test("close authorization is checked after pacing and can veto dispatch", async () => {
+  const f = fixture();
+  try {
+    let changed = false;
+    const browser = new Browser("1", f.store.root, {
+      ...f.dependencies,
+      sleep: async (ms) => {
+        await f.dependencies.sleep(ms);
+        changed = true;
+      },
+    });
+    await browser.invoke("p", true, "click", "#first-action");
+    let checkedAt = 0;
+    await expect(
+      browser.closeTab("target", async () => {
+        checkedAt = f.now();
+        if (changed) throw new Error("DRAFT_CHANGED");
+      }),
+    ).rejects.toThrow("DRAFT_CHANGED");
+    expect(checkedAt).toBe(100_750);
+    expect(f.actions.some((x) => x.args.includes("close"))).toBe(false);
+    expect(f.store.has("lock-browser-pacing")).toBe(false);
+    await browser.closeTab("target", async () => {
+      expect(changed).toBe(true);
+    });
+    expect(f.actions.filter((x) => x.args.includes("close"))).toHaveLength(1);
+  } finally {
+    f.restore();
+  }
+});

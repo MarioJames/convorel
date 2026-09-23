@@ -101,6 +101,8 @@ export class Conversation {
       recordNamingProgress: (taskId, runId, phase) =>
         this.diagnostics.namingProgress(taskId, runId, phase),
       recordDiagnosticFailure: (input) => this.diagnostics.failure(input),
+      tabRelease: (fn) => this.tabRelease(fn),
+      writeKeepalive: (value) => this.store.write("keepalive", value),
       browser: this.browser,
       organizer: this.organizer,
     };

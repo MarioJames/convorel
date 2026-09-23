@@ -36,6 +36,8 @@ curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh
 
 安装脚本下载当前架构的 Release 压缩包，按该版本的 `sha256sums.txt` 校验后解压到 `~/.local/lib/convorel`，并把 `convorel` 链接到 `~/.local/bin`；不使用 sudo，也不安装 `agent-browser`。仅支持参数 `--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`，安装选项不接受环境输入。卸载只移除可执行文件，不动会话状态、偏好和已安装技能。产物带 GitHub 构建来源证明，可用 `gh attestation verify 压缩包 --repo MarioJames/convorel` 核验。
 
+安装器在 prefix 中保存 `.convorel-owned` 所有权清单。卸载只删除清单中内容未变的受管文件和空目录，保留未知或被修改的文件；不得删除清单后尝试强制接管。没有清单的旧安装不自动迁入或覆盖，也不递归卸载：在新的空 prefix 与独立 bin 目录安装，核验后再单独处理旧安装。
+
 从源码运行时：`git clone https://github.com/MarioJames/convorel.git`，以下命令把 `convorel` 换成 `bun --no-env-file src/cli.ts`，初始化改用 `bun --no-env-file setup.ts`（它会先执行 `bun install --frozen-lockfile`）。
 
 ### 2. 准备浏览器

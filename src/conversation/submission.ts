@@ -260,11 +260,7 @@ export function createSubmission(ctx: SubmissionContext) {
       };
       checkDraft(p);
       if (!t.url && t.config.projectUrl)
-        await verifyProjectComposer(
-          b,
-          t.config.projectUrl,
-          t.config.projectName!,
-        );
+        await verifyProjectComposer(b, t.config.projectUrl);
       // Retries retain this run's verified model (including rejected sends).
       // Otherwise honor the task's explicit preference before inheriting the
       // latest completed observation. New tasks still resolve Latest Pro.
@@ -324,11 +320,7 @@ export function createSubmission(ctx: SubmissionContext) {
         throw new Error("DRAFT_CHANGED");
       if (!p.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
       if (!t.url && t.config.projectUrl)
-        await verifyProjectComposer(
-          b,
-          t.config.projectUrl,
-          t.config.projectName!,
-        );
+        await verifyProjectComposer(b, t.config.projectUrl);
       await recovery?.beforeSend();
       r.error = undefined;
       // Durable write precedes the first action capable of submitting a message.

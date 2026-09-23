@@ -15,6 +15,7 @@ import ignore from "ignore";
 import { CONTENT_BUDGET, textPage, pathMatcher } from "./evidence.ts";
 import { WorkspaceGit } from "./git.ts";
 import { MAX_FILE, MAX_OUT, integer } from "./limits.ts";
+import { policyText } from "./policy.ts";
 export { MAX_OUT } from "./limits.ts";
 // Adapted from codex-with-chatgpt (MIT); exclusions apply to every tool, including Git.
 const HARD = ignore().add([
@@ -149,7 +150,7 @@ export class Workspace {
   }
   private policy(file: string) {
     try {
-      return this.raw(file, true).toString("utf8");
+      return policyText(this.raw(file, true));
     } catch (e: any) {
       if (e.code === "ENOENT") return "";
       throw new Error("POLICY_UNREADABLE");

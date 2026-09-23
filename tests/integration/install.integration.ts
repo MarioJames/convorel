@@ -180,7 +180,12 @@ try {
   const report = JSON.parse(doctor);
   assert.match(report.agentBrowser, /agent-browser 0\.34\.0/);
   assert.equal(report.localMcp.status, "verified");
-  assert.equal(report.localMcp.tools.length, 12);
+  assert.deepEqual(report.localMcp.tools.sort(), [
+    "artifact",
+    "capabilities",
+    "exec",
+    "memory",
+  ]);
   assert.deepEqual(
     report.localMcp.roots.map((root: any) => root.path),
     [shared],

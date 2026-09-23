@@ -186,6 +186,8 @@ test.each([false, true])(
         expect(metadata).toBeDefined();
         await metadata!.read();
         sourceTarget = browser.targets.at(-1).targetId;
+        // The metadata page has hydrated the same user turn and is idle.
+        browser.pages.get(sourceTarget).messages = (await b.read()).messages;
         if (changed)
           browser.pages.get(sourceTarget).draft = "User took over this page";
         throw new Error("Metadata unavailable");
@@ -465,7 +467,9 @@ test.each([
       async () => ({ observedModel: "6 Pro" }),
       async (_page, _url, _prefs, _type, _topic, _progress, metadata) => {
         await metadata!.read();
-        browser.pages.get(browser.targets.at(-1).targetId).blocked = blocked;
+        const observer = browser.pages.get(browser.targets.at(-1).targetId);
+        observer.messages = (await _page.read()).messages;
+        observer.blocked = blocked;
         await metadata!.run("network", "requests");
         return { verified: true } as any;
       },
@@ -486,7 +490,10 @@ test.each([
     if (blocked !== "Conversation UI reported an error")
       expect(t.organization.error).toContain(blocked);
     expect(browser.sends).toBe(1);
-    expect(browser.targets).toHaveLength(1);
+    // Metadata reads may succeed through a rendering alert; closing still
+    // requires an unblocked page with verifiable current activity.
+    expect(browser.targets).toHaveLength(2);
+    expect(t.organizationObservation?.error).toContain("PAGE_NOT_IDLE");
   },
 );
 
@@ -584,6 +591,9 @@ test("observer close acknowledgement loss reconciles missing target on resume", 
     async (_b, _url, _prefs, _type, _topic, _progress, metadata) => {
       calls++;
       await metadata!.read();
+      browser.pages.get(browser.targets.at(-1).targetId).messages = (
+        await _b.read()
+      ).messages;
       if (calls === 1) throw new Error("METADATA_PAGE_UNAVAILABLE");
       return { verified: true } as any;
     },

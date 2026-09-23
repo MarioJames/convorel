@@ -1,3 +1,4 @@
+import { executeManaged } from "./process-lifecycle.ts";
 export function childEnv() {
   const env: Record<string, string> = {};
   for (const key of [
@@ -20,24 +21,13 @@ export async function runProcess(
   seconds = 25,
   label = argv[0],
 ): Promise<string> {
-  const p = Bun.spawn(argv, {
-    stdout: "pipe",
-    stderr: "pipe",
+  const { stdout, stderr, code } = await executeManaged(argv, {
     env: childEnv(),
+    timeoutMs: seconds * 1000,
   });
-  const timer = setTimeout(() => p.kill("SIGKILL"), seconds * 1000);
-  try {
-    const [out, err, code] = await Promise.all([
-      new Response(p.stdout).text(),
-      new Response(p.stderr).text(),
-      p.exited,
-    ]);
-    if (code)
-      throw new Error(
-        `COMMAND_FAILED: ${label} (${code}): ${(err || out).slice(0, 600)}`,
-      );
-    return out;
-  } finally {
-    clearTimeout(timer);
-  }
+  if (code)
+    throw new Error(
+      `COMMAND_FAILED: ${label} (${code}): ${(stderr || stdout).slice(0, 600)}`,
+    );
+  return stdout;
 }

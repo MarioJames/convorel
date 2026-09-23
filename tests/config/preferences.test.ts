@@ -125,3 +125,63 @@ test("browser pacing preferences accept only bounded positive integer millisecon
     restore();
   }
 });
+
+test("concurrent successful updates to independent preferences are all retained", async () => {
+  const { writeFileSync, existsSync, readFileSync } = await import("node:fs");
+  const { childEnv } = await import("../../src/process.ts");
+  const { root, restore } = isolated();
+  const source = new URL("../../src/config/preferences.ts", import.meta.url)
+    .pathname;
+  const paths = new URL("../../src/paths.ts", import.meta.url).pathname;
+  const values = {
+    model: "fixture",
+    "project.name": "fixture-project",
+    "project.url": project,
+    "browser.serial": "false",
+    "diagnostics.enabled": "false",
+    "locks.taskWaitMs": "10",
+    "tunnel.id": "tunnel_" + "a".repeat(32),
+    "tunnel.apiKey": "fixture-only",
+  };
+  const children: ReturnType<typeof Bun.spawn>[] = [];
+  try {
+    for (let round = 0; round < 3; round++) {
+      const configDir = join(root, "parallel-" + round),
+        gate = join(root, "go-" + round);
+      const entries = Object.entries(values);
+      const workers = entries.map(([key, value], i) => {
+        const ready = join(root, `ready-${round}-${i}`);
+        const code = `import {writePreference} from ${JSON.stringify(source)}; import {setRuntimePaths} from ${JSON.stringify(paths)}; import {writeFileSync,existsSync} from 'node:fs'; setRuntimePaths({configDir:${JSON.stringify(configDir)}});writeFileSync(${JSON.stringify(ready)},'ready');while(!existsSync(${JSON.stringify(gate)}))await Bun.sleep(1);writePreference(${JSON.stringify(key)},${JSON.stringify(value)});`;
+        const child = Bun.spawn(
+          [process.execPath, "--no-env-file", "--eval", code],
+          { env: childEnv(), stdout: "ignore", stderr: "pipe" },
+        );
+        children.push(child);
+        return { child, ready };
+      });
+      const deadline = Date.now() + 5000;
+      while (
+        !workers.every((x) => existsSync(x.ready)) &&
+        Date.now() < deadline
+      )
+        await Bun.sleep(5);
+      expect(workers.every((x) => existsSync(x.ready))).toBe(true);
+      writeFileSync(gate, "go");
+      for (const { child } of workers) {
+        const [exit, error] = await Promise.all([
+          child.exited,
+          new Response(child.stderr).text(),
+        ]);
+        expect(exit, error).toBe(0);
+      }
+      expect(
+        JSON.parse(readFileSync(join(configDir, "preferences.json"), "utf8"))
+          .values,
+      ).toEqual(values);
+    }
+  } finally {
+    for (const child of children) if (child.exitCode === null) child.kill();
+    await Promise.all(children.map((x) => x.exited));
+    restore();
+  }
+}, 15000);

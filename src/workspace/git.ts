@@ -6,6 +6,7 @@ import { sha } from "../hash.ts";
 import { CONTENT_BUDGET, textChunk } from "./evidence.ts";
 import { GitHistory } from "./git-history.ts";
 import { selectGitPatch } from "./git-patch.ts";
+import { checkGitObjects } from "./git-storage.ts";
 import { MAX_FILE, MAX_OUT, integer } from "./limits.ts";
 
 export interface GitWorkspaceAccess {
@@ -100,6 +101,7 @@ export class WorkspaceGit {
       if (existsSync(join(common, "objects/info", name)))
         throw new Error("GIT_ALTERNATES_UNSUPPORTED");
     }
+    checkGitObjects(join(common, "objects"));
     if (this.git(["rev-parse", "--show-toplevel"]).trim() !== this.access.root)
       throw new Error("GIT_ROOT_REQUIRED");
     if (
@@ -249,7 +251,16 @@ export class WorkspaceGit {
         newOid: meta[3]!,
       });
     }
-    const files = groups.slice(offset, offset + limit).map((g) => ({
+    // Without -p Git emits U plus M for one unmerged path; with -p it may
+    // switch to combined raw/patch output. Keep conflicts as one U record
+    // and return index stage evidence independently of the patch grammar.
+    const conflicts = new Set(
+      groups.filter((g) => g.change === "U").map((g) => g.paths[0]),
+    );
+    const changes = groups.filter(
+      (g) => g.change === "U" || !g.paths.some((path) => conflicts.has(path)),
+    );
+    const files = changes.slice(offset, offset + limit).map((g) => ({
       path: g.paths.at(-1)!,
       previousPath: g.paths.length === 2 ? g.paths[0]! : null,
       change: g.change,
@@ -259,38 +270,40 @@ export class WorkspaceGit {
       patchFile === undefined
         ? files[0]?.path
         : this.access.normalize(patchFile);
-    const group = groups.find((g) => g.paths.at(-1) === requested);
+    const group = changes.find((g) => g.paths.at(-1) === requested);
     if (patchFile !== undefined && !group)
       throw new Error("DIFF_FILE_UNAVAILABLE");
     const patch = group
-      ? selectGitPatch(
-          this.gitBytes([
-            "diff",
-            "--raw",
-            "-z",
-            "-p",
-            "--no-abbrev",
-            "--no-color",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            ...flags,
-            ...extra,
-            "--",
-            ...group.paths,
-          ]),
-          {
-            path: group.paths.at(-1)!,
-            oldPath: group.paths.length === 2 ? group.paths[0]! : null,
-            oldOid: group.oldOid,
-            newOid: group.newOid,
-            status: group.change[0]!,
-          },
-        ).toString("utf8")
+      ? group.change === "U"
+        ? this.conflictEvidence(group.paths[0]!)
+        : selectGitPatch(
+            this.gitBytes([
+              "diff",
+              "--raw",
+              "-z",
+              "-p",
+              "--no-abbrev",
+              "--no-color",
+              "--src-prefix=a/",
+              "--dst-prefix=b/",
+              ...flags,
+              ...extra,
+              "--",
+              ...group.paths,
+            ]),
+            {
+              path: group.paths.at(-1)!,
+              oldPath: group.paths.length === 2 ? group.paths[0]! : null,
+              oldOid: group.oldOid,
+              newOid: group.newOid,
+              status: group.change[0]!,
+            },
+          ).toString("utf8")
       : "";
     const chunk = textChunk(patch, patchOffset, 32 * 1024),
       diff = chunk.text;
     const nextOffset =
-      offset + files.length < groups.length ? offset + files.length : null;
+      offset + files.length < changes.length ? offset + files.length : null;
     const truncated = nextOffset !== null || chunk.nextOffset !== null;
     return {
       mode,
@@ -311,7 +324,28 @@ export class WorkspaceGit {
       head: this.head(),
       workspaceId: this.access.id,
       observedAt: new Date().toISOString(),
-      note: "Live Git observation; files are paginated and diff is a fragment for patchFile (defaults to the first file on this page). Follow nextOffset for files and nextPatchOffset for that patch; offsets are UTF-16 code units. Recheck patchSha256 on continuation. Untracked contents are excluded. A clean worktree says nothing about recent commits; use git_log/git_show. Not an immutable snapshot.",
+      note: "Live Git observation; files are paginated and diff is a fragment for patchFile (defaults to the first file on this page). Unmerged files have change U and index stage evidence instead of a combined patch; use read_file for current conflict text. Follow nextOffset for files and nextPatchOffset for that patch; offsets are UTF-16 code units. Recheck patchSha256 on continuation. Untracked contents are excluded. A clean worktree says nothing about recent commits; use git_log/git_show. Not an immutable snapshot.",
     };
+  }
+  private conflictEvidence(path: string) {
+    const rows = this.git(["ls-files", "--unmerged", "-z", "--", path])
+      .split("\0")
+      .filter(Boolean);
+    const stages: string[] = [];
+    const labels = { "1": "base", "2": "ours", "3": "theirs" } as const;
+    for (const row of rows) {
+      const match = row.match(
+        /^(\d{6}) ([a-f0-9]{40}|[a-f0-9]{64}) ([123])\t([\s\S]+)$/,
+      );
+      if (!match) throw new Error("GIT_INVALID_CONFLICT");
+      // A literal pathspec can include descendants after a file/directory conflict.
+      if (match[4] !== path) continue;
+      if (!/^100(644|755)$/.test(match[1]!))
+        throw new Error("GIT_NOT_REGULAR_FILE");
+      const stage = match[3] as keyof typeof labels;
+      stages.push(`${labels[stage]} (stage ${stage}): ${match[1]} ${match[2]}`);
+    }
+    if (!stages.length) throw new Error("GIT_PATCH_SELECTION_CHANGED");
+    return `Unmerged path ${JSON.stringify(path)}\nIndex stages (missing stages are absent):\n${stages.join("\n")}\nUse read_file for current worktree conflict text; this is not a combined patch.\n`;
   }
 }

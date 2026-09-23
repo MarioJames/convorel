@@ -1,12 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { executeManaged } from "../process-lifecycle.ts";
 import { z } from "zod";
 import { childEnv } from "../process.ts";
 import { MAX_OUT } from "../workspace/limits.ts";
 
 import { memoryUri } from "../config/mcp.ts";
-
-const execute = promisify(execFile);
 
 export const memoryInput = z.strictObject({
   action: z.enum(["search", "read"]),
@@ -65,15 +62,15 @@ export class MemoryAccess {
     this.active = true;
     let stdout: string;
     try {
-      ({ stdout } = await execute(this.executable, args, {
+      const result = await executeManaged([this.executable, ...args], {
         cwd: "/",
         env: childEnv(),
-        timeout: 20000,
+        timeoutMs: 20000,
         maxBuffer: MAX_OUT,
-        encoding: "utf8",
-        killSignal: "SIGKILL",
         signal,
-      }));
+      });
+      if (result.code) throw new Error("MEMORY_BACKEND_FAILED");
+      stdout = result.stdout;
     } catch {
       throw new Error("MEMORY_BACKEND_FAILED");
     } finally {

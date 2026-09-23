@@ -10,6 +10,30 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import packageInfo from "../../package.json";
 import type { Printer } from "./args.ts";
+import { WorkspaceAccess } from "../workspace/access.ts";
+
+export function assertDoctorMcp(
+  tools: { name: string }[],
+  capabilities: any,
+  expectedRoots: { rootId: string; path: string }[],
+) {
+  const roots = capabilities?.roots;
+  if (
+    JSON.stringify(tools.map((tool) => tool.name).sort()) !==
+      JSON.stringify(["artifact", "capabilities", "exec", "memory"]) ||
+    capabilities?.mode !== "guarded" ||
+    !Array.isArray(roots) ||
+    roots.length !== expectedRoots.length ||
+    expectedRoots.some(
+      (expected) =>
+        roots.filter(
+          (root: any) =>
+            root?.path === expected.path && root?.rootId === expected.rootId,
+        ).length !== 1,
+    )
+  )
+    throw new Error("MCP_CONTRACT_MISMATCH");
+}
 
 export function runDoctorLocal(
   stateRoot: string,
@@ -123,10 +147,18 @@ export async function runDoctor(
     await client.connect(transport);
     const tools = await client.listTools();
     const info = await client.callTool({
-      name: "workspace_info",
+      name: "capabilities",
       arguments: {},
     });
     if (info.isError) throw new Error("MCP_INFO_FAILED");
+    assertDoctorMcp(
+      tools.tools,
+      info.structuredContent,
+      new WorkspaceAccess(roots).roots.map((root) => ({
+        rootId: root.id,
+        path: root.root,
+      })),
+    );
     report.localMcp = {
       status: "verified",
       tools: tools.tools.map((t) => t.name),

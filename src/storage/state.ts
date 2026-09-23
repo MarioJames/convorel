@@ -1,6 +1,8 @@
 import { TaskStore } from "./task-store.ts";
+import { withSyncLock } from "./sync-lock.ts";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   chmodSync,
   readFileSync,
@@ -176,12 +178,33 @@ export class State {
     const path = this.path("lock-" + name),
       token = randomUUID(),
       deadline = Date.now() + Math.max(0, waitForMs);
-    let fd: number;
     for (;;) {
       try {
-        fd = openSync(path, "wx", 0o600);
+        withSyncLock(
+          path + ".mutex.sqlite",
+          () => {
+            try {
+              lstatSync(path);
+              throw Object.assign(new Error("LOCK_BUSY"), { code: "EEXIST" });
+            } catch (error: any) {
+              if (error.code !== "ENOENT") throw error;
+            }
+            // No contender can publish or recover while this mutex is held.
+            // Publish a complete owner record atomically: SIGKILL during the
+            // staging write must not leave an unrecoverable empty/partial lock.
+            this.write("lock-" + name, {
+              version: 1,
+              pid: process.pid,
+              identity: processIdentity(process.pid),
+              token,
+            });
+          },
+          0,
+        );
         break;
-      } catch {
+      } catch (error: any) {
+        if (error.code !== "EEXIST" && error.code !== "SQLITE_BUSY")
+          throw error;
         if (Date.now() >= deadline)
           throw new Error(
             `LOCK_BUSY: ${name}; inspect lock, then recover-lock if its exact owner is dead`,
@@ -190,24 +213,12 @@ export class State {
       }
     }
     try {
-      writeFileSync(
-        fd,
-        JSON.stringify({
-          version: 1,
-          pid: process.pid,
-          identity: processIdentity(process.pid),
-          token,
-        }),
-      );
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    try {
       return await fn();
     } finally {
-      const current = JSON.parse(readFileSync(path, "utf8"));
-      if (current.token === token) unlinkSync(path);
+      withSyncLock(path + ".mutex.sqlite", () => {
+        const current = JSON.parse(readFileSync(path, "utf8"));
+        if (current.token === token) unlinkSync(path);
+      });
     }
   }
   /** Advisory liveness for status/list projection; the caller must not use it
@@ -232,25 +243,29 @@ export class State {
     return identity === x.identity;
   }
   recoverLock(name: string) {
-    const key = "lock-" + name,
-      x = this.read<any>(key);
-    if (!Number.isSafeInteger(x.pid) || typeof x.identity !== "string")
-      throw new Error("LOCK_METADATA_INVALID");
-    let identity: string | undefined;
-    try {
-      identity = processIdentity(x.pid);
-    } catch (e: any) {
-      if (e.code !== "ENOENT") throw e;
-    }
-    if (identity === x.identity) throw new Error("LOCK_OWNER_ALIVE");
-    // Recovery never sends or closes a page. Browser requests may outlive their caller.
-    const latest = this.read<any>(key);
-    if (latest.token !== x.token) throw new Error("LOCK_CHANGED");
-    unlinkSync(this.path(key));
-    return {
-      recovered: true,
-      warning:
-        "Prior browser side effects may be uncertain; resume observation before any new action.",
-    };
+    const key = "lock-" + name;
+    return withSyncLock(this.path(key) + ".mutex.sqlite", () => {
+      const x = this.read<any>(key);
+      if (!Number.isSafeInteger(x.pid) || typeof x.identity !== "string")
+        throw new Error("LOCK_METADATA_INVALID");
+      let identity: string | undefined;
+      try {
+        identity = processIdentity(x.pid);
+      } catch (e: any) {
+        if (e.code !== "ENOENT") throw e;
+      }
+      if (identity === x.identity) throw new Error("LOCK_OWNER_ALIVE");
+      // Acquisition, release and recovery share the same OS-backed mutex. This
+      // comparison detects changes but is NOT the source of atomicity.
+      // Recovery never sends or closes a page. Browser requests may outlive their caller.
+      const latest = this.read<any>(key);
+      if (latest.token !== x.token) throw new Error("LOCK_CHANGED");
+      unlinkSync(this.path(key));
+      return {
+        recovered: true,
+        warning:
+          "Prior browser side effects may be uncertain; resume observation before any new action.",
+      };
+    });
   }
 }

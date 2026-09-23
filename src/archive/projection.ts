@@ -115,8 +115,9 @@ function upsertConversation(store: ArchiveStore, task: Task, at: string) {
   return created.id as number;
 }
 
-/** Inserts a content version or returns the existing one. Existing bytes are never
- * rewritten; a different answer appends a version and supersedes the previous one. */
+/** Content IDs/bytes and their original predecessor stay immutable. Re-selecting
+ * known content reactivates it; superseded_at describes the current selection,
+ * not an append-only event log. The next new version supersedes that selection. */
 function addVersion(
   store: ArchiveStore,
   task: Task,
@@ -140,7 +141,6 @@ function addVersion(
     format,
     contentHash,
   );
-  if (known) return { versionId: known.version_id as string, created: false };
   const prior = store.one(
     `select version_id from content_version
      where task_id = ? and run_id = ? and role = ? and format = ?
@@ -150,12 +150,22 @@ function addVersion(
     role,
     format,
   );
+  if (known?.version_id === prior?.version_id && known)
+    return { versionId: known.version_id as string, created: false };
   if (prior)
     store.db
       .query(
         "update content_version set superseded_at = ? where version_id = ?",
       )
       .run(at, prior.version_id);
+  if (known) {
+    store.db
+      .query(
+        "update content_version set superseded_at = null where version_id = ?",
+      )
+      .run(known.version_id);
+    return { versionId: known.version_id as string, created: false };
+  }
   const versionId = randomUUID();
   store.one(
     `insert into content_version (version_id, task_id, run_id, role, message_key,
@@ -251,6 +261,9 @@ export function publish(store: ArchiveStore, task: Task, taskFileHash: string) {
     // no new content rows.
     task.runs.forEach((run, index) => {
       result.runs++;
+      const owner = store.one("select task_id from run where id = ?", run.id);
+      if (owner && owner.task_id !== task.id)
+        throw new Error(`ARCHIVE_RUN_TASK_CONFLICT: ${run.id}`);
       const fingerprint = runContentFingerprint(task.id, remoteId, run);
       store.db
         .query(

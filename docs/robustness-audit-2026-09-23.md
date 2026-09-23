@@ -1,6 +1,6 @@
 # Convorel 全链路健壮性审计（2026-09-23）
 
-审计对象：`dd89d7fd5101dd4402846ec0a1d425b2f0cd8681`，源码版本 0.3.0。本机已安装 CLI 为 0.2.5，不能用旧版运行结果证明当前源码可用。本次仅检查与复现，不修改实现，不发送 ChatGPT 消息。
+审计对象：`dd89d7fd5101dd4402846ec0a1d425b2f0cd8681`，源码版本 0.3.0。本机已安装 CLI 为 0.2.5，不能用旧版运行结果证明当前源码可用。初始审计仅检查与复现，不修改实现，不发送 ChatGPT 消息。后续修复验收见文末；下面问题描述保留审计时的事实。
 
 严重程度：P1 表示可能损失数据、干扰用户工作、突破访问边界或使主要流程不可用；P2 表示特定条件下结果失真、恢复失败或诊断不足。下面“已复现”均注明边界：真实子进程、真实本地 MCP、浏览器替身或确定性交错，不把模拟结果称为真实远端验收。
 
@@ -170,3 +170,43 @@
 ## 综合判断
 
 问题分布在模块交界和失败补偿路径：公共契约变了但消费者未变，原子文件写入被当成事务，历史页面所有权被当成当前可关闭性，进程 leader 退出被当成整组退出，顶层路径校验被当成所有实际数据源校验。测试全部通过与上述缺陷同时成立，因此当前结果不能认定为全链路健壮性验收通过。
+
+## 修复验收（同日）
+
+用户授权全部修复后，基于 `a26ca44` 实现以下变更。全部 16 项均已有对应回归；下面结果来自集成后的主工作区，而非仅汇总分支测试。
+
+| 问题        | 修复行为                                                                                                                   | 主要回归证据                                                                 |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| R01         | doctor 调用 capabilities 并核对四入口及 roots 身份；安装验收核对公开契约                                                   | `tests/cli/doctor.test.ts`、真实 standalone 安装验收                         |
+| R02         | 项目身份按 URL ID，标题仅诊断；等待唯一可编辑输入框，拒绝禁用/只读状态与历史消息，细分错误                                 | `tests/browser/project.test.ts`、submission、真实 ChatGPT 成功投递           |
+| R03/R04     | 主页面与观察页共用关闭锁及最后一页保活；核对用户轮次与活动；在操作节奏等待结束后再次核验                                   | `tests/conversation/organization-cleanup.test.ts`、release、browser/pacing   |
+| R05         | 获取、发布、释放与恢复共用 OS 支持的 SQLite mutex；原子发布完整 owner 记录                                                 | `tests/storage/lock-recovery.test.ts`、sync-lock：真实恢复进程交错与 SIGKILL |
+| R06         | 跨任务 run ID 冲突拒绝并回滚整个归档事务                                                                                   | `tests/archive/projection.test.ts`                                           |
+| R07         | 重选旧内容时恢复活跃状态、取代上一选择；保留内容创建时的历史边                                                             | 同上，Markdown 与 rendered-text 的 A→B→A→C                                   |
+| R08         | 按有版本标记的所有权清单及指纹卸载；未知/修改文件保留，只删除空目录                                                        | `tests/distribution/install-ownership.test.ts`、安装/升级验收                |
+| R09/R10/R16 | 普通命令、memory 与 tunnel 共用活跃 session anchor；父进程死亡、取消、超时及异常退出均处理后代与输出；清理失败保留隧道身份 | `tests/process.test.ts`、`tests/service/service.test.ts`                     |
+| R11         | 配置互斥覆盖完整读改写，而非只原子替换文件                                                                                 | `tests/config/preferences.test.ts`：8 进程、8 键、3 轮                       |
+| R12         | 私有目录与共享根双向 containment 检查，含 canonical path                                                                   | `tests/workspace/robustness.test.ts`：真实 MCP                               |
+| R13         | 每次 Git 观察校验对象树的符号链接、硬链接及特殊文件；扫描有界，失败即拒绝                                                  | 同上：真实 Git 与 MCP                                                        |
+| R14         | 当前及历史 ignore 策略严格校验 UTF-8、NUL、控制字符；异常返回 POLICY_UNREADABLE                                            | 同上：畸形策略拒绝、正常 BOM/CRLF                                            |
+| R15         | 未合并文件提供明确冲突及 base/ours/theirs index stage 证据；普通文件仍返回 patch                                           | 同上：真实冲突、普通文件、解决冲突后路径                                     |
+
+集成验证：
+
+- `bun run check`：类型检查通过，**390 tests / 44 files / 3361 assertions，0 失败**。
+- `bun run test:browser --chrome /home/mocha/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`：真实 Chromium 本地夹具通过，`pageErrors=[]`，标签页 `1 → 3 → 1`，自有浏览器与 adapter 已释放。这是 DOM/交互验证，不等同于线上全部异常路径。
+- `bun run test:package`：真实 tarball 安装、技能分发与 SDK stdio 通过。
+- `bun run test:install`：Linux x64 standalone 构建、安装、升级与失败保留、配置转发、doctor、服务启停、校验和拒绝及卸载数据保留通过。首次验收揭示残留的 12 工具断言，已改为精确核验四个公开名称后重新通过。
+- `bash -n install.sh`、修改文件格式检查、`git diff --check` 通过。
+
+边界与资源：没有改动公共配置、用户数据库或已安装 0.2.5 CLI，没有发布或重启共享隧道。旧安装缺少所有权清单时保留并拒绝自动覆盖；新锁协议不能与未参与协议的旧进程并发共享状态根。归档修复约束后续导入，不猜测修复既存污染数据。SQLite mutex 文件必须永久保留同一 inode，不能作为 stale lock 删除。
+
+进程管理面向受管、合作的子进程；主动新建 session 的独立 daemon 不属于这一清理范围，Linux PID 身份检查也不是 pidfd 原子信号保证。Git 元数据检查和浏览器关闭前读回不能抵御持续并发的恶意文件替换或将外部用户操作变成事务；Bubblewrap 仍没有进程树总内存 cgroup 配额。未实测 ARM64、公网下载中断及断电。
+
+修复证据位于私有目录 `/tmp/convorel-fix-ydrf54qe`，包括失败/通过日志、导出的三个 worker bundle 与交接记录；由本修复任务保留用于复核，释放条件为不再需要排障或追溯。三个自有 Herdr 标签页、CoW 工作区及基线已回收；没有删除用户持久数据，原审计证据保留。
+
+审查意见处理：通过 chatgpt-review 使用普通有头 Chrome/CDP，在同一 task `convorel-robustness-20260923` 完成机制审查，首轮 run `5ad99d90-871d-4a13-ad14-5d3c1719d78b` 已捕获 Markdown，归档 `stored` 无 gap。采纳原子 owner 发布、pacing 后最终核验、doctor 语义契约、textarea 禁用/只读判定意见，均补回归。审查者在并行集成中读到的旧 State/process/installer 版本不作为最终实现证据；结果核对已提交完整集成版本说明。新增全量选择事件表、恶意文件系统隔离和 pidfd 原子信号不在这次最小修复内，相关边界已明确；不以审查认可替代本地测试。项目 composer 的默认 5 秒为轮询预算，单次 browser 命令另受 25 秒 transport 超时限制，不保证硬 5 秒返回。
+
+最终结果审查 run `f3ae62fe-d417-4de3-a549-a182829604f7` 返回“符合目标”，定点复核最终实现后无新增阻断项或实质偏移；Markdown 已捕获，归档 `stored`、无 gap。审查仅只读复核，不代替本地验证。
+
+真实审查页面已通过修复后的 finish 释放：`closed=true`、`organizationPending=false`、`replyChanged=false`。共享 Chrome/CDP 9876、用户原有标签页、登录 profile 和会话记录保留；无 dev server，APP_URL 不适用。

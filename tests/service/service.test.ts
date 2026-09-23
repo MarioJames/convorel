@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { test, expect } from "bun:test";
 import {
   chmodSync,
@@ -239,22 +240,41 @@ test.each(["ignore-term", "new-member"] as const)(
       { env, stdout: "ignore", stderr: "ignore" },
     );
     try {
-      const started = await run("start");
-      for (const pid of [
-        started.supervisor.pid,
-        started.client.pid,
-        Number(readFileSync(descendantFile, "utf8")),
-      ])
-        owned.push({ pid, identity: processIdentity(pid) });
-      process.kill(started.supervisor.pid, "SIGKILL");
-      for (let i = 0; i < 50 && isAlive(started.supervisor.pid); i++)
-        await Bun.sleep(20);
+      // Exercise recovery of a client without a lifetime guard (e.g. a
+      // previously registered client). Managed supervisors now clean their
+      // session automatically even when the supervisor receives SIGKILL.
+      const client = spawn(join(temp, "bin/tunnel-client"), [], {
+        detached: true,
+        stdio: "ignore",
+        env,
+      });
+      client.unref();
+      const pid = client.pid!;
+      owned.push({ pid, identity: processIdentity(pid) });
+      new State(join(temp, ".local/share/convorel-tunnels")).write(
+        tunnelKey(id),
+        { version: 1, ...owned[0] },
+      );
+      for (let i = 0; i < 100; i++) {
+        try {
+          readFileSync(descendantFile);
+          break;
+        } catch (e: any) {
+          if (e.code !== "ENOENT") throw e;
+        }
+        await Bun.sleep(10);
+      }
+      const descendantPid = Number(readFileSync(descendantFile, "utf8"));
+      owned.push({
+        pid: descendantPid,
+        identity: processIdentity(descendantPid),
+      });
       if (mode === "new-member") {
         expect(await run("stop", 1)).toContain("SERVICE_STOP_UNVERIFIED");
-        expect(isAlive(owned[2].pid)).toBe(true);
+        expect(isAlive(owned[1].pid)).toBe(true);
       } else {
         expect((await run("stop")).stopped).toBe(true);
-        expect(isAlive(owned[2].pid)).toBe(false);
+        expect(isAlive(owned[1].pid)).toBe(false);
         new State(join(temp, ".local/share/convorel-tunnels")).write(
           tunnelKey(id),
           {

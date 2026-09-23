@@ -100,14 +100,41 @@ mkdir -p "$(dirname "$install_dir")"
 exec 9>"$install_dir.install.lock"
 flock -n 9 || die "INSTALL_BUSY: another install or uninstall is in progress"
 
-owned_link() {
-  # Only touch a link this installer created, never a package manager's or a hand-made one.
-  [ -L "$1" ] || return 1
-  case "$(readlink -f "$1" 2>/dev/null || echo)" in
-  "$install_dir"/*) return 0 ;;
-  esac
+manifest="$install_dir/.convorel-owned"
+[ ! -L "$manifest" ] || die "INSTALL_OWNERSHIP_INVALID: manifest must not be a symlink"
+if [ -e "$manifest" ]; then
+  [ -f "$manifest" ] || die "INSTALL_OWNERSHIP_INVALID: manifest must be a regular file"
+  { IFS= read -r -d '' kind && IFS= read -r -d '' marker && IFS= read -r -d '' path &&
+    [ "$kind" = v ] && [ "$marker" = convorel-owned-v1 ] && [ "$path" = "$install_dir" ]; } < "$manifest" ||
+    die "INSTALL_OWNERSHIP_INVALID: refusing an unrecognized manifest"
+fi
+hash_of() {
+  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null; then shasum -a 256 "$1" | cut -d' ' -f1
+  else die "NO_HASH_TOOL: install coreutils or perl-shasum"
+  fi
+}
+# NUL-delimited triples: kind, fingerprint, absolute path. Never follow replaced
+# parent directories, remove changed files, or recursively delete a prefix.
+safe_owned_path() {
+  case "$1" in "$install_dir"|"$install_dir"/*|"$bin_dir/convorel"|"$bin_dir/agent-browser") ;; *) return 1 ;; esac
+  [ "$(realpath -ms -- "$1")" = "$1" ] || return 1
+  [ "$(realpath -m -- "$(dirname "$1")")" = "$(dirname "$1")" ]
+}
+owned_entry() {
+  [ -f "$manifest" ] || return 1
+  local kind fingerprint path
+  while IFS= read -r -d '' kind && IFS= read -r -d '' fingerprint && IFS= read -r -d '' path; do
+    [ "$path" = "$2" ] && [ "$kind" = "$1" ] || continue
+    safe_owned_path "$path" || continue
+    case "$kind" in
+      l) [ -L "$path" ] && [ "$(readlink -- "$path")" = "$fingerprint" ] && return 0 ;;
+      f) [ ! -L "$path" ] && [ -f "$path" ] && [ "$(hash_of "$path")" = "$fingerprint" ] && return 0 ;;
+    esac
+  done < "$manifest"
   return 1
 }
+owned_link() { owned_entry l "$1"; }
 
 if [ "$action" = uninstall ]; then
   removed=0
@@ -118,9 +145,26 @@ if [ "$action" = uninstall ]; then
       removed=1
     fi
   done
-  if [ -d "$install_dir" ]; then
-    rm -rf "$install_dir"
-    say "removed $install_dir"
+  if [ -f "$manifest" ]; then
+    while IFS= read -r -d '' kind && IFS= read -r -d '' fingerprint && IFS= read -r -d '' path; do
+      safe_owned_path "$path" || continue
+      if [ "$kind" = f ] && [ ! -L "$path" ] && [ -f "$path" ] && [ "$(hash_of "$path")" = "$fingerprint" ]; then
+        rm -f -- "$path"
+      fi
+    done < "$manifest"
+    # Directory records are written deepest first, after their files.
+    remove_prefix=0
+    remove_versions=0
+    while IFS= read -r -d '' kind && IFS= read -r -d '' fingerprint && IFS= read -r -d '' path; do
+      [ "$kind" = d ] && safe_owned_path "$path" && [ ! -L "$path" ] || continue
+      [ "$path" != "$install_dir" ] || remove_prefix=1
+      [ "$path" != "$install_dir/versions" ] || remove_versions=1
+      rmdir -- "$path" 2>/dev/null || true
+    done < "$manifest"
+    rm -f -- "$manifest"
+    if [ "$remove_versions" = 1 ]; then rmdir -- "$install_dir/versions" 2>/dev/null || true; fi
+    if [ "$remove_prefix" = 1 ]; then rmdir -- "$install_dir" 2>/dev/null || true; fi
+    say "removed verified installation files; kept unknown or modified content"
   fi
   say "kept $HOME/.local/share/convorel, $HOME/.local/share/convorel-tunnels and $HOME/.config/convorel"
   say "kept installed skills under $HOME/.agents/skills, $HOME/.codex/skills and $HOME/.claude/skills"
@@ -140,12 +184,6 @@ if [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ] ||
   die "LIBC_UNSUPPORTED: this release ships glibc builds; on Alpine install convorel from source"
 fi
 
-hash_of() {
-  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1
-  elif command -v shasum >/dev/null; then shasum -a 256 "$1" | cut -d' ' -f1
-  else die "NO_HASH_TOOL: install coreutils or perl-shasum"
-  fi
-}
 fetch() {
   if command -v curl >/dev/null; then curl -fsSL --retry 3 -o "$2" "$1"
   elif command -v wget >/dev/null; then wget -q -O "$2" "$1"
@@ -154,7 +192,12 @@ fetch() {
 }
 
 # Validate all destinations before any download or change to an active link.
+created_prefix=0
+created_versions=0
+[ -d "$install_dir" ] || created_prefix=1
+[ -d "$install_dir/versions" ] || created_versions=1
 mkdir -p "$install_dir" "$bin_dir"
+[ ! -e "$install_dir/layout.json" ] && [ ! -L "$install_dir/layout.json" ] || owned_entry f "$install_dir/layout.json" || die "INSTALL_OWNERSHIP_UNKNOWN: layout.json is not owned by this installer"
 [ ! -L "$install_dir/versions" ] || die "INSTALL_PATH_INVALID: versions must not be a symlink"
 link="$bin_dir/convorel"
 if [ -e "$link" ] || [ -L "$link" ]; then
@@ -229,6 +272,7 @@ while IFS= read -r member; do
     "${archive%.tar.gz}"|"${archive%.tar.gz}/"*) ;;
     *) die "ARTIFACT_INVALID: unexpected archive path" ;;
   esac
+  case "$member" in *[$'\001'-$'\037']*) die "ARTIFACT_INVALID: control characters in archive path" ;; esac
   case "/$member/" in */../*|*/./*|*\\*) die "ARTIFACT_INVALID: unsafe archive path" ;; esac
 done < "$staging/members"
 tar -tvzf "$source_dir/$archive" > "$staging/types"
@@ -252,7 +296,22 @@ switched=1
 mv -Tf -- "$link_staging/convorel" "$bin_dir/convorel"
 installed="$(timeout 30 "$bin_dir/convorel" --version)" || die "UPGRADE_UNVERIFIED: installed binary failed"
 [ "$installed" = "$release" ] || die "UPGRADE_UNVERIFIED: installed binary version differs"
+# Build the next ownership ledger before publishing. Prior release files stay
+# owned across upgrades; stale fingerprints never authorize deleting edits.
+if [ -f "$manifest" ]; then cat -- "$manifest" > "$staging/owned"
+else printf 'v\0convorel-owned-v1\0%s\0' "$install_dir" > "$staging/owned"; fi
+while IFS= read -r -d '' file; do
+  printf 'f\0%s\0%s\0' "$(hash_of "$file")" "$file" >> "$staging/owned"
+done < <(find "$target" -type f -print0)
+while IFS= read -r -d '' directory; do
+  printf 'd\0\0%s\0' "$directory" >> "$staging/owned"
+done < <(find "$target" -depth -type d -print0)
+if [ "$created_versions" = 1 ]; then printf 'd\0\0%s\0' "$install_dir/versions" >> "$staging/owned"; fi
+if [ "$created_prefix" = 1 ]; then printf 'd\0\0%s\0' "$install_dir" >> "$staging/owned"; fi
+printf 'l\0%s\0%s\0' "$target/bin/convorel" "$bin_dir/convorel" >> "$staging/owned"
+printf 'f\0%s\0%s\0' "$(hash_of "$staging/layout.json")" "$install_dir/layout.json" >> "$staging/owned"
 mv -Tf -- "$staging/layout.json" "$install_dir/layout.json"
+mv -Tf -- "$staging/owned" "$manifest"
 committed=1
 if owned_link "$bin_dir/agent-browser"; then
   rm -f -- "$bin_dir/agent-browser"

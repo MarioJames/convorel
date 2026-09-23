@@ -8,6 +8,11 @@ import { organizationCheckpointDue } from "./organization-recovery.ts";
 import { diagnosticCode } from "../storage/diagnostics.ts";
 import type { Browser } from "../browser/browser.ts";
 import { same } from "./observation.ts";
+import {
+  preserveLastTab,
+  verifyCloseTarget,
+  type ReleaseContext,
+} from "./release.ts";
 import type {
   DiagnosticFailure,
   DiagnosticStep,
@@ -31,6 +36,8 @@ export interface OrganizationContext {
   setStep: (step: DiagnosticStep) => void;
   recordNamingProgress: (taskId: string, runId: string, phase: string) => void;
   recordDiagnosticFailure: (input: DiagnosticFailure) => void;
+  tabRelease: ReleaseContext["tabRelease"];
+  writeKeepalive: ReleaseContext["writeKeepalive"];
   readonly browser: Browser;
   readonly organizer: typeof organizeConversation;
 }
@@ -87,9 +94,8 @@ export function createOrganization(ctx: OrganizationContext) {
   async function releaseOrganizationObserver(t: Task) {
     const owned = t.organizationObservation;
     if (!owned || owned.closed) return;
-    // The task lock protects this observer and its main page together. Unlike
-    // finish, observer cleanup never creates a last-tab keepalive, so it does
-    // not need the cross-task close lock. Slow reads must not block other tasks.
+    // Page reads can be slow: first inspect outside the close lock, then
+    // recheck identity/activity under the same cross-task lock as main release.
     try {
       const epoch = await ctx.browser.epoch();
       ctx.guard(t);
@@ -115,30 +121,71 @@ export function createOrganization(ctx: OrganizationContext) {
       ctx.guard(t);
       if (!same(p.url, t.url!) || p.draft?.trim() || p.attachments)
         throw new Error("METADATA_PAGE_CHANGED");
-      if (
-        t.binding &&
-        !t.binding.closed &&
-        (t.binding.target === owned.target ||
-          !tabs.some((x: any) => x.targetId === t.binding!.target))
-      ) {
-        // The original target disappeared while its task-owned observer
-        // survived. Transfer its role instead of closing the only page or
-        // rediscovering it later as an unowned user tab.
-        t.binding = { target: owned.target, epoch, owned: true };
-        owned.closed = true;
-        owned.transferredToMain = true;
-        delete owned.error;
-        return;
-      }
-      await ctx.browser.tabs("close", owned.target);
-      if (
-        (await ctx.browser.tabs("list")).tabs.some(
-          (x: any) => x.targetId === owned.target,
+      await ctx.tabRelease(async () => {
+        ctx.guard(t);
+        if (owned.epoch !== (await ctx.browser.epoch()))
+          throw new Error("BROWSER_RESTARTED: ownership expired");
+        const { tabs } = await ctx.browser.tabs("list");
+        if (!tabs.some((x: any) => x.targetId === owned.target)) {
+          owned.closed = true;
+          delete owned.error;
+          return;
+        }
+        const check = async (closing: boolean) => {
+          const p = await page.read();
+          ctx.guard(t);
+          const user = ctx.current(t).userMessageId;
+          const index = p.messages.findIndex(
+            (m) => m.role === "user" && m.id === user,
+          );
+          if (
+            !same(p.url, t.url!) ||
+            p.draft?.trim() ||
+            p.attachments ||
+            !user ||
+            index < 0 ||
+            p.messages.slice(index + 1).some((m) => m.role === "user")
+          )
+            throw new Error("METADATA_PAGE_CHANGED");
+          if (
+            closing &&
+            (!p.hasComposer ||
+              p.draft === undefined ||
+              p.generating ||
+              p.blocked)
+          )
+            throw new PageNotIdleError(p);
+        };
+        await check(false);
+        if (
+          t.binding &&
+          !t.binding.closed &&
+          (t.binding.target === owned.target ||
+            !tabs.some((x: any) => x.targetId === t.binding!.target))
+        ) {
+          // Transfer is not a close: the original turn may still be streaming.
+          t.binding = { target: owned.target!, epoch, owned: true };
+          owned.closed = true;
+          owned.transferredToMain = true;
+          delete owned.error;
+          return;
+        }
+        await check(true);
+        await preserveLastTab(ctx, owned.target!, epoch);
+        await ctx.browser.closeTab(owned.target!, async () => {
+          await verifyCloseTarget(ctx.browser, owned.target!, epoch);
+          await check(true);
+        });
+        ctx.guard(t);
+        if (
+          (await ctx.browser.tabs("list")).tabs.some(
+            (x: any) => x.targetId === owned.target,
+          )
         )
-      )
-        throw new Error("CLOSE_UNVERIFIED");
-      owned.closed = true;
-      delete owned.error;
+          throw new Error("CLOSE_UNVERIFIED");
+        owned.closed = true;
+        delete owned.error;
+      });
     } catch (e) {
       owned.error = String(e);
     } finally {

@@ -659,7 +659,11 @@ test("project starts use only the configured project composer and reject a gener
             if (args[0] === "eval" && args[1].includes("composerCount"))
               return {
                 result: {
-                  url: projectUrl,
+                  url:
+                    scenario === "generic"
+                      ? "https://chatgpt.com/"
+                      : projectUrl,
+                  messageCount: 0,
                   composerCount: 1,
                   editable: true,
                   projectName: scenario === "generic" ? null : "Agent reviews",
@@ -683,7 +687,7 @@ test("project starts use only the configured project composer and reject a gener
         expect(task.runs[0].state).toBe("prepared");
         expect(task.runs[0].error).toContain(
           scenario === "generic"
-            ? "PROJECT_COMPOSER_UNVERIFIED"
+            ? "PROJECT_IDENTITY_CHANGED"
             : "NEW_CONVERSATION_LOCATION_CHANGED",
         );
       }

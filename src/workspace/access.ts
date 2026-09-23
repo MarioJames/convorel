@@ -123,7 +123,11 @@ export class WorkspaceAccess {
     }
     if (
       this.roots.some(
-        (ws) => within(ws.root, absolute) || within(ws.root, canonical),
+        (ws) =>
+          within(ws.root, absolute) ||
+          within(absolute, ws.root) ||
+          within(ws.root, canonical) ||
+          within(canonical, ws.root),
       )
     )
       throw new Error("STATE_INSIDE_WORKSPACE");
