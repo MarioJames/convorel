@@ -4,7 +4,7 @@ permissions:
   contents: read
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -14,9 +14,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap util-linux
+          # Ephemeral hosted runner only; follows containers/bubblewrap#728.
+          # The sandbox itself still unshares network/user namespaces and drops capabilities.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bwrap --version
           prlimit --version
-          bwrap --unshare-all --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
+          bwrap --unshare-all --die-with-parent --cap-drop ALL --ro-bind / / --proc /proc --dev /dev --size 1048576 --tmpfs /tmp -- /bin/true
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run format:check
