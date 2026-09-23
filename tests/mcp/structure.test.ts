@@ -1,3 +1,4 @@
+import { callOperation, operationSchema } from "./helpers.ts";
 import { test, expect } from "bun:test";
 import {
   mkdtempSync,
@@ -30,6 +31,10 @@ async function fixture() {
     args: [
       "--no-env-file",
       join(import.meta.dir, "../../src/cli.ts"),
+      "--config-dir",
+      join(root, "config"),
+      "--state-dir",
+      join(root, "state"),
       "mcp",
       "serve",
       "--roots",
@@ -65,7 +70,7 @@ async function fixture() {
     await client.connect(transport);
     const { tools } = await client.listTools();
     const call = (name: string, args: Record<string, unknown> = {}) =>
-      client.callTool({ name, arguments: args });
+      callOperation(client, name, args);
     const success = async (
       name: string,
       args: Record<string, unknown> = {},
@@ -79,7 +84,7 @@ async function fixture() {
       expect(result.content).toEqual([
         { type: "text", text: JSON.stringify(data) },
       ]);
-      const schema = tools.find((tool) => tool.name === name)!.outputSchema!;
+      const schema = operationSchema(name, tools);
       const validate = validator.getValidator(schema);
       // Every returned top-level field must be covered by the required contract.
       for (const key of Object.keys(data)) {
@@ -196,9 +201,7 @@ test("real stdio client validates both workspace results, reads, searches and er
     const project = await f.success("workspace_info", { path: f.first });
     expect(project.workspace.path).toBe(f.first);
     expect(project.workspace.gitHead).toBeNull();
-    const schema = f.tools.find(
-      (tool) => tool.name === "workspace_info",
-    )!.outputSchema!;
+    const schema = operationSchema("workspace_info", f.tools);
     expect(
       f.validator.getValidator(schema)({
         ...project,
@@ -284,7 +287,7 @@ test("evidence workflow discovers capabilities, locates code and reads committed
   const f = await fixture();
   try {
     const info = await f.success("workspace_info", { path: f.first });
-    expect(info.server.capabilityVersion).toBe("evidence-v2");
+    expect(info.server.capabilityVersion).toBe("functions-v1");
     expect(info.server.tools.sort()).toEqual(f.tools.map((t) => t.name).sort());
     const found = await f.success("find_files", {
       path: f.first,
@@ -356,9 +359,7 @@ test("evidence workflow discovers capabilities, locates code and reads committed
       mimeType: "image/png",
       data: png,
     });
-    const imageSchema = f.tools.find(
-      (t) => t.name === "read_image",
-    )!.outputSchema!;
+    const imageSchema = operationSchema("read_image", f.tools);
     expect(
       f.validator.getValidator(imageSchema)(image.structuredContent).valid,
     ).toBe(true);
@@ -379,18 +380,10 @@ test("tree shares directory policy, depth and pagination through real stdio", as
   const f = await fixture();
   try {
     expect(f.tools.map((tool) => tool.name).sort()).toEqual([
-      "find_files",
-      "git_compare",
-      "git_diff",
-      "git_log",
-      "git_read_file",
-      "git_show",
-      "git_status",
-      "read_file",
-      "read_image",
-      "search_workspace",
-      "tree",
-      "workspace_info",
+      "artifact",
+      "capabilities",
+      "exec",
+      "memory",
     ]);
     f.put(".gitignore", "private/\n");
     f.put(".convorelignore", "internal/\n");

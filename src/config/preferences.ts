@@ -4,12 +4,16 @@ import { join } from "node:path";
 import { State } from "../storage/state.ts";
 import { fullPath } from "../paths.ts";
 import { projectId } from "../browser/chatgpt/organize.ts";
+import { parseMemoryRoots } from "./mcp.ts";
 
 /** Config keys are independent of process environment. */
 export const settingKeys = [
   "tunnel.apiKey",
   "tunnel.id",
   "mcp.roots",
+  "mcp.memoryRoots",
+  "mcp.execDependencyRoots",
+  "mcp.memoryExecutable",
   "model",
   "project.url",
   "project.name",
@@ -113,6 +117,8 @@ function validate(key: SettingKey, value: string) {
       "INVALID_VALUE: locks.taskWaitMs must be a positive integer",
     );
   if (key === "browser.executable") fullPath(value);
+  if (key === "mcp.memoryExecutable") fullPath(value);
+  if (key === "mcp.memoryRoots") parseMemoryRoots(value);
   if (key === "release.baseUrl") {
     let url: URL;
     try {
@@ -134,7 +140,7 @@ function validate(key: SettingKey, value: string) {
   if (key === "tunnel.id" && !/^tunnel_[a-f0-9]{32}$/.test(value))
     throw new Error("INVALID_TUNNEL_ID: expected tunnel_ plus 32 hex digits");
   if (key === "project.url") projectId(value);
-  if (key === "mcp.roots") {
+  if (key === "mcp.roots" || key === "mcp.execDependencyRoots") {
     let roots: unknown;
     try {
       roots = JSON.parse(value);
@@ -152,6 +158,11 @@ function validate(key: SettingKey, value: string) {
       );
     for (const root of roots as string[]) {
       const absolute = fullPath(root);
+      if (
+        key === "mcp.execDependencyRoots" &&
+        !absolute.endsWith("/node_modules")
+      )
+        throw new Error("EXEC_DEPENDENCY_ROOT_INVALID");
       if (!existsSync(absolute))
         throw new Error(`MCP_ROOT_MISSING: ${absolute}`);
     }
@@ -165,7 +176,8 @@ export function preference(key: SettingKey): string | undefined {
 
 /** An empty value removes the preference, since the file has no blank state. */
 export function writePreference(key: SettingKey, value: string) {
-  if (key === "browser.executable" && value) value = fullPath(value);
+  if (["browser.executable", "mcp.memoryExecutable"].includes(key) && value)
+    value = fullPath(value);
   const all = { ...current(), [key]: value };
   if (value === "") delete all[key];
   else validate(key, value);

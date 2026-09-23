@@ -40,6 +40,7 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "agent-browser": "0.34.0",
     "ignore": "7.0.5",
+    "shell-quote": "1.10.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

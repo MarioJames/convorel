@@ -111,7 +111,7 @@ test("unknown and invalid command options fail before their side effects", async
   ).toBe(0);
   const listed = await run(["config", "list"]);
   expect(listed.status).toBe(0);
-  expect(JSON.parse(listed.stdout).settings).toHaveLength(13);
+  expect(JSON.parse(listed.stdout).settings).toHaveLength(16);
   expect(
     errorOf(
       (await run(["config", "set", "diagnostics.enabled", "yes"])).stderr,

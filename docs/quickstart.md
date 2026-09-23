@@ -73,7 +73,7 @@ In [ChatGPT Plugins](https://chatgpt.com/plugins), create a developer app, choos
 
 **Only one active tunnel-client per tunnel ID for stdio.** Stop the old process before replacing it. Separate instances/workspaces need separate tunnel IDs. An initialized client and a healthy local process are not proof that the ChatGPT workspace can call it.
 
-First verify with a synthetic file containing a known marker: ask ChatGPT to call workspace_info and read_file; compare its reported hash/content with the local file. This is distinct from local SDK stdio testing.
+First verify with a synthetic file containing a known marker: ask ChatGPT to call capabilities and exec (`read_file --path ...`); compare its reported hash/content with the local file. This is distinct from local SDK stdio testing.
 
 See [official setup](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) and [stdio deployment limits](https://github.com/openai/tunnel-client/blob/master/docs/configuration.md#stdio-deployment-limits).
 
@@ -95,9 +95,31 @@ bun --no-env-file src/cli.ts conversation retry --id auth-design --run RUN_ID
 
 Set `mcp.roots` to a JSON array with `convorel config set mcp.roots '["~/workspaces","~/opensource"]'`. Give ChatGPT the full project path to review. Without this setting, the root saved by init is the sole allowed directory. Restart the tunnel after changing the allowlist.
 
-All MCP tools use full `path` arguments (absolute paths or `~/` paths). `workspace_info` without a path lists the roots; with a path it identifies that directory. The CLI can also serve explicitly with `mcp serve --roots '["/absolute/root-a","/absolute/root-b"]'`. Root selection cannot bypass nested `.convorelignore` or `.gitignore` rules. `.env`, `.env.*` and credential files remain denied. Git worktrees require their gitdir/common-dir/object storage to remain in permitted roots; alternate object stores are unsupported.
+The MCP server exposes four functions: `exec`, `memory`, `artifact` and `capabilities`. Refresh the ChatGPT connector's cached tool definitions when upgrading to `functions-v1`; the former individual tools are now operations inside `exec`.
 
-In `evidence-v2`, allowed roots are identified by `rootId`. Every tool also reports `workspaceId` and `workspacePath`: the nearest `.git` marker's directory within the allowed root, or the allowed root itself when no marker exists. Files, subdirectory queries and Git tools therefore agree on project identity. `path` remains the requested scope; discovery results stay relative to that scope. `workspace_info` places these identity fields inside `workspace`, or returns `workspace: null` for a roots-only request. Identity discovery neither follows Git storage links nor changes access policy. Refresh cached connector definitions when moving from the previous contract.
+```json
+{"name":"capabilities","arguments":{"path":"/absolute/project"}}
+{"name":"exec","arguments":{"command":"git status --path '/absolute/project'"}}
+{"name":"exec","arguments":{"command":"read_file --path '/absolute/project/src/main.ts' --startLine 1 --maxLines 100"}}
+{"name":"artifact","arguments":{"kind":"image","path":"/absolute/project/proof.png"}}
+{"name":"exec","arguments":{"command":"bun run build","cwd":"/absolute/project","timeoutSeconds":30}}
+```
+
+`capabilities` lists allowed roots, project identity, full input schemas for query commands, execution availability and explicit memory/dependency grants. Query results live in `execution.result`; artifact metadata lives in `artifact.result`. Follow the existing line/file/patch continuation fields. Query commands use `--name value` with the original camelCase option names. Shell quoting is parsed with shell-quote, but no shell expands commands, variables or globs; pipe/redirection/substitution syntax is rejected. `git status`, `git diff`, `git log`, `git show`, `git compare` and `git read_file` alias the corresponding `git_*` operations.
+
+All workspace paths are absolute or `~/` paths. `capabilities` without a path lists roots; with a path it reports the nearest project identity and revision. The CLI can also serve explicitly with `mcp serve --roots '["/absolute/root-a","/absolute/root-b"]'`. `.convorelignore`, `.gitignore`, credential, symlink and hardlink policies continue to apply to reads and execution input snapshots. Git worktrees require their metadata storage to remain in permitted roots.
+
+Build/test execution currently supports Linux with Bubblewrap, prlimit and Bun already installed: `bun test`, or `bun run` followed by `build`, `test`, `check`, `typecheck`, `dist`, or a colon-suffixed variant. Other package managers and arbitrary scripts/arguments are rejected. The project must contain package.json; an explicit non-Bun packageManager is rejected. Source inputs are filtered, limited to 32 MiB total/1 MiB per file, and copied into an isolated writable filesystem. The host checkout is never writable; HOME, Git metadata, environment files and network are unavailable. Temporary outputs are discarded after execution; a private bounded JSON execution report is retained under the state directory's executions folder. This is execution evidence, not a deploy or an exported build.
+
+Dependencies are not mounted by default. Grant only trusted, project-specific node_modules directories with `convorel config set mcp.execDependencyRoots '["/absolute/project/node_modules"]'`. This explicitly exposes all readable content in that dependency directory to the build/test script; keep private data out of it. The mount is read-only and used only for its owning project's execution, never as a file-reading bypass. Shared dependencies remain live and are not included in the returned inputSha256.
+
+The default wall timeout is 30 seconds (maximum 120). One build/test runs at a time per server; cancellation, timeout and excessive output terminate execution. Responses retain up to 8 KiB of combined stdout/stderr; over 1 MiB total output stops the process. Workspace and /tmp tmpfs sizes are 512/256 MiB; CPU, process, file-size and descriptor limits also apply. These are bounded local execution controls, not a VM or a total memory cgroup quota. Check exitCode, signal, timedOut and outputLimited even when the MCP call itself succeeded. Missing sandbox support fails closed.
+
+To expose existing OpenViking context, configure explicit canonical scopes, for example `convorel config set mcp.memoryRoots '["viking://user/YOUR_USER/memories/PROJECT"]'`. Optionally set `mcp.memoryExecutable` to the absolute ov CLI path; otherwise the server resolves ov on PATH. Existing ov configuration handles authentication; Convorel never returns those credentials. `memory(action="search", uri=..., query=...)` performs scoped semantic retrieval; `memory(action="read", uri=...)` reads an exact permitted URI. No writes/deletes or automatic broad sharing. URI aliases, traversal and encoded paths are rejected. Configured status is not a health probe. Restart the tunnel after changing MCP preferences.
+
+`artifact` supports paginated text reports and native PNG/JPEG/WebP images up to 1 MiB under the same workspace policy. Arbitrary binary downloads/uploads and private execution-report browsing are not exposed. A screenshot hash does not prove its producing revision or test result.
+
+Allowed roots have `rootId`; evidence also carries `workspaceId` and `workspacePath` for the nearest Git checkout inside the root (or the root itself). `capabilities.workspace` is null for a roots-only request. IDs are evidence identities, not authentication.
 
 ## 安装 chatgpt-review
 

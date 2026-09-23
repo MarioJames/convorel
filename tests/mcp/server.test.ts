@@ -1,3 +1,4 @@
+import { callOperation } from "./helpers.ts";
 import { test, expect } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +19,10 @@ test("real stdio client discovers tools and reads only allowed files", async () 
     args: [
       "--no-env-file",
       join(import.meta.dir, "../../src/cli.ts"),
+      "--config-dir",
+      join(root, "config"),
+      "--state-dir",
+      join(root, "state"),
       "mcp",
       "serve",
       "--roots",
@@ -34,49 +39,33 @@ test("real stdio client discovers tools and reads only allowed files", async () 
       expect(tool.outputSchema!.type).toBe("object");
     }
     expect(tools.map((t) => t.name).sort()).toEqual([
-      "find_files",
-      "git_compare",
-      "git_diff",
-      "git_log",
-      "git_read_file",
-      "git_show",
-      "git_status",
-      "read_file",
-      "read_image",
-      "search_workspace",
-      "tree",
-      "workspace_info",
+      "artifact",
+      "capabilities",
+      "exec",
+      "memory",
     ]);
-    const info = await client.callTool({
-      name: "workspace_info",
-      arguments: {},
-    });
+    const info = await callOperation(client, "workspace_info", {});
     expect((info.structuredContent as any).roots).toHaveLength(2);
-    const other = await client.callTool({
-      name: "read_file",
-      arguments: { path: join(second, "second.ts") },
+    const other = await callOperation(client, "read_file", {
+      path: join(second, "second.ts"),
     });
     expect(JSON.stringify(other)).toContain("second = 2");
-    const project = await client.callTool({
-      name: "workspace_info",
-      arguments: { path: first },
+    const project = await callOperation(client, "workspace_info", {
+      path: first,
     });
     expect((project.structuredContent as any).workspace.path).toBe(first);
-    const r = await client.callTool({
-      name: "read_file",
-      arguments: { path: join(first, "hello.ts") },
+    const r = await callOperation(client, "read_file", {
+      path: join(first, "hello.ts"),
     });
     expect(r.isError).not.toBe(true);
     expect(JSON.stringify(r)).toContain("answer = 42");
-    const denied = await client.callTool({
-      name: "read_file",
-      arguments: { path: join(first, ".env") },
+    const denied = await callOperation(client, "read_file", {
+      path: join(first, ".env"),
     });
     expect(denied.isError).toBe(true);
     expect(JSON.stringify(denied)).not.toContain("SECRET_SENTINEL");
-    const traversal = await client.callTool({
-      name: "read_file",
-      arguments: { path: "../../etc/passwd" },
+    const traversal = await callOperation(client, "read_file", {
+      path: "../../etc/passwd",
     });
     expect(traversal.isError).toBe(true);
   } finally {

@@ -4,7 +4,7 @@ const mcp = [
   page(
     ["mcp", "serve"],
     ["mcp serve [--roots JSON_ARRAY]"],
-    "Serve the read-only code tools on stdio for the tunnel client or another MCP client. stdout is reserved for the MCP protocol.",
+    "Serve exec, memory, artifact and capabilities on stdio for the tunnel client or another MCP client. stdout is reserved for the MCP protocol.",
     [
       [
         "--roots JSON_ARRAY",
@@ -20,7 +20,7 @@ const mcp = [
 export const mcpPage = page(
   ["mcp"],
   ["mcp <command>"],
-  "Serve the local read-only code tools.",
+  "Serve guarded execution, evidence and explicitly shared memory.",
   [],
   [],
   mcp,

@@ -4,19 +4,26 @@ import { z } from "zod";
 import { homedir } from "node:os";
 import { stateDirectory } from "../paths.ts";
 import { join } from "node:path";
-import { WorkspaceAccess } from "../workspace/access.ts";
+import { WorkspaceAccess, parseRoots } from "../workspace/access.ts";
 import { fullPath } from "../paths.ts";
 import { MAX_OUT } from "../workspace/workspace.ts";
 import { outputSchemas } from "./schemas.ts";
 import { gitHistoryInputs } from "../workspace/git-history-schemas.ts";
 import { preferenceDirectory } from "../config/preferences.ts";
 import packageInfo from "../../package.json";
-export function createServer(roots: string[]) {
+import { registerFunctions } from "./functions.ts";
+import type { Operation } from "./functions.ts";
+import { MemoryAccess } from "./memory.ts";
+import { parseMemoryRoots } from "../config/mcp.ts";
+import { ExecutionAccess } from "./execution.ts";
+import { preference } from "../config/preferences.ts";
+export function createServer(roots: string[], memory?: MemoryAccess) {
   const access = new WorkspaceAccess(roots),
     server = new McpServer({ name: "convorel", version: packageInfo.version });
   access.assertPrivate(stateDirectory());
   access.assertPrivate(join(homedir(), ".local/share/convorel-tunnels"));
   access.assertPrivate(preferenceDirectory());
+  const operations = new Map<string, Operation>();
   const add = (
     name: keyof typeof outputSchemas,
     description: string,
@@ -26,50 +33,23 @@ export function createServer(roots: string[]) {
       identity: ReturnType<WorkspaceAccess["identity"]> | null,
     ) => Promise<any>,
   ) => {
-    server.registerTool(
-      name,
-      {
-        description,
-        inputSchema,
-        outputSchema: outputSchemas[name],
-        annotations: {
-          readOnlyHint: true,
-          destructiveHint: false,
-          idempotentHint: true,
-          openWorldHint: false,
-        },
+    const schema =
+      inputSchema instanceof z.ZodObject
+        ? inputSchema.strict()
+        : z.strictObject(inputSchema);
+    operations.set(name, {
+      description,
+      input: schema,
+      output: outputSchemas[name],
+      async run(args) {
+        const a: any = schema.parse(args);
+        const identity =
+          name === "workspace_info" ? null : access.identity(a.path);
+        const { imageData, ...result } = await fn(a, identity);
+        const data = outputSchemas[name].parse({ ...result, ...identity });
+        return { data, imageData };
       },
-      async (a: any) => {
-        try {
-          const identity =
-            name === "workspace_info" ? null : access.identity(a.path);
-          const { imageData, ...result } = await fn(a, identity);
-          const data = { ...result, ...identity };
-          const serialized = JSON.stringify(data);
-          if (Buffer.byteLength(serialized) > MAX_OUT)
-            throw new Error("RESPONSE_TOO_LARGE");
-          const content: any[] = [{ type: "text", text: serialized }];
-          if (name === "read_image")
-            content.push({
-              type: "image",
-              mimeType: data.mimeType,
-              data: imageData,
-            });
-          return { content, structuredContent: data };
-        } catch (e: any) {
-          const code =
-            e.code === "ENOENT"
-              ? "FILE_NOT_FOUND"
-              : /^[A-Z_]+$/.test(e.message)
-                ? e.message
-                : "TOOL_FAILED";
-          return {
-            isError: true,
-            content: [{ type: "text" as const, text: code }],
-          };
-        }
-      },
-    );
+    });
   };
   add(
     "workspace_info",
@@ -85,8 +65,8 @@ export function createServer(roots: string[]) {
         server: {
           name: "convorel",
           version: packageInfo.version,
-          capabilityVersion: "evidence-v2",
-          tools: Object.keys(outputSchemas),
+          capabilityVersion: "functions-v1",
+          tools: ["exec", "memory", "artifact", "capabilities"],
           maxStructuredResponseBytes: MAX_OUT,
           maxImageBytes: 1024 * 1024,
         },
@@ -136,7 +116,7 @@ export function createServer(roots: string[]) {
       data.tree = render();
       // Rendering adds bytes to the bounded listing. Retain its order
       // and advance only by entries actually returned, so none are skipped.
-      while (Buffer.byteLength(JSON.stringify(data)) > MAX_OUT) {
+      while (Buffer.byteLength(JSON.stringify(data)) > MAX_OUT - 2048) {
         if (!entries.length) throw new Error("TREE_RESPONSE_TOO_LARGE");
         entries.pop();
         data.tree = render();
@@ -275,6 +255,21 @@ export function createServer(roots: string[]) {
       },
     );
   }
+  registerFunctions(
+    server,
+    operations,
+    memory ??
+      new MemoryAccess(
+        parseMemoryRoots(preference("mcp.memoryRoots")),
+        preference("mcp.memoryExecutable") ?? "ov",
+      ),
+    new ExecutionAccess(
+      access,
+      preference("mcp.execDependencyRoots")
+        ? parseRoots(preference("mcp.execDependencyRoots")!).map(fullPath)
+        : [],
+    ),
+  );
   return server;
 }
 export async function serve(roots: string[]) {

@@ -63,7 +63,7 @@ export const outputSchemas = {
     server: z.strictObject({
       name: z.literal("convorel"),
       version: z.string(),
-      capabilityVersion: z.literal("evidence-v2"),
+      capabilityVersion: z.literal("functions-v1"),
       tools: z.array(z.string()),
       maxStructuredResponseBytes: count,
       maxImageBytes: count,

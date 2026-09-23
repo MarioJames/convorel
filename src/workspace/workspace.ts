@@ -275,6 +275,27 @@ export class Workspace {
       scanTruncated: all.truncated,
     };
   }
+  /** A bounded, policy-filtered input snapshot for isolated execution. */
+  executionFiles() {
+    const inventory = this.inventory(".", 32);
+    if (inventory.truncated || inventory.depthLimited)
+      throw new Error("EXEC_INPUT_SCAN_LIMIT");
+    const files: { path: string; bytes: Buffer; mode: number }[] = [];
+    let size = 0;
+    for (const entry of inventory.entries) {
+      if (entry.type !== "file") continue;
+      if (!this.allowed(entry.path)) throw new Error("ACCESS_DENIED");
+      const bytes = this.raw(entry.path);
+      size += bytes.length;
+      if (size > 32 * 1024 * 1024) throw new Error("EXEC_INPUT_SIZE_LIMIT");
+      files.push({
+        path: entry.path,
+        bytes,
+        mode: 0o600 | (lstatSync(join(this.root, entry.path)).mode & 0o111),
+      });
+    }
+    return files;
+  }
   async find(pattern = "*", depth = 12, offset = 0, limit = 200) {
     integer(depth, 1, 32);
     integer(offset, 0, 10000);

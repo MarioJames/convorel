@@ -185,11 +185,11 @@ try {
   try {
     await client.connect(transport);
     const tools = (await client.listTools()).tools;
-    assert.equal(tools.length, 12);
+    assert.equal(tools.length, 4);
     assert.ok(tools.every((tool) => tool.outputSchema?.type === "object"));
     const result = await client.callTool({
-      name: "read_file",
-      arguments: { path: join(workspace, "proof.txt") },
+      name: "artifact",
+      arguments: { kind: "text", path: join(workspace, "proof.txt") },
     });
     assert.equal(result.isError, undefined);
     assert.match(JSON.stringify(result), /packaged MCP evidence/);
