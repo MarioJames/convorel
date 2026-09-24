@@ -98,6 +98,8 @@ export interface Task {
   workspaceId: string;
   url?: string;
   binding?: Binding;
+  /** Former main targets left untouched after navigation away from this task. */
+  detachedBindings?: (Binding & { reason: "navigated" | "blank" })[];
   opening?: boolean;
   pageRecreations?: number;
   currentRun: string;
@@ -130,6 +132,10 @@ export interface Task {
 export interface Page {
   session: string;
   run: (...args: string[]) => Promise<any>;
+  runChecked: (
+    args: string[],
+    beforeDispatch: () => Promise<void>,
+  ) => Promise<any>;
   read: () => Promise<PageState>;
 }
 /** The result of one Markdown-copy attempt; ok=false carries a reason code. */

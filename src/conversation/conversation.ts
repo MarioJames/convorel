@@ -1,7 +1,7 @@
 import { savedResult } from "./result.ts";
 import { randomUUID } from "node:crypto";
 import { State, registryLockName, tabsLockName } from "../storage/state.ts";
-import type { Browser } from "../browser/browser.ts";
+import { ObservationError, type Browser } from "../browser/browser.ts";
 import { Workspace } from "../workspace/workspace.ts";
 import { sha } from "../hash.ts";
 import { conversationId, type PageState } from "../browser/chatgpt/page.ts";
@@ -200,8 +200,8 @@ export class Conversation {
   private exclusive<T>(id: string, fn: () => Promise<T>) {
     return withTaskStateLock(this.store, id, async () => {
       this.store.assertTaskWritable(id);
-      return fn();
-    }).finally(() => this.browser.release());
+      return this.browser.withSessionScope(fn);
+    });
   }
   /** Cross-task identity publish (conversation URL, tab binding, request key).
    * Held only for the read-all-tasks conflict check plus the atomic write; it
@@ -280,25 +280,44 @@ export class Conversation {
         ? tabs.find((x: any) => x.targetId === t.binding!.target)
         : undefined;
     if (previous) {
-      if (t.url && !same(previous.url, t.url))
-        throw new Error("TARGET_NAVIGATED");
-      return { target: previous.targetId, created: false };
+      if (!t.url || same(previous.url, t.url))
+        return { target: previous.targetId, created: false };
+      // The known conversation can be observed on a fresh page. Preserve a
+      // navigated or blank original target, including any user draft on it.
+      (t.detachedBindings ??= []).push({
+        ...t.binding!,
+        reason: previous.url === "about:blank" ? "blank" : "navigated",
+      });
+      t.binding = undefined;
+      this.save(t);
     }
     if (
       !t.url &&
-      t.binding?.owned &&
+      t.binding &&
+      !previous &&
       !t.opening &&
-      !t.binding.closed &&
-      t.binding.epoch === epoch &&
-      !tabs.some((x: any) => x.targetId === t.binding!.target) &&
       t.runs.length === 1 &&
       this.current(t).state === "prepared" &&
       !this.current(t).submittedAt &&
-      !this.current(t).userMessageId &&
-      (t.pageRecreations ?? 0) < 2
+      !this.current(t).userMessageId
     ) {
       t.pageRecreations = (t.pageRecreations ?? 0) + 1;
       t.binding = undefined;
+      this.save(t);
+    }
+    if (
+      !t.url &&
+      t.opening &&
+      !t.binding &&
+      t.runs.length === 1 &&
+      this.current(t).state === "prepared" &&
+      !this.current(t).submittedAt &&
+      !this.current(t).userMessageId
+    ) {
+      // No run could send before its target binding was published. A lost
+      // creation acknowledgement may leave an unclaimed empty tab behind.
+      t.opening = false;
+      t.pageRecreations = (t.pageRecreations ?? 0) + 1;
       this.save(t);
     }
     if (!t.url && (t.opening || t.binding))
@@ -321,17 +340,24 @@ export class Conversation {
     const existing = t.url
       ? tabs.filter((x: any) => same(x.url, t.url!) && !claimed.has(x.targetId))
       : [];
-    if (existing.length > 1) throw new Error("AMBIGUOUS_CONVERSATION_TABS");
-    if (existing.length) {
+    if (existing.length === 1) {
       t.binding = { target: existing[0].targetId, epoch, owned: false };
+      t.opening = false;
       await this.publish(async () => {
         this.claim(t);
         this.save(t);
       });
       return { target: t.binding.target, created: false };
     }
-    if (t.opening)
+    if (t.opening && !t.url)
       throw new Error("OPEN_UNKNOWN: no automatic second creation attempt");
+    if (t.opening && t.url) {
+      // A lost acknowledgement for opening a known URL cannot grant Send.
+      // The earlier unbound page may remain; a new page only observes the URL.
+      t.opening = false;
+      t.pageRecreations = (t.pageRecreations ?? 0) + 1;
+      this.save(t);
+    }
     t.opening = true;
     this.save(t);
     this.guard(t);
@@ -360,33 +386,48 @@ export class Conversation {
       const anchor = current.userMessageId ? current : t.runs.at(-2);
       const userId = anchor?.userMessageId;
       const replyId = anchor?.reply?.id;
-      for (let n = 0; n < 20; n++) {
+      let last: PageState | undefined;
+      for (let n = 0; n < (created ? 12 : 4); n++) {
         const p: PageState = await b.read();
+        last = p;
         this.guard(t);
         const reply = replyId
           ? p.messages.find((m) => m.id === replyId)
           : undefined;
         const blank =
           p.url === "about:blank" && !p.hasComposer && !p.messages.length;
+        const anchorMissing =
+          !!userId && !p.messages.some((m) => m.id === userId);
+        const replyLoading =
+          !!replyId &&
+          (!reply ||
+            (created &&
+              (!reply.final ||
+                (!!anchor?.replyHash &&
+                  sha(reply.text) !== anchor.replyHash))));
         const loading =
           same(p.url, t.url) &&
-          ((!p.hasComposer && !userId) ||
-            (userId && !p.messages.length) ||
-            (replyId &&
-              (created
-                ? !reply?.final ||
-                  (anchor?.replyHash && sha(reply.text) !== anchor.replyHash)
-                : !reply && !p.messages.length)));
+          ((!p.hasComposer && !userId) || anchorMissing || replyLoading);
         if (
           p.blocked ||
-          p.draft?.trim() ||
-          p.attachments ||
-          p.generating ||
+          (!anchorMissing &&
+            (p.draft?.trim() || p.attachments || p.generating)) ||
           (!blank && !loading)
         )
           break;
         await Bun.sleep(250);
       }
+      if (
+        last &&
+        userId &&
+        same(last.url, t.url) &&
+        !last.blocked &&
+        !last.messages.some((m) => m.id === userId) &&
+        (created || !last.hasComposer || !last.messages.length)
+      )
+        throw new ObservationError(
+          "HISTORY_HYDRATING: saved user message has not mounted",
+        );
     }
     return b;
   }
@@ -447,8 +488,22 @@ export class Conversation {
       this.begin(t);
       if (t.organizationObservation && !t.organizationObservation.closed)
         await this.organization.releaseOrganizationObserver(t);
-      if (this.current(t, run).state === "complete")
+      if (this.current(t, run).state === "complete") {
+        const completed = this.current(t, run);
+        if (completed.reply && !completed.reply.markdown) {
+          try {
+            await this.captureModule.attemptCapture(
+              t,
+              await this.page(t),
+              completed,
+            );
+          } catch {
+            completed.reply.markdownError = "CAPTURE_PAGE_UNAVAILABLE";
+            this.save(t);
+          }
+        }
         return this.archiveCompleted(t);
+      }
       try {
         // Recover a previously saved initial URL without guessing another tab or resending.
         if (t.url === (t.config.projectUrl || "https://chatgpt.com/")) {

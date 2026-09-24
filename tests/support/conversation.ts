@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { State } from "../../src/storage/state.ts";
 import { Conversation } from "../../src/conversation/conversation.ts";
+import { ActionNotDispatched } from "../../src/browser/browser.ts";
 import { preference, writePreference } from "../../src/config/preferences.ts";
 
 export class FakeBrowser {
@@ -27,6 +28,13 @@ export class FakeBrowser {
   }
   async release() {
     this.releases++;
+  }
+  async withSessionScope<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } finally {
+      await this.release();
+    }
   }
   async closeTab(target: string, beforeClose: () => Promise<void>) {
     if (this.gate) await this.gate("before-close:" + target);
@@ -67,6 +75,26 @@ export class FakeBrowser {
       },
       run: async (...args: string[]) => {
         if (self.gate) await self.gate("run:" + args[0] + ":" + target);
+        if (args[0] === "open") {
+          p.url = args[1];
+          p.messages = [];
+          p.generating = false;
+          p.hasComposer = true;
+          p.blocked = null;
+          p.draft = "";
+          p.attachments = false;
+          p.sendReady = self.sendReady;
+          self.targets.find((t) => t.targetId === target).url = p.url;
+        }
+        if (args[0] === "eval" && args[1].includes("composerCount"))
+          return {
+            result: {
+              url: p.url,
+              messageCount: p.messages.length,
+              composerCount: p.hasComposer ? 1 : 0,
+              editable: p.hasComposer,
+            },
+          };
         if (args[0] === "fill") p.draft = args[2];
         if (args[0] === "eval" && args[1].includes("execCommand")) {
           self.clears++;
@@ -96,6 +124,19 @@ export class FakeBrowser {
             throw new Error("transport disconnected after submit");
         }
         return {};
+      },
+      runChecked: async (
+        args: string[],
+        beforeDispatch: () => Promise<void>,
+      ) => {
+        try {
+          if (self.gate)
+            await self.gate("before-dispatch:" + args[0] + ":" + target);
+          await beforeDispatch();
+        } catch (error) {
+          throw new ActionNotDispatched(error);
+        }
+        return (await self.page(target)).run(...args);
       },
     };
   }

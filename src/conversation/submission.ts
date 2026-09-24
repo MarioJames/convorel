@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  ActionNotDispatched,
   clearDraft as clearDraftOnPage,
   sendPrompt,
 } from "../browser/browser.ts";
@@ -17,6 +18,8 @@ import { validateNaming } from "./organization.ts";
 import type { Naming, Page, Run, Task } from "./types.ts";
 import type { DiagnosticStep } from "../storage/diagnostics.ts";
 import { composePrompt, promptContext, validPrompt } from "./prompt.ts";
+
+class RunMessagePresent extends Error {}
 
 export interface SubmissionContext {
   readonly store: State;
@@ -151,7 +154,7 @@ export function createSubmission(ctx: SubmissionContext) {
     )
       throw new Error("RUN_NOT_PREPARED");
     ctx.begin(t);
-    return submitPrepared(t);
+    return submitPrepared(t, undefined, true);
   }
   async function rebindWorkspace(
     id: string,
@@ -238,14 +241,63 @@ export function createSubmission(ctx: SubmissionContext) {
       checkPage: (p: PageState) => void;
       beforeSend: () => Promise<void>;
     },
+    returnToProject = false,
   ) {
     const r = ctx.current(t),
       prompt = r.prompt;
     if (!validPrompt(r)) throw new Error("PROMPT_INTEGRITY_FAILED");
     const draftText = (text: string) => text.replace(/\u00a0/g, " ").trim();
     let submittingSaved = false;
+    let b: Page | undefined;
+    const beforeSubmission = {
+      state: r.state,
+      submittedAt: r.submittedAt,
+      userMessageId: r.userMessageId,
+      sendRecoveries: r.sendRecoveries
+        ? structuredClone(r.sendRecoveries)
+        : undefined,
+      observationError: r.observationError,
+    };
     try {
-      const b = recovery?.b ?? (await ctx.page(t, t.runs.indexOf(r) > 0));
+      b = recovery?.b ?? (await ctx.page(t, t.runs.indexOf(r) > 0));
+      if (
+        returnToProject &&
+        t.config.projectUrl &&
+        !t.url &&
+        t.binding?.owned
+      ) {
+        ctx.guard(t);
+        const before = await b.read();
+        ctx.guard(t);
+        if (
+          before.messages.some(
+            (message) =>
+              message.role === "user" && message.text.includes(r.marker),
+          )
+        )
+          return await ctx.reconcile(t, b);
+        try {
+          await b.runChecked(["open", t.config.projectUrl], async () => {
+            const current = await b!.read();
+            ctx.guard(t);
+            if (
+              current.messages.some(
+                (message) =>
+                  message.role === "user" && message.text.includes(r.marker),
+              )
+            )
+              throw new RunMessagePresent();
+          });
+        } catch (error) {
+          if (
+            error instanceof ActionNotDispatched &&
+            error.cause instanceof RunMessagePresent
+          )
+            return await ctx.reconcile(t, b);
+          throw error;
+        }
+        ctx.guard(t);
+      }
       let p = await ctx.observe(t, b);
       recovery?.checkPage(p);
       if (recovery && (p.draft === undefined || p.draft.trim()))
@@ -319,35 +371,60 @@ export function createSubmission(ctx: SubmissionContext) {
       )
         throw new Error("DRAFT_CHANGED");
       checkDraft(p);
-      ctx.setStep("model");
-      const finalModel = await ctx.verify(b, {
-        url: p.url,
-        target: t.binding!.target,
-        model: r.observedModel!,
-        "verify-only": "true",
-      });
-      if (finalModel.observedModel !== r.observedModel)
-        throw new Error("MODEL_CHANGED_BEFORE_SEND");
-      p = await ctx.observe(t, b);
-      checkDraft(p);
-      if (draftText(p.draft || "") !== draftText(prompt))
-        throw new Error("DRAFT_CHANGED");
-      if (!p.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
-      if (!t.url && t.config.projectUrl)
-        await verifyProjectComposer(b, t.config.projectUrl);
-      await recovery?.beforeSend();
-      r.error = undefined;
-      // Durable write precedes the first action capable of submitting a message.
-      // The submitting diagnostic waits until click returns so the sync cannot
-      // widen the gap between the saved intent and the click.
-      r.state = "submitting";
-      r.submittedAt = new Date().toISOString();
-      ctx.setStep("persist");
-      ctx.save(t, false);
-      submittingSaved = true;
-      ctx.guard(t);
       ctx.setStep("send");
-      await sendPrompt(b, p);
+      await sendPrompt(b, p, async () => {
+        // The pacing lock and delay have completed. Nothing in this callback
+        // may enqueue another paced browser action.
+        let latest = await ctx.observe(t, b!);
+        if (
+          !recovery &&
+          latest.messages.some(
+            (message) =>
+              message.role === "user" && message.text.includes(r.marker),
+          )
+        )
+          throw new RunMessagePresent();
+        checkDraft(latest);
+        if (draftText(latest.draft || "") !== draftText(prompt))
+          throw new Error("DRAFT_CHANGED");
+        if (!latest.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
+        const lastModel = await ctx.verify(b, {
+          url: latest.url,
+          target: t.binding!.target,
+          model: r.observedModel!,
+          "verify-only": "true",
+        });
+        if (lastModel.observedModel !== r.observedModel)
+          throw new Error("MODEL_CHANGED_BEFORE_SEND");
+        latest = await ctx.observe(t, b!);
+        if (
+          !recovery &&
+          latest.messages.some(
+            (message) =>
+              message.role === "user" && message.text.includes(r.marker),
+          )
+        )
+          throw new RunMessagePresent();
+        checkDraft(latest);
+        if (
+          draftText(latest.draft || "") !== draftText(prompt) ||
+          !latest.sendReady
+        )
+          throw new Error("DRAFT_CHANGED");
+        if (!t.url && t.config.projectUrl)
+          await verifyProjectComposer(b!, t.config.projectUrl);
+        await recovery?.beforeSend();
+        r.error = undefined;
+        // Durable intent is now adjacent to the first action capable of
+        // submitting. A crash after this write remains delivery-uncertain.
+        r.state = "submitting";
+        r.submittedAt = new Date().toISOString();
+        ctx.setStep("persist");
+        ctx.save(t, false);
+        submittingSaved = true;
+        ctx.guard(t);
+        ctx.setStep("send");
+      });
       ctx.notePhase(t.id, r.id, "submitting");
       ctx.guard(t);
       for (let n = 0; n < 12; n++) {
@@ -356,7 +433,23 @@ export function createSubmission(ctx: SubmissionContext) {
         await Bun.sleep(250);
       }
       return t;
-    } catch (e) {
+    } catch (caught) {
+      let e: unknown = caught;
+      if (e instanceof ActionNotDispatched) {
+        const reason = e.cause;
+        if (r.state === "submitting") {
+          r.state = beforeSubmission.state;
+          r.submittedAt = beforeSubmission.submittedAt;
+          r.userMessageId = beforeSubmission.userMessageId;
+          r.sendRecoveries = beforeSubmission.sendRecoveries;
+          r.observationError = beforeSubmission.observationError;
+          ctx.save(t, false);
+          submittingSaved = false;
+        }
+        if (reason instanceof RunMessagePresent && b)
+          return await ctx.reconcile(t, b);
+        e = reason;
+      }
       if (submittingSaved && r.state === "submitting")
         ctx.notePhase(t.id, r.id, "submitting");
       if (r.state === "submitting") r.state = "delivery_unknown";

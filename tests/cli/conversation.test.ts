@@ -206,7 +206,13 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
     task.runs[0] = {
       ...task.runs[0],
       state: "complete",
-      reply: { id: "a1", role: "assistant", text: "Final result", final: true },
+      reply: {
+        id: "a1",
+        role: "assistant",
+        text: "Final result",
+        markdown: "Final result",
+        final: true,
+      },
       replyHash: sha("Final result"),
       branch: ["u1", "a1"],
     };

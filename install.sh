@@ -185,8 +185,8 @@ if [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ] ||
 fi
 
 fetch() {
-  if command -v curl >/dev/null; then curl -fsSL --retry 3 -o "$2" "$1"
-  elif command -v wget >/dev/null; then wget -q -O "$2" "$1"
+  if command -v curl >/dev/null; then curl -fsSL --connect-timeout 15 --max-time 180 --retry 3 -o "$2" "$1"
+  elif command -v wget >/dev/null; then wget -q --timeout=180 --tries=4 -O "$2" "$1"
   else die "NO_DOWNLOAD_TOOL: install curl or wget"
   fi
 }

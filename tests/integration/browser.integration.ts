@@ -113,10 +113,21 @@ try {
   const b = await controller.page(created.targetId);
   const page = await b.read();
   assert.equal(page.url, url);
+  const returnUrl =
+    "data:text/html," + encodeURIComponent("<main>Temporary home</main>");
+  await b.run("open", returnUrl);
+  assert.equal((await b.read()).url, returnUrl);
+  await b.run("open", url);
+  assert.equal((await b.read()).url, url);
+  assert.equal(
+    (await list()).length,
+    2,
+    "returning on a pinned page keeps its target",
+  );
   assert.equal(page.messages.at(-1)?.text, "Done");
   assert.equal(page.messages.at(-1)?.final, true);
   assert.equal(page.sendReady, true);
-  await sendPrompt(b, page);
+  await sendPrompt(b, page, async () => {});
   assert.equal(
     (await b.run("eval", "window.sends")).result,
     1,
@@ -132,7 +143,10 @@ try {
     false,
     "the shared composer ID must not identify Stop as Send",
   );
-  await assert.rejects(sendPrompt(b, stopped), /SEND_CONTROL_UNAVAILABLE/);
+  await assert.rejects(
+    sendPrompt(b, stopped, async () => {}),
+    /SEND_CONTROL_UNAVAILABLE/,
+  );
   assert.equal((await b.run("eval", "window.sends")).result, 1);
   await b.run(
     "eval",
@@ -611,6 +625,8 @@ try {
       };
     },
     release: () => controller.release(),
+    withSessionScope: (fn: () => Promise<any>) =>
+      controller.withSessionScope(fn),
   };
   const conversation = new Conversation(
     fixtureState,
@@ -665,6 +681,27 @@ try {
   );
   await controller.release();
   assert.deepEqual(await settled(), [], "release is repeatable");
+  let releaseFirst!: () => void;
+  let firstReady!: () => void;
+  const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve));
+  const ready = new Promise<void>((resolve) => (firstReady = resolve));
+  const firstOperation = controller.withSessionScope(async () => {
+    const page = await controller.page(initial[0].id);
+    await page.read();
+    firstReady();
+    await firstGate;
+    assert.equal((await page.read()).url, "about:blank");
+  });
+  await ready;
+  await controller.withSessionScope(async () => {
+    const page = await controller.page(initial[0].id);
+    assert.equal((await page.read()).url, "about:blank");
+  });
+  for (let n = 0; n < 20 && daemons().length > 1; n++) await Bun.sleep(50);
+  assert.equal(daemons().length, 1, "later operation releases only its daemon");
+  releaseFirst();
+  await firstOperation;
+  assert.deepEqual(await settled(), [], "both operation daemons are released");
   console.log(
     JSON.stringify({
       passed: true,
@@ -676,9 +713,11 @@ try {
         "list",
         "create",
         "read",
+        "navigate owned pinned tab and return",
         "rebind",
         "close",
         "daemon release",
+        "concurrent operation session isolation",
         "pin protection",
         "missing target",
         "composer paragraph extraction",

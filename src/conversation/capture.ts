@@ -124,19 +124,32 @@ export function createCapture(ctx: CaptureContext) {
     const unchanged: string[] = [];
     const gaps: { runId: string; code: string }[] = [];
     if (targets.length) {
-      const b = await ctx.page(t);
-      for (const r of targets) {
-        const before = r.reply?.markdown;
-        const attempt = await attemptCapture(t, b, r);
-        const after = r.reply?.markdown;
-        if (!attempt.ok)
+      let b: Page | undefined;
+      try {
+        b = await ctx.page(t);
+      } catch (error) {
+        for (const r of targets)
           gaps.push({
             runId: r.id,
-            code: attempt.reason ?? "CAPTURE_FAILED",
+            code: String(error).includes("HISTORY_HYDRATING")
+              ? "TARGET_NOT_RENDERED"
+              : "CAPTURE_PAGE_UNAVAILABLE",
           });
-        else if (after && after !== before) captured.push(r.id);
-        // Taking the same bytes again proves the capture path works; it is not a gap.
-        else if (after) unchanged.push(r.id);
+      }
+      if (b) {
+        for (const r of targets) {
+          const before = r.reply?.markdown;
+          const attempt = await attemptCapture(t, b, r);
+          const after = r.reply?.markdown;
+          if (!attempt.ok)
+            gaps.push({
+              runId: r.id,
+              code: attempt.reason ?? "CAPTURE_FAILED",
+            });
+          else if (after && after !== before) captured.push(r.id);
+          // Taking the same bytes again proves the capture path works; it is not a gap.
+          else if (after) unchanged.push(r.id);
+        }
       }
     }
     return {

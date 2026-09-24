@@ -74,9 +74,9 @@ convorel conversation result --id ID --run RUN_ID
 
 Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何种通知，都须用同一 `--id`、`--run` 取得当前完整 `result`，不能以通知、退出码或最后可见的网页答案代替。
 
-`resume` 只观察和核对，不发送消息或命名；URL 延迟时继续追踪原提交。只有状态为 `prepared` 且已解决发送前错误时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。它重新核验模型、页面和草稿；不得重试 `submitting`/`delivery_unknown`，不得覆盖变更后的草稿强行推进。未知发送或等待超时不能用新 ID 再发。
+`resume` 只观察和核对，不发送消息或命名；URL 延迟时继续追踪原提交。只有状态为 `prepared` 时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。项目首轮的任务自有页会导航回项目入口并替换当前页内容，随后重新核验模型、页面和提示词；借用页仍需遵守草稿核验。不得重试 `submitting`/`delivery_unknown`；未知发送或等待超时不能用新 ID 再发。
 
-新建页恢复了旧草稿时，先读取并备份完整原文。仅用户明确授权删除该页草稿副本后，才使用 `conversation clear-draft --id ID --run RUN_ID --expected-draft-file /private/approved-draft.txt`。该命令只处理任务自有、无历史消息的新建页和未发送首轮；逐字核对草稿，持久保存备份，删除后实际读回确认。草稿已变、附件存在、页面身份不同或投递未知都会停止，不扩大到其他标签页。成功后再显式 retry 同一 run；命令成功回执不能代替空草稿、模型、页面和投递状态核验。
+项目首轮任务自有页上的旧草稿由显式 `retry` 导航项目入口时替换。若需要保留草稿，先读取并备份完整原文；若要在原页单独清空草稿，仅在用户明确授权删除该副本后使用 `conversation clear-draft --id ID --run RUN_ID --expected-draft-file /private/approved-draft.txt`。该命令只处理任务自有、无历史消息的新建页和未发送首轮；逐字核对草稿，持久保存备份，删除后实际读回确认。草稿已变、附件存在、页面身份不同或投递未知都会停止，不扩大到其他标签页。成功后再显式 retry 同一 run；命令成功回执不能代替空草稿、模型、页面和投递状态核验。
 
 `status` 的 `summary` 区分已确认投递、发送结果未知和未尝试发送，并返回当前阶段、最近观察时间、观察错误和下一步动作。`status` 退出 0 只表示本地状态读取成功；`start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅回复完成且要求的命名已核验时退出 0，未完成或需处理时退出 2，参数/基础设施等异常可退出 1。不要仅凭退出码取代精确轮次的 `result`。`wait` 仅对观察失败做最多三次连续尝试，不自动重发；登录、页面身份或草稿等需处理的问题不会被当作临时读取失败反复尝试。
 
@@ -84,7 +84,8 @@ Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何�
 
 监听同一轮回复持续 2 分钟无变化时，先检查会话身份、草稿和附件，再主动刷新原标签页并等待历史加载。刷新只恢复观察，不发送消息；刷新后按原用户消息 ID 判定完成、仍生成或已被后续消息取代。正常长时间思考不算失败，连续 3 次刷新失败则提示检查；`summary.completionProbe` 暴露停滞时间、刷新次数及错误。草稿和附件存在时保留原页并报告延期。`wait` 的总超时仍然生效。
 
-仅首轮仍为 `prepared`、从未执行发送、且已记录的自有新建页确定丢失时，原任务的 `retry` 可重新创建页面（最多 2 次），继续同一个 run 与提示词。持久化会话暂时空白、用户消息已确认或投递未知，都不能作为重建并重发的证据。
+仅首轮仍为 `prepared`、从未执行发送、且原绑定标签页确定丢失时，原任务的 `retry` 可重新创建并认领标签页，继续同一个 run 与提示词；原标签页曾被借用也不妨碍重建。开页中断只留下 `opening` 记录时也可补建，可能遗留的未认领空页保留。持久化会话暂时空白、用户消息已确认或投递未知，都不能作为重建并重发的证据；其他任务已认领的标签页不被占用。
+项目首轮重试若重用任务自有标签页，先只读检查本 run 的用户消息标记；已出现时对账原投递，不导航或再发。否则导航回任务保存的项目入口并替换该页内容，再核验项目、模型和提示词。借用且仍存在的标签页不导航；先前投递未知的 run 不重发。
 
 浏览器动作默认间隔 750 毫秒，导航/新建页面后等待 1500 毫秒；同一 state root 的 CLI 共享节奏。用 `convorel config set browser.actionIntervalMs 1000`、`convorel config set browser.navigationWaitMs 2000` 可调慢，取值均为 1–10000 毫秒。只读观察不人为延迟；间隔不能保证避免平台风控，遇登录、验证码或权限问题须停止并报告。未知投递继续按原 run 观察，不重发；`wait` 超时报告保留投递状态与 `runState`。
 
@@ -122,7 +123,7 @@ TYPE 默认英文代码；仅用户明确要求中文时为 `create` 或 `organi
 - **Markdown 捕获**：`result` 中的 `reply.markdown` 是 Copy 得到的正文；没有 Markdown 时仅有渲染副本，不能冒充原文。缺失原因看 `reply.markdownError` 或 capture 的 `gaps`。
 - **归档写入**：完成路径在返回的 `task.archive` 中提供 `ArchiveNotice`，本次 `summary`/wait 同步透传 `archive`；CLI `result` 也会补写本地归档并返回 `archive`。`stored` 表示本次写入无缺口，`partial` 表示有缺口，`failed`/`unavailable` 表示写入失败或不可用；查看 `error`、`gaps`（含 `runId`/`code`）和可用的统计字段。notice 不写入任务 JSON；纯本地 status 不能凭缺省字段证明刚刚重试过归档。
 
-归档失败或不完整不改变 `state=complete`、`nextAction=result` 或完成命令的成功退出码；不能只看退出码判断资料完整。成功归档的 prompt、Markdown 和渲染副本在私有内容库（`STATE_DIR/conversations.db`）按不可变版本保留：
+归档失败或不完整不改变 `state=complete`，也不授权重发。缺 Markdown 时 summary 为 `capture_pending`、`nextAction=capture`；本次归档失败时为 `archive_pending`，`resume`/`wait` 返回 2。成功归档的 prompt、Markdown 和渲染副本在私有内容库（`STATE_DIR/conversations.db`）按不可变版本保留：
 
 ```bash
 convorel conversation search --query '关键词' --limit 20
@@ -140,10 +141,10 @@ convorel doctor --local true
 
 恢复时保留原 task、run、状态根和已保存正文：
 
-- `archive.failed/unavailable`：先解决所报告的目录权限、空间或 SQLite 问题，再执行同一 run 的 `resume` 或 `conversation archive --id ID`。已完成轮次的 poll/resume 在本地重试归档，必要时对账遗留观察页；命名单独由 wait/finish 检查点或显式 organize 处理，不重新 Copy、不替换已存回复。读回 `history`/coverage 核验结果；不要删库或改任务 JSON 排障。
-- 缺 Markdown：`archive` 只能重建本地已有内容，不能补出未捕获的正文；确需原文时用同一 run 的 `capture`，它会严格核验原消息与回复。页面缺失、目标变更或 Copy 失败时保留缺口和渲染副本，不将最新网页答案冒认为该轮回复，也不重新发送问题。
+- `archive.failed/unavailable`：先解决所报告的目录权限、空间或 SQLite 问题，再执行同一 run 的 `resume` 或 `conversation archive --id ID`。已完成轮次的 poll/resume 会补档；已保存的 Markdown 不重复复制或替换。读回 `history`/coverage 核验结果；不要删库或改任务 JSON 排障。
+- 缺 Markdown：已完成轮次的 `resume` 会重新核验同一页面的提交消息、回复身份与正文，再尝试 Copy；也可用同一 run 的 `capture` 显式重试。`archive` 只能重建本地已有内容，不能补出未捕获的正文。页面缺失、目标变更或 Copy 失败时保留缺口和渲染副本，不将最新网页答案冒认为该轮回复，也不重新发送问题。
 - 当前选择缺正文但已有版本 ID：先 `content --version VERSION_UUID` 读取不可变版本，保留证据；不要因为 `history.reply` 为空就认定原文已删除。`archive` 补写后再核对当前选择。
-- 页面入口或模型核验失败：`doctor` 成功只证明本地 CDP/MCP，不能代替真实项目入口、模型或远端 MCP 访问核验。仅 `prepared` 且原目标仍可验证时按上文 retry；投递未知或原 target 丢失时不猜测替代页、不新建 ID 绕过保护。
+- 页面入口或模型核验失败：`doctor` 成功只证明本地 CDP/MCP，不能代替真实项目入口、模型或远端 MCP 访问核验。`prepared` 的项目首轮按上文 retry：自有页返回项目入口，原绑定页确定丢失时在同一任务和 run 下重建并认领。投递未知不重发，也不新建 ID 绕过保护。
 
 ## 接续已有会话
 

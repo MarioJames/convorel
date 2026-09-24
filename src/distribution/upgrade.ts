@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { COMPILED } from "../runtime.ts";
 import { childEnv } from "../process.ts";
+import { executeManaged } from "../process-lifecycle.ts";
 import { preference } from "../config/preferences.ts";
 import packageInfo from "../../package.json";
 // @ts-expect-error Bun's text loader embeds the shell script in standalone builds.
@@ -136,11 +137,16 @@ export async function upgrade(requested?: string) {
       version: packageInfo.version,
       skills: skillsNotice,
     };
-  const process_ = Bun.spawn(
+  const {
+    stdout: out,
+    stderr: err,
+    code,
+  } = await executeManaged(
     [
       "bash",
-      "-s",
-      "--",
+      "-c",
+      installer,
+      "convorel-install",
       "--version",
       manifest.version,
       "--prefix",
@@ -152,16 +158,10 @@ export async function upgrade(requested?: string) {
     ],
     {
       env: childEnv(),
-      stdin: new TextEncoder().encode(installer),
-      stdout: "pipe",
-      stderr: "pipe",
+      timeoutMs: 600_000,
+      maxBuffer: 1_000_000,
     },
   );
-  const [out, err, code] = await Promise.all([
-    new Response(process_.stdout).text(),
-    new Response(process_.stderr).text(),
-    process_.exited,
-  ]);
   if (code) throw new Error(`UPGRADE_FAILED: ${(err || out).slice(0, 1000)}`);
   return {
     upgraded: true,

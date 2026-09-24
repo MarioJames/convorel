@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Conversation } from "../../src/conversation/conversation.ts";
+import { ActionNotDispatched } from "../../src/browser/browser.ts";
 import {
   diagnosticCode,
   Diagnostics,
@@ -212,7 +213,7 @@ test("a failed submitting save is not recorded as a persisted phase", async () =
   try {
     const enabled = await run(true);
     expect(enabled.browser.sends).toBe(0);
-    expect(enabled.task.runs[0].state).toBe("delivery_unknown");
+    expect(enabled.task.runs[0].state).toBe("prepared");
     const events = readDiagnostics(enabled.dir, "save-fail").events;
     expect(
       events.some(
@@ -272,6 +273,13 @@ class FakeBrowser {
     return "epoch";
   }
   async release() {}
+  async withSessionScope<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } finally {
+      await this.release();
+    }
+  }
   async tabs(...args: string[]) {
     if (args[0] === "list") return { tabs: this.targets };
     if (args[0] === "new") {
@@ -314,6 +322,17 @@ class FakeBrowser {
           page.generating = true;
         }
         return {};
+      },
+      runChecked: async (
+        args: string[],
+        beforeDispatch: () => Promise<void>,
+      ) => {
+        try {
+          await beforeDispatch();
+        } catch (error) {
+          throw new ActionNotDispatched(error);
+        }
+        return (await this.page(target)).run(...args);
       },
     };
   }

@@ -89,6 +89,33 @@ export async function main(args = process.argv.slice(2)) {
     assertOutsideSharedRoots(preferenceDirectory());
     return localConversationCommand(sub, conversationOptions!, store, print);
   }
+  // Existing task operations use their saved task snapshot. A removed checkout
+  // must not prevent observing or releasing that task's browser conversation.
+  const existingTaskOperation =
+    area === "conversation" &&
+    [
+      "start",
+      "retry",
+      "recover-send",
+      "clear-draft",
+      "resume",
+      "wait",
+      "finish",
+      "organize",
+      "capture",
+    ].includes(sub ?? "");
+  if (existingTaskOperation) {
+    assertOutsideSharedRoots(store.root);
+    assertOutsideSharedRoots(preferenceDirectory());
+    const config = store.read<Config>("config");
+    return runConversation(
+      sub!,
+      conversationOptions!,
+      new Conversation(store, new Browser(config.cdp, store.root)),
+      store,
+      print,
+    );
+  }
   const config = store.read<Config>("config"),
     configuredRoots = preference("mcp.roots"),
     access = new WorkspaceAccess(

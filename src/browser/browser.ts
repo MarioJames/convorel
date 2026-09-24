@@ -1,11 +1,21 @@
 // Attachment pattern adapted from skill-foundry 19f0122 (Apache-2.0).
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { command } from "../command.ts";
 import { PAGE_SCRIPT, SEND_SELECTOR, type PageState } from "./chatgpt/page.ts";
 import { BrowserPacing, type PacingClock } from "./pacing.ts";
 // Only observation failures may be retried automatically; never a browser action.
 export class ObservationError extends Error {}
+let operationCounter = 0;
+/** The adapter command was never handed to its executor. Only this fact may
+ * restore pre-dispatch state; an executor error is always delivery-uncertain. */
+export class ActionNotDispatched extends Error {
+  constructor(readonly cause: unknown) {
+    super(String(cause));
+  }
+}
 
 /** Explicit, compare-and-delete recovery; never use fill("") on contenteditable. */
 export async function clearDraft(
@@ -63,11 +73,17 @@ export async function clearDraft(
 }
 
 export async function sendPrompt(
-  page: { run: (...args: string[]) => Promise<any> },
+  page: {
+    runChecked: (
+      args: string[],
+      beforeDispatch: () => Promise<void>,
+    ) => Promise<any>;
+  },
   observed: PageState,
+  beforeDispatch: () => Promise<void>,
 ) {
   if (!observed.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
-  return page.run("click", SEND_SELECTOR);
+  return page.runChecked(["click", SEND_SELECTOR], beforeDispatch);
 }
 export function cdpEndpoint(value: string) {
   const u = new URL(/^\d+$/.test(value) ? `http://127.0.0.1:${value}` : value);
@@ -87,6 +103,10 @@ export class Browser {
   readonly cdp: string;
   readonly namespace: string;
   private readonly sessions = new Set<string>();
+  private readonly operation = new AsyncLocalStorage<{
+    prefix: string;
+    sessions: Set<string>;
+  }>();
   private readonly pacing: BrowserPacing;
   private readonly execute: typeof command;
   constructor(
@@ -117,33 +137,64 @@ export class Browser {
   async invoke(session: string, pin: boolean, ...args: string[]) {
     return this.dispatch(session, pin, args);
   }
+  /** A task operation owns only its adapter sessions. Its cleanup remains inside
+   * the task lock, and a new operation never reuses a daemon being closed. */
+  async withSessionScope<T>(fn: () => Promise<T>): Promise<T> {
+    return this.operation.run(
+      // agent-browser embeds this name in a Unix socket path (103-byte limit).
+      {
+        prefix: `o${process.pid.toString(36)}${(++operationCounter).toString(36)}`,
+        sessions: new Set(),
+      },
+      async () => {
+        try {
+          return await fn();
+        } finally {
+          await this.release();
+        }
+      },
+    );
+  }
+  private sessionName(logical: string) {
+    const scope = this.operation.getStore();
+    return scope ? scope.prefix + "-" + logical : logical;
+  }
   private async dispatch(
     session: string,
     pin: boolean,
     args: string[],
     beforeDispatch?: () => Promise<void>,
   ) {
-    this.sessions.add(session);
-    return this.pacing.run(args, async () => {
-      // A pacing delay can outlive the state that authorized the action.
-      // This callback must only observe; paced mutations would re-enter the lock.
-      await beforeDispatch?.();
-      const x = JSON.parse(
-        await this.execute(
-          this.argv(
-            session,
-            pin ? "--pin-tab" : "--no-pin-tab",
-            "--json",
-            ...args,
+    const actualSession = this.sessionName(session);
+    (this.operation.getStore()?.sessions ?? this.sessions).add(actualSession);
+    let handedToExecutor = false;
+    try {
+      return await this.pacing.run(args, async () => {
+        // Read-only preflight runs after pacing. A caller may also persist its
+        // intent here, but must not issue another paced browser action.
+        await beforeDispatch?.();
+        handedToExecutor = true;
+        const x = JSON.parse(
+          await this.execute(
+            this.argv(
+              actualSession,
+              pin ? "--pin-tab" : "--no-pin-tab",
+              "--json",
+              ...args,
+            ),
           ),
-        ),
-      );
-      if (!x.success)
-        throw new Error(
-          "BROWSER_ERROR: " + JSON.stringify(x.error || x.data).slice(0, 600),
         );
-      return x.data;
-    });
+        if (!x.success)
+          throw new Error(
+            "BROWSER_ERROR: " + JSON.stringify(x.error || x.data).slice(0, 600),
+          );
+        return x.data;
+      });
+    } catch (error) {
+      if (beforeDispatch && !handedToExecutor)
+        throw new ActionNotDispatched(error);
+      throw error;
+    }
   }
   private argv(session: string, ...flags: string[]) {
     return [
@@ -166,8 +217,9 @@ export class Browser {
    * Tab pinning is sticky, so no pin flag is sent here.
    */
   async release() {
-    const sessions = [...this.sessions];
-    this.sessions.clear();
+    const owned = this.operation.getStore()?.sessions ?? this.sessions;
+    const sessions = [...owned];
+    owned.clear();
     if (!sessions.length) return;
     for (const session of sessions) {
       // An already-stopped daemon is not this operation's failure.
@@ -181,6 +233,20 @@ export class Browser {
   }
   private running(sessions: string[]) {
     const owned = sessions.map((s) => `AGENT_BROWSER_SESSION=${s}`);
+    if (process.platform === "darwin") {
+      const output = execFileSync(
+        "/bin/ps",
+        ["-A", "-E", "-ww", "-o", "command="],
+        { encoding: "utf8" },
+      );
+      return output
+        .split("\n")
+        .some(
+          (line) =>
+            line.includes(`AGENT_BROWSER_NAMESPACE=${this.namespace}`) &&
+            owned.some((session) => line.includes(session)),
+        );
+    }
     return readdirSync("/proc").some((pid) => {
       if (!/^[0-9]+$/.test(pid)) return false;
       let env: string[];
@@ -209,10 +275,21 @@ export class Browser {
     const session =
       "p-" + createHash("sha256").update(target).digest("hex").slice(0, 16);
     await this.invoke(session, false, "tab", target);
-    const run = (...args: string[]) => this.invoke(session, true, ...args);
+    const scope = this.operation.getStore();
+    const run = (...args: string[]) =>
+      scope
+        ? this.operation.run(scope, () => this.invoke(session, true, ...args))
+        : this.invoke(session, true, ...args);
+    const runChecked = (args: string[], beforeDispatch: () => Promise<void>) =>
+      scope
+        ? this.operation.run(scope, () =>
+            this.dispatch(session, true, args, beforeDispatch),
+          )
+        : this.dispatch(session, true, args, beforeDispatch);
     return {
-      session,
+      session: this.sessionName(session),
       run,
+      runChecked,
       read: async (): Promise<PageState> => {
         let result;
         try {

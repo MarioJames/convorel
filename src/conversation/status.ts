@@ -13,13 +13,21 @@ export function conversationStatus(task: Task) {
   const organization = organizationRecovery(task);
   let phase: string, nextAction: string;
   if (run.state === "complete") {
-    phase =
-      organization && organization.state !== "verified"
-        ? "organization_pending"
-        : "complete";
-    nextAction = organization?.nextAction ?? "result";
+    if (run.reply && !run.reply.markdown) {
+      phase = "capture_pending";
+      nextAction = "capture";
+    } else if (task.archive && task.archive.status !== "stored") {
+      phase = "archive_pending";
+      nextAction = "archive";
+    } else {
+      phase =
+        organization && organization.state !== "verified"
+          ? "organization_pending"
+          : "complete";
+      nextAction = organization?.nextAction ?? "result";
+    }
     if (
-      (!organization || organization.state === "verified") &&
+      phase === "complete" &&
       task.organizationObservation &&
       !task.organizationObservation.closed
     ) {
@@ -65,6 +73,7 @@ export function conversationStatus(task: Task) {
           closed: !!task.binding.closed,
         }
       : null,
+    detachedTabs: task.detachedBindings ?? [],
     lastObservedAt: run.lastObservedAt ?? null,
     observationError: run.observationError ?? null,
     error: run.error ?? null,
@@ -82,11 +91,7 @@ export function conversationExitCode(
 ) {
   const summary = conversationStatus(task);
   if (summary.state === "complete")
-    return operation === "resume" &&
-      ((summary.organization && summary.organization.state !== "verified") ||
-        summary.phase === "cleanup_pending")
-      ? 2
-      : 0;
+    return operation === "resume" && summary.phase !== "complete" ? 2 : 0;
   // start confirms submission; resume confirms completion. A readable status alone is not completion.
   return operation === "start" &&
     summary.state === "waiting" &&

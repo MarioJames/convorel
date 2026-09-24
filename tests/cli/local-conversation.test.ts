@@ -98,6 +98,18 @@ test("saved conversation queries survive a deleted workspace and missing live co
       expect(stale.err).toContain("STALE_RUN");
       expect(store.read<Task>("task-saved")).toEqual(task);
     }
+    for (const args of [
+      ["resume", "--id", "saved", "--run", "r1"],
+      ["capture", "--id", "saved"],
+      ["finish", "--id", "saved", "--run", "r1"],
+    ]) {
+      const continued = await run(args);
+      expect({ args, code: continued.code, err: continued.err }).toEqual({
+        args,
+        code: 0,
+        err: "",
+      });
+    }
     mkdirSync(join(root, "preferences"));
     writeFileSync(
       join(root, "preferences/preferences.json"),
@@ -110,6 +122,9 @@ test("saved conversation queries survive a deleted workspace and missing live co
       ["list"],
       ["status", "--id", "saved"],
       ["result", "--id", "saved"],
+      ["resume", "--id", "saved", "--run", "r1"],
+      ["capture", "--id", "saved"],
+      ["finish", "--id", "saved", "--run", "r1"],
     ]) {
       const denied = await run(args);
       expect(denied.code).toBe(1);

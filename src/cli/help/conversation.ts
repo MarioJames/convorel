@@ -161,7 +161,7 @@ const conversation = [
   page(
     ["conversation", "retry"],
     ["conversation retry --id ID --run UUID [--workspace PATH]"],
-    "Continue one prepared run that has not been sent. It does not retry a send whose delivery is unknown, and it does not replace a draft that changed.",
+    "Continue one prepared run that has not been sent. A project first run returns an owned tab to its saved project entry after checking for an existing send marker; a missing bound tab can be recreated. Unknown delivery is never resent, and borrowed tabs are not navigated.",
     [
       taskId,
       runOpt(true),

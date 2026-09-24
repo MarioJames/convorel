@@ -364,7 +364,7 @@ test("each wait return and finish provide a naming checkpoint without exhausting
       new AbortController().signal,
       () => {},
     ),
-  ).toBe(0);
+  ).toBe(2); // Reply is complete, but its Markdown capture still needs repair.
   expect(attempts).toBe(2); // Completed wait also repairs naming.
   fail();
   expect((await conversation.finish(t.id, t.currentRun)).closed).toBe(true);

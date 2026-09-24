@@ -328,7 +328,7 @@ bun --no-env-file src/cli.ts conversation rebind-workspace \
 
 已发送或投递未知的轮次不允许改绑。应检查保存的 prompt 是否准确指定了实际项目和 revision，并继续观察同一 run；不要手改 JSON 或另建同需求任务。含内置指引的轮次会同步更新工作区路径和最终 prompt，旧 prompt/hash 保存在 `workspaceBindingChange` 中；历史轮次没有内置指引时保留原文本。改绑不修改浏览器草稿；旧草稿会阻止后续发送，必须另行核对处理。绑定不扩大 MCP 允许根，也不证明远端已读取代码。
 
-新建页可能恢复旧草稿。普通 `retry` 会保留不匹配草稿并返回 `DRAFT_CHANGED`。先检查并备份完整草稿；仅在用户明确授权删除该副本后执行：
+非项目新建页可能恢复旧草稿，`retry` 会保留不匹配草稿并返回 `DRAFT_CHANGED`。先检查并备份完整草稿；仅在用户明确授权删除该副本后执行：
 
 ```bash
 bun --no-env-file src/cli.ts conversation clear-draft \
@@ -346,7 +346,9 @@ bun --no-env-file src/cli.ts conversation retry --id first-question --run RUN_ID
 
 监听同一轮回复持续 2 分钟无变化时，先检查会话身份、草稿和附件，再主动刷新原标签页并等待历史加载。刷新只恢复观察，不发送消息；刷新后按原用户消息 ID 判定完成、仍生成或已被后续消息取代。正常长时间思考不算失败，连续 3 次刷新失败则提示检查；`summary.completionProbe` 暴露停滞时间、刷新次数及错误。草稿和附件存在时保留原页并报告延期。`wait` 的总超时仍然生效。
 
-仅首轮仍为 `prepared`、从未执行发送、且已记录的自有新建页确定丢失时，原任务的 `retry` 可重新创建页面（最多 2 次），继续同一个 run 与提示词。持久化会话暂时空白、用户消息已确认或投递未知，都不能作为重建并重发的证据。
+仅首轮仍为 `prepared`、从未执行发送、且原绑定标签页确定丢失时，原任务的 `retry` 可重新创建并认领标签页，继续同一个 run 与提示词；原标签页曾被借用也不妨碍重建。开页中断只留下 `opening` 记录时也可重新建页，先前可能创建成功但未认领的空页会保留。持久化会话暂时空白、用户消息已确认或投递未知，都不能作为重建并重发的证据。其他任务已认领的标签页不会被占用。
+
+项目首轮的 `retry` 若重用任务自有标签页，会先检查当前页是否已有本 run 的用户消息标记；找到时对账原投递，不导航或再发。否则导航到任务保存的项目入口，替换该页当前内容，再核验项目归属、模型和待发送提示词。它适用于首页、其他项目或错误页；借用且仍存在的标签页不会被导航，投递未知的轮次不会重发。
 
 ## 会话内容归档与检索
 
@@ -363,14 +365,14 @@ bun --no-env-file src/cli.ts conversation export --directory /private/snapshot
 bun --no-env-file src/cli.ts doctor --local true
 ```
 
-- 完成、捕获和归档是独立结果：`state=complete` 不保证已有 Markdown 或数据库写入成功。完成路径返回 `task.archive`，本次 summary/wait 透传 `archive`，CLI `result` 补写本地归档后也返回 `archive`；`stored` / `partial` / `failed` / `unavailable` 与 `error`、`gaps` 独立披露归档结果。notice 不写 任务文档，纯读取 status 不隐式写档；不能把缺省 notice 当作成功。磁盘写满、SQL 拒绝或缺少 Copy 均不改变已完成状态、`nextAction=result` 或完成命令的成功退出码，也不授权重发。`archive` 与 `capture` 退出码为归档失败 → 1，有缺口或 `partial` → 2，其余 0；`doctor --local true` 在库自身完整性检查失败时退出 1，本地记录可读但不完整时退出 2。
+- 完成、捕获和归档是独立结果：`state=complete` 不保证已有 Markdown 或数据库写入成功。完成路径返回 `task.archive`，本次 summary/wait 透传 `archive`，CLI `result` 补写本地归档后也返回 `archive`；`stored` / `partial` / `failed` / `unavailable` 与 `error`、`gaps` 独立披露归档结果。notice 不写任务文档，纯读取 status 不隐式写档；不能把缺省 notice 当作成功。缺 Markdown 时 summary 为 `capture_pending`、`nextAction=capture`，本次归档失败时为 `archive_pending`；`resume`/`wait` 返回 2，已完成的投递状态不变，也不授权重发。`archive` 与 `capture` 退出码为归档失败 → 1，有缺口或 `partial` → 2，其余 0；`doctor --local true` 在库自身完整性检查失败时退出 1，本地记录可读但不完整时退出 2。
 - 内容只增不改。重新生成的回复、重新捕获的 Markdown 都追加为新的 `content_version`，轮次通过指针选择当前版本。`history` 给出每轮选中的正文和该轮全部版本元数据，`content --version UUID` 按版本 ID 读回任意一条正文（含已被取代的旧版本），这样旧引用今天仍可核对。
 - 回复正文只认 Markdown：没有捕获到 Markdown 时 `history` 的 `reply` 为空、`capture_status` 为 `pending`，页面渲染文本单独保留在 `reply_rendered`，只用于追溯，不会被当作回复正文。检索覆盖每轮当前选定的 prompt 与「当前最佳正文」——已捕获时用 Markdown，未捕获时用渲染副本，命中结果的 `format` 字段披露是哪一种。
 - 检索使用 FTS5 的 `trigram` 分词，中文子串可以直接命中；少于三个字符无法构成三元组时自动退化为 `instr` 字面量扫描。查询文本始终按字面量处理，FTS 语法字符不改变匹配语义；已被取代的旧版本不会混进命中，`--task`、`--role`、`--limit`（默认 20，上限 100）用于收窄，`--task` 时附带该任务的 coverage。
 - `capture` 要求页面仍是同一会话、提交消息与目标回复都仍挂载、目标回复仍是最终态且渲染文本 hash 与保存的 `replyHash` 一致；点击复制后会再次读取页面并按渲染文本 hash 复核归属，正文变了记 `TARGET_CHANGED`，一次捕获窗口内出现多份不同正文记 `COPY_AMBIGUOUS`。复制控件点下去会短暂换成别的标签，使该轮在约两秒内被读成「非最终态」而正文不变，因此归属按正文判定，最终态只作有界等待（最多约 2.25 秒），不让下一次操作接手半途的页面。其他缺口原因码（例如 `COPY_BUTTON_MISSING`、`COPY_PAYLOAD_EMPTY`、`TARGET_NOT_RENDERED`）同样留在轮次上，`coverage` 汇总为 `current` / `markdown-incomplete` / `incomplete` / `unknown`；对已捕获且正文没变的轮次再执行一次会记为 `unchanged`，不算缺口。
 - `export` 用 `VACUUM INTO` 产出一份独立、已通过 `integrity_check` 的一致性快照（直接复制活动文件会漏掉仍在 WAL 里已提交的字节）：写入过程关在本调用自建的 0700 暂存目录内，发布出的文件为 0600，返回路径、字节数和与系统 `sha256sum` 一致的 SHA-256，并拒绝覆盖已有目标、拒绝落在状态目录或 MCP 允许根内。**导出即扩散**：那份文件包含全部已归档的 prompt 与回复，按敏感数据管理。
 - `history`/`search`/`content --from PATH` 读取指定路径（导出目录或改名后的快照文件），不读偏好、不要求工作区或浏览器；这些命令在 CLI 中先于配置与浏览器初始化派发，因此代码目录被删除、Chrome 已停止时仍能读回内容。写入类命令仍会先确认状态目录不在共享根内。
-- 归档写入失败时先解决存储问题，再对同一轮 resume 或显式 archive。已完成轮次的 poll/resume 在本地补档，必要时对账遗留观察页；命名单独由 wait/finish 或显式 organize 处理，不重新 Copy 或替换已存回复。缺 Markdown 则需显式 capture，archive 不能生成缺失原文。
+- 归档写入失败时先解决存储问题，再对同一轮 resume 或显式 archive。已完成轮次的 poll/resume 会在缺 Markdown 时重新核验同一页面的回复并尝试 Copy，随后补档；已保存的 Markdown 不重复复制或替换。页面或回复无法核验时保留缺口，可显式 `capture` 再试；`archive` 本身不能生成缺失原文。命名单独由 wait/finish 或显式 organize 处理。
 - 归档是任务文档的投影，可用 `archive --all true` 重建；Markdown 同时保存在任务文档中，所以两侧丢任意一侧，另一侧仍保有内容。重复导入相同文档不会新增版本，但会照实报告文档里仍缺的东西——「没写新内容」不等于「已经完整」。数据库和快照都留在私有状态目录，不进入 MCP 允许根，也不上传；当前没有提供按轮次删除内容的命令；不通过删库排障或处理捕获缺口。删除数据库会丢弃全部已归档内容和不可变版本，需要单独明确授权。
 
 ## 开发完成后的结果校验

@@ -45,6 +45,41 @@ test("an obstructed Send button retains a prepared run without clicking", async 
   );
   expect(browser.sends).toBe(1);
 });
+
+test("a draft changed during pacing cannot be sent", async () => {
+  const { browser, conversation } = setup();
+  browser.gate = async (where) => {
+    if (where === "before-dispatch:click:target1")
+      browser.pages.get("target1").draft = "Someone else's draft";
+  };
+  const t = await start(conversation, "paced-draft", "Review");
+  expect(t.runs[0].state).toBe("prepared");
+  expect(t.runs[0].error).toContain("DRAFT_CHANGED");
+  expect(browser.sends).toBe(0);
+  expect(browser.pages.get("target1").draft).toBe("Someone else's draft");
+});
+
+test("a run manually submitted during pacing is reconciled without a second click", async () => {
+  const { browser, conversation } = setup();
+  browser.gate = async (where) => {
+    if (where !== "before-dispatch:click:target1") return;
+    const page = browser.pages.get("target1");
+    page.messages.push({
+      id: "manual-user",
+      role: "user",
+      text: page.draft,
+      final: false,
+    });
+    page.draft = "";
+    page.generating = true;
+    page.url = "https://chatgpt.com/c/test-conversation";
+    browser.targets[0].url = page.url;
+  };
+  const t = await start(conversation, "paced-manual", "Review");
+  expect(t.runs[0].state).toBe("waiting");
+  expect(t.runs[0].userMessageId).toBe("manual-user");
+  expect(browser.sends).toBe(0);
+});
 test("new tasks resolve stored preferences while followups retain their original snapshot", async () => {
   const { state, browser } = setup();
   const checks: string[] = [];
@@ -364,7 +399,7 @@ test("prepared retry still rejects a conflicting target instead of replacing it"
 });
 
 test.each([1, 2])(
-  "completed followup considers only unclaimed candidates and preserves ambiguity (%s available)",
+  "completed followup avoids claimed targets and selects or opens its own page (%s available)",
   async (count) => {
     const { browser, conversation, first, other } =
       await completedWithClaimedTab();
@@ -386,21 +421,23 @@ test.each([1, 2])(
       });
       expect(browser.sends).toBe(2);
     } else {
-      const failed = await start(
+      const next = await start(
         conversation,
         first.id,
         "Follow-up",
         "next",
         true,
       );
-      expect(failed.runs.at(-1)?.error).toContain(
-        "AMBIGUOUS_CONVERSATION_TABS",
+      expect(next.runs.at(-1)?.state).toBe("waiting");
+      expect(next.binding).toMatchObject({ owned: true });
+      expect(candidates.map((x) => x.targetId)).not.toContain(
+        next.binding?.target,
       );
-      expect(failed.runs.at(-1)?.state).toBe("prepared");
       expect(conversation.get(first.id).runs).toHaveLength(2);
-      expect(browser.sends).toBe(1);
+      expect(browser.sends).toBe(2);
     }
-    expect(browser.targets).toEqual(targets);
+    if (count === 1) expect(browser.targets).toEqual(targets);
+    else expect(browser.targets).toHaveLength(targets.length + 1);
     expect(conversation.get(other.id)).toEqual(other);
   },
 );
@@ -760,6 +797,211 @@ test("project starts use only the configured project composer and reject a gener
     writePreference("project.url", oldUrl ?? "");
     writePreference("project.name", oldName ?? "");
   }
+});
+
+test("retry returns an owned empty home tab to its saved project before sending the same run", async () => {
+  const projectUrl = "https://chatgpt.com/g/g-p-example-reviews/project";
+  writePreference("project.url", projectUrl);
+  writePreference("project.name", "Agent reviews");
+  const { state, browser } = setup();
+  const first = new Conversation(state, browser as any, async () => {
+    const page = [...browser.pages.values()][0];
+    page.url = "https://chatgpt.com/";
+    browser.targets[0].url = page.url;
+    throw new Error("Page URL changed; refusing model interaction");
+  });
+  const task = await start(first, "project-home-retry", "Review");
+  const target = browser.targets[0].targetId;
+  expect(task.runs[0].state).toBe("prepared");
+  expect(browser.sends).toBe(0);
+
+  const resumed = new Conversation(state, browser as any, async () => ({
+    observedModel: "6 Pro",
+  }));
+  const result = await resumed.retry(task.id, task.currentRun);
+  expect(result.runs[0].state).toBe("waiting");
+  expect(result.currentRun).toBe(task.currentRun);
+  expect(browser.targets).toHaveLength(1);
+  expect(browser.targets[0].targetId).toBe(target);
+  expect(browser.sends).toBe(1);
+  expect([...browser.pages.values()][0].messages[0].text).toBe(
+    task.runs[0].prompt,
+  );
+});
+
+test("project retry returns any owned page to the saved entry, then sends the same run", async () => {
+  const projectUrl = "https://chatgpt.com/g/g-p-example-reviews/project";
+  writePreference("project.url", projectUrl);
+  writePreference("project.name", "Agent reviews");
+  for (const scenario of [
+    "draft",
+    "history",
+    "attachment",
+    "other-project",
+    "blocked",
+    "external",
+  ]) {
+    const { state: base, browser } = setup();
+    const state = new State(join(home(), scenario));
+    state.write("config", base.read("config"));
+    const first = new Conversation(state, browser as any, async () => {
+      throw new Error("pause before send");
+    });
+    const task = await start(first, "project-unsafe-" + scenario, "Review");
+    const page = [...browser.pages.values()][0];
+    page.url =
+      scenario === "other-project"
+        ? "https://chatgpt.com/g/g-p-other/project"
+        : scenario === "external"
+          ? "https://example.com/"
+          : "https://chatgpt.com/";
+    browser.targets[0].url = page.url;
+    if (scenario === "draft") page.draft = "Someone else's draft";
+    if (scenario === "history")
+      page.messages.push({
+        id: "other",
+        role: "user",
+        text: "Other turn",
+        final: false,
+      });
+    if (scenario === "attachment") page.attachments = true;
+    if (scenario === "blocked") page.blocked = "UI error";
+    const target = task.binding!.target;
+    const resumed = new Conversation(state, browser as any, async () => ({
+      observedModel: "6 Pro",
+    }));
+    const result = await resumed.retry(task.id, task.currentRun);
+    expect(result.runs[0].state).toBe("waiting");
+    expect(result.currentRun).toBe(task.currentRun);
+    expect(result.binding!.target).toBe(target);
+    expect(browser.sends).toBe(1);
+    expect(page.messages[0].text).toBe(task.runs[0].prompt);
+  }
+});
+
+test("project retry reconciles its existing user message before replacing the owned page", async () => {
+  const projectUrl = "https://chatgpt.com/g/g-p-example-reviews/project";
+  writePreference("project.url", projectUrl);
+  writePreference("project.name", "Agent reviews");
+  const { state, browser } = setup();
+  const first = new Conversation(state, browser as any, async () => {
+    throw new Error("pause before send");
+  });
+  const task = await start(first, "already-manual-sent", "Review");
+  const page = browser.pages.get(task.binding!.target);
+  page.draft = "";
+  page.url = "https://chatgpt.com/c/manually-sent";
+  browser.targets[0].url = page.url;
+  page.messages.push({
+    id: "u-manual",
+    role: "user",
+    text: task.runs[0].prompt,
+    final: false,
+  });
+  page.generating = true;
+
+  const resumed = new Conversation(state, browser as any, async () => ({
+    observedModel: "6 Pro",
+  }));
+  const result = await resumed.retry(task.id, task.currentRun);
+  expect(result.currentRun).toBe(task.currentRun);
+  expect(result.runs[0].userMessageId).toBe("u-manual");
+  expect(result.url).toBe(page.url);
+  expect(browser.sends).toBe(0);
+  expect(page.messages).toHaveLength(1);
+});
+
+test("retry replaces a missing borrowed first-run tab with a newly claimed tab", async () => {
+  const projectUrl = "https://chatgpt.com/g/g-p-example-reviews/project";
+  writePreference("project.url", projectUrl);
+  writePreference("project.name", "Agent reviews");
+  const { state, browser } = setup();
+  const first = new Conversation(state, browser as any, async () => {
+    throw new Error("pause before send");
+  });
+  const task = await start(first, "missing-borrowed", "Review");
+  task.binding!.owned = false;
+  state.write("task-" + task.id, task);
+  const missing = task.binding!.target;
+  await browser.tabs("close", missing);
+  browser.pages.delete(missing);
+
+  const resumed = new Conversation(state, browser as any, async () => ({
+    observedModel: "6 Pro",
+  }));
+  const result = await resumed.retry(task.id, task.currentRun);
+  expect(result.runs[0].state).toBe("waiting");
+  expect(result.currentRun).toBe(task.currentRun);
+  expect(result.binding).toMatchObject({ owned: true });
+  expect(result.binding!.target).not.toBe(missing);
+  expect(browser.targets).toHaveLength(1);
+  expect(browser.sends).toBe(1);
+});
+
+test("retry resumes a prepared run left at the opening checkpoint", async () => {
+  const { state, browser, conversation } = setup();
+  const task = await conversation.create("opening-interrupted", "Review");
+  task.opening = true;
+  state.write("task-" + task.id, task);
+
+  const result = await conversation.retry(task.id, task.currentRun);
+  expect(result.runs[0].state).toBe("waiting");
+  expect(result.currentRun).toBe(task.currentRun);
+  expect(result.opening).toBe(false);
+  expect(result.binding).toMatchObject({ owned: true });
+  expect(browser.targets).toHaveLength(1);
+  expect(browser.sends).toBe(1);
+});
+
+test("repeatedly lost unsent tabs do not exhaust the same run's recovery", async () => {
+  const { state, browser } = setup();
+  const paused = new Conversation(state, browser as any, async () => {
+    throw new Error("pause before send");
+  });
+  let task = await start(paused, "repeatedly-lost", "Review");
+  for (let n = 0; n < 3; n++) {
+    const missing = task.binding!.target;
+    await browser.tabs("close", missing);
+    browser.pages.delete(missing);
+    task = await paused.retry(task.id, task.currentRun);
+    expect(task.runs[0].state).toBe("prepared");
+  }
+  const missing = task.binding!.target;
+  await browser.tabs("close", missing);
+  browser.pages.delete(missing);
+  const resumed = new Conversation(state, browser as any, async () => ({
+    observedModel: "6 Pro",
+  }));
+  const result = await resumed.retry(task.id, task.currentRun);
+  expect(result.runs[0].state).toBe("waiting");
+  expect(result.pageRecreations).toBe(4);
+  expect(browser.sends).toBe(1);
+});
+
+test("retry does not navigate a borrowed tab that still exists", async () => {
+  const projectUrl = "https://chatgpt.com/g/g-p-example-reviews/project";
+  writePreference("project.url", projectUrl);
+  writePreference("project.name", "Agent reviews");
+  const { state, browser } = setup();
+  const first = new Conversation(state, browser as any, async () => {
+    throw new Error("pause before send");
+  });
+  const task = await start(first, "borrowed-present", "Review");
+  task.binding!.owned = false;
+  state.write("task-" + task.id, task);
+  const page = [...browser.pages.values()][0];
+  page.url = "https://chatgpt.com/";
+  page.draft = "Other work";
+  browser.targets[0].url = page.url;
+  const before = structuredClone(page);
+
+  const resumed = new Conversation(state, browser as any, async () => ({
+    observedModel: "6 Pro",
+  }));
+  const result = await resumed.retry(task.id, task.currentRun);
+  expect(result.runs[0].state).toBe("prepared");
+  expect(browser.sends).toBe(0);
+  expect(page).toEqual(before);
 });
 
 test("create is durable and offline; start loads the saved run and never sends it twice", async () => {

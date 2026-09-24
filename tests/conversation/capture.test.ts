@@ -43,6 +43,13 @@ class CaptureBrowser {
   async release() {
     this.releases++;
   }
+  async withSessionScope<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } finally {
+      await this.release();
+    }
+  }
   async tabs(...args: string[]) {
     if (args[0] === "list")
       return { tabs: [{ targetId: this.target, url: CHATGPT_URL }] };
@@ -123,10 +130,10 @@ test("automatic archive failures reach status and completed resume repairs the p
       error: expect.stringContaining("ARCHIVE_PATH_UNSAFE"),
     },
     state: "complete",
-    nextAction: "result",
+    nextAction: "archive",
     error: null,
   });
-  expect(conversationExitCode(completed, "resume")).toBe(0);
+  expect(conversationExitCode(completed, "resume")).toBe(2);
   expect(store.read<any>("task-review").archive).toBeUndefined();
   expect(browser.evals.length).toBe(1);
 
@@ -181,6 +188,29 @@ test("automatic copy gaps stay separate from successful delivery", async () => {
       gaps: [{ runId: "r1", code: "markdown_capture_failed" }],
     },
   });
+});
+
+test("a completed reply missing Markdown is captured by the next normal poll", async () => {
+  const { store, browser, conversation } = prepared(
+    join(base, "capture-resume"),
+    "T1",
+    pageFor(),
+  );
+  const task = store.read<any>("task-review");
+  delete task.naming;
+  store.write("task-review", task);
+  browser.copyResult = { ok: false, reason: "COPY_TEMPORARILY_UNAVAILABLE" };
+  const first = await conversation.poll("review");
+  expect(conversationStatus(first).phase).toBe("capture_pending");
+  expect(first.runs[0].reply?.markdown).toBeUndefined();
+  browser.copyResult = { ok: true, text: "## Recovered answer" };
+  const recovered = await conversation.poll("review");
+  expect(recovered.runs[0].reply?.markdown).toBe("## Recovered answer");
+  expect(conversationStatus(recovered).phase).toBe("complete");
+  expect(recovered.archive?.status).toBe("stored");
+  expect(store.read<any>("task-review").runs[0].reply.markdown).toBe(
+    "## Recovered answer",
+  );
 });
 
 for (const changed of [false, true]) {
@@ -505,7 +535,7 @@ test("a reply whose submitting message is gone cannot be captured", async () => 
     gaps: [{ runId: "r1", code: "TARGET_NOT_RENDERED" }],
   });
   expect(browser.evals.join("\n")).not.toContain("copy-turn-action-button");
-});
+}, 10000);
 
 test("the copy script is a page program that parses, and rejects foreign ids", () => {
   const script = copyMarkdownScript("m1");

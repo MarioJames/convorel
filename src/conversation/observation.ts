@@ -162,10 +162,18 @@ export function createObservation(ctx: ObservationContext) {
       120000
     )
       return page;
-    if (probe.failures >= 3)
-      throw new Error(
-        "STALLED_REPLY: three refresh attempts failed; inspect the original conversation",
-      );
+    if (probe.failures >= 3) {
+      // Three failed reloads start a cool-off, not a permanent lockout. The
+      // saved fingerprint and last attempt make this survive process restarts.
+      if (
+        Date.now() - Date.parse(probe.lastRefreshedAt ?? probe.unchangedSince) <
+        600000
+      ) {
+        probe.error = "STALLED_REPLY: refresh cooling down after failures";
+        return page;
+      }
+      probe.failures = 0;
+    }
     // Refresh is never a send. Preserve user input and recheck target/branch just
     // before navigation; unknown delivery is never permission to recreate.
     const before = await observe(t, b);
@@ -201,13 +209,26 @@ export function createObservation(ctx: ObservationContext) {
       probe.failures++;
       probe.error = String(e);
       ctx.save(t);
-      throw e;
+      if (
+        /CONVERSATION_CHANGED|NEEDS_ATTENTION|SUBMITTED_MESSAGE_CHANGED/.test(
+          String(e),
+        )
+      )
+        throw e;
+      // Reload is observation only. Keep the confirmed delivery and let the
+      // next poll retry after the durable interval instead of ending the run.
+      return page;
     }
   }
   async function reconcile(t: Task, b: Page): Promise<Task> {
     await ctx.releaseOrganizationObserver(t);
     // Completed reply bytes are durable; observation never renames a conversation.
-    if (ctx.current(t).state === "complete") return ctx.archiveCompleted(t);
+    if (ctx.current(t).state === "complete") {
+      const completed = ctx.current(t);
+      if (completed.reply && !completed.reply.markdown)
+        await ctx.attemptCapture(t, b, completed);
+      return ctx.archiveCompleted(t);
+    }
     const r = ctx.current(t);
     let p = await observe(t, b, "delivery");
     if (!r.userMessageId || !t.url) {

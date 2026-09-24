@@ -56,7 +56,7 @@ test("generation failure stops wait with confirmed delivery and resumes only by 
   browser.complete();
   expect(
     conversationStatus(await conversation.resume(t.id, t.currentRun)).phase,
-  ).toBe("complete");
+  ).toBe("capture_pending");
   expect(browser.sends).toBe(1);
 });
 
@@ -104,11 +104,11 @@ test("observation failures preserve delivery evidence and expose safe recovery a
     t.currentRun,
   );
   expect(conversationStatus(recovered)).toMatchObject({
-    phase: "complete",
-    nextAction: "result",
+    phase: "capture_pending",
+    nextAction: "capture",
     observationError: null,
   });
-  expect(conversationExitCode(recovered, "resume")).toBe(0);
+  expect(conversationExitCode(recovered, "resume")).toBe(2);
   expect(browser.sends).toBe(1);
 });
 
@@ -261,13 +261,20 @@ test("stalled refresh preserves drafts, bounds navigation and never resends", as
   };
   for (let n = 0; n < 3; n++) {
     due();
-    await expect(conversation.poll(first.id)).rejects.toThrow(
-      "Transport unavailable",
-    );
+    await conversation.poll(first.id);
   }
-  due();
-  await expect(conversation.poll(first.id)).rejects.toThrow("STALLED_REPLY");
+  const cooling = conversation.get(first.id);
+  cooling.runs[0].completionProbe!.lastRefreshedAt = new Date().toISOString();
+  state.write("task-" + first.id, cooling);
+  await conversation.poll(first.id);
   expect(reloads).toBe(7);
+  due();
+  browser.gate = async (where) => {
+    if (where.startsWith("run:reload:")) reloads++;
+  };
+  const recovered = await conversation.poll(first.id);
+  expect(reloads).toBe(8);
+  expect(recovered.runs[0].completionProbe?.failures).toBe(0);
   expect(browser.sends).toBe(1);
 });
 
@@ -304,6 +311,81 @@ test("bound page waits for delayed history without resending", async () => {
   };
   const result = await conversation.resume(t.id);
   expect(result.runs[0].state).toBe("waiting");
+  expect(reads).toBeGreaterThanOrEqual(2);
+  expect(browser.sends).toBe(1);
+});
+
+test("a navigated submitted tab is preserved while a new page observes its saved URL", async () => {
+  const { browser, conversation } = setup();
+  const first = await start(conversation, "navigated-observer", "Review");
+  const target = first.binding!.target;
+  const saved = structuredClone(browser.pages.get(target));
+  const moved = browser.pages.get(target);
+  moved.url = "https://chatgpt.com/";
+  moved.draft = "User work";
+  browser.targets.find((tab) => tab.targetId === target).url = moved.url;
+  const tabs = browser.tabs.bind(browser);
+  browser.tabs = async (...args) => {
+    const result = await tabs(...args);
+    if (args[0] === "new" && args[1] === first.url)
+      Object.assign(
+        browser.pages.get(result.targetId!),
+        structuredClone(saved),
+      );
+    return result;
+  };
+  const resumed = await conversation.resume(first.id, first.currentRun);
+  expect(resumed.runs[0].state).toBe("waiting");
+  expect(resumed.binding).toMatchObject({ owned: true });
+  expect(resumed.binding?.target).not.toBe(target);
+  expect(resumed.detachedBindings).toMatchObject([
+    { target, reason: "navigated" },
+  ]);
+  expect(moved.draft).toBe("User work");
+  expect(browser.sends).toBe(1);
+});
+
+test("interrupted opening of a saved conversation can recreate an observation page", async () => {
+  const { state, browser, conversation } = setup();
+  const first = await start(conversation, "opening-observer", "Review");
+  const saved = structuredClone(browser.pages.get(first.binding!.target));
+  const checkpoint = conversation.get(first.id);
+  checkpoint.binding = undefined;
+  checkpoint.opening = true;
+  state.write("task-" + first.id, checkpoint);
+  browser.targets = [];
+  const tabs = browser.tabs.bind(browser);
+  browser.tabs = async (...args) => {
+    const result = await tabs(...args);
+    if (args[0] === "new" && args[1] === first.url)
+      Object.assign(
+        browser.pages.get(result.targetId!),
+        structuredClone(saved),
+      );
+    return result;
+  };
+  const resumed = await conversation.resume(first.id, first.currentRun);
+  expect(resumed.runs[0].state).toBe("waiting");
+  expect(resumed.opening).toBe(false);
+  expect(resumed.pageRecreations).toBe(1);
+  expect(browser.sends).toBe(1);
+});
+
+test("partial history waits for the saved user ID after older messages appear", async () => {
+  const { browser, conversation } = setup();
+  const first = await start(conversation, "partial-history", "Review");
+  const page = browser.pages.get(first.binding!.target);
+  const submitted = structuredClone(page.messages[0]);
+  page.messages = [
+    { id: "old-user", role: "user", text: "Earlier", final: true },
+  ];
+  let reads = 0;
+  browser.gate = async (where) => {
+    if (where === "read:" + first.binding!.target && ++reads === 2)
+      page.messages.push(submitted);
+  };
+  const resumed = await conversation.resume(first.id, first.currentRun);
+  expect(resumed.runs[0].state).toBe("waiting");
   expect(reads).toBeGreaterThanOrEqual(2);
   expect(browser.sends).toBe(1);
 });

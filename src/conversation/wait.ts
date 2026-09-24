@@ -9,6 +9,15 @@ export function watcherLockName(id: string) {
   return "watch-" + id;
 }
 
+function retryableObservation(error: unknown) {
+  return (
+    error instanceof ObservationError ||
+    /^Error: LOCK_BUSY: (?:task-|operation;|registry;|tabs;)/.test(
+      String(error),
+    )
+  );
+}
+
 export async function waitForConversation(
   store: State,
   conversation: Pick<Conversation, "poll" | "get"> &
@@ -43,33 +52,27 @@ export async function waitForConversation(
         t = await conversation.poll(id, run);
         observationFailures = 0;
       } catch (e) {
-        if (!(e instanceof ObservationError)) throw e;
+        if (!retryableObservation(e)) throw e;
         t = conversation.get(id);
         if (t.currentRun !== run) throw new Error("STALE_RUN");
         lastSummary = conversationStatus(t);
         observationFailures++;
+        const delay = Math.min(
+          30_000,
+          500 * 2 ** Math.min(observationFailures - 1, 6),
+        );
         report({
           ...conversationStatus(t),
-          observationRetry: { attempt: observationFailures, limit: 3 },
-          nextAction: observationFailures >= 3 ? "inspect" : "resume",
+          observationRetry: {
+            attempt: observationFailures,
+            nextDelayMs: delay,
+          },
+          nextAction: "resume",
           error: String(e),
         });
-        if (observationFailures >= 3) {
-          await namingCheckpoint();
-          report({
-            ...lastSummary,
-            observationRetry: { attempt: observationFailures, limit: 3 },
-            nextAction: "inspect",
-            error: String(e),
-          });
-          return 2;
-        }
         try {
           await sleep(
-            Math.min(
-              observationFailures * 1000,
-              Math.max(1, deadline - Date.now()),
-            ),
+            Math.min(delay, Math.max(1, deadline - Date.now())),
             undefined,
             { signal },
           );
@@ -86,11 +89,7 @@ export async function waitForConversation(
       if (r.state === "complete") {
         await namingCheckpoint();
         const final = lastSummary!;
-        return (final.organization &&
-          final.organization.state !== "verified") ||
-          final.phase === "cleanup_pending"
-          ? 2
-          : 0;
+        return final.phase !== "complete" ? 2 : 0;
       }
       if (
         !["waiting", "complete", "submitting", "delivery_unknown"].includes(

@@ -103,7 +103,7 @@ test("a watcher releases its browser sessions on every observation, not only at 
       new AbortController().signal,
       () => {},
     ),
-  ).toBe(0);
+  ).toBe(2); // The rendered reply is complete; Markdown capture is still pending.
   expect(browser.releases).toBe(1);
 });
 

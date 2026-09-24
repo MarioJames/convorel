@@ -111,7 +111,7 @@ test("a watcher never follows a newer run and releases ownership on failure", as
   }
 });
 
-test("waiting retries only observation failures and stops after three consecutive failures", async () => {
+test("waiting retries transient observation failures within its deadline", async () => {
   const root = mkdtempSync(join(tmpdir(), "convorel-observation-"));
   const store = new State(root);
   const task = {
@@ -130,7 +130,7 @@ test("waiting retries only observation failures and stops after three consecutiv
         get: () => task,
         poll: async () => {
           calls++;
-          if (calls < 3)
+          if (calls < 4)
             throw new ObservationError("connection reset while reading");
           return { ...task, runs: [{ ...task.runs[0], state: "complete" }] };
         },
@@ -142,7 +142,7 @@ test("waiting retries only observation failures and stops after three consecutiv
       (x) => reports.push(x),
     );
     expect(code).toBe(0);
-    expect(calls).toBe(3);
+    expect(calls).toBe(4);
     expect(reports[0]).toMatchObject({
       delivery: "confirmed",
       nextAction: "resume",
@@ -160,15 +160,14 @@ test("waiting retries only observation failures and stops after three consecutiv
         },
         "task",
         "r1",
-        10,
+        1,
         new AbortController().signal,
         (x) => reports.push(x),
       ),
     ).toBe(2);
-    expect(calls).toBe(3);
+    expect(calls).toBeGreaterThanOrEqual(1);
     expect(reports.at(-1)).toMatchObject({
-      state: "waiting",
-      nextAction: "inspect",
+      state: "timeout",
     });
     expect(store.has("lock-watch-task")).toBe(false);
     calls = 0;
@@ -194,6 +193,45 @@ test("waiting retries only observation failures and stops after three consecutiv
     rmSync(root, { recursive: true, force: true });
   }
 }, 10000);
+
+test("a temporary task lock does not end the active watcher", async () => {
+  const root = mkdtempSync(join(tmpdir(), "convorel-watch-busy-"));
+  const store = new State(root);
+  let calls = 0;
+  try {
+    const result = await waitForConversation(
+      store,
+      {
+        get: () =>
+          ({
+            id: "task",
+            config: { workspace: root },
+            currentRun: "r1",
+            runs: [{ id: "r1", state: "waiting", userMessageId: "u1" }],
+          }) as any,
+        poll: async () => {
+          if (++calls === 1)
+            throw new Error("LOCK_BUSY: task-task; another operation owns it");
+          return {
+            id: "task",
+            config: { workspace: root },
+            currentRun: "r1",
+            runs: [{ id: "r1", state: "complete" }],
+          } as any;
+        },
+      },
+      "task",
+      "r1",
+      2,
+      new AbortController().signal,
+      () => {},
+    );
+    expect(result).toBe(0);
+    expect(calls).toBe(2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("completed replies perform one naming checkpoint before returning", async () => {
   const root = mkdtempSync(join(tmpdir(), "convorel-watch-name-"));
@@ -350,7 +388,7 @@ test("completed reply with unrecovered naming reports partial completion", async
   }
 });
 
-test.each([0.02, 5])(
+test.each([0.02, 0.08])(
   "observation failure still reaches one naming checkpoint at wait return (%s seconds)",
   async (seconds) => {
     const root = mkdtempSync(join(tmpdir(), "convorel-watch-error-name-"));
