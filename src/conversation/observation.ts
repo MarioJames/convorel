@@ -4,7 +4,7 @@ import {
   PageNotIdleError,
   type PageState,
 } from "../browser/chatgpt/page.ts";
-import { ObservationError } from "../browser/browser.ts";
+import { ActionNotDispatched, ObservationError } from "../browser/browser.ts";
 import { sha } from "../hash.ts";
 import { diagnosticCode } from "../storage/diagnostics.ts";
 import type { DiagnosticStep } from "../storage/diagnostics.ts";
@@ -23,6 +23,14 @@ export const same = (a: string, b: string) => {
     return false;
   }
 };
+class RefreshDeferred extends Error {
+  constructor(
+    readonly page: PageState,
+    readonly reason: "changed" | "draft",
+  ) {
+    super("STALLED_REPLY: refresh deferred");
+  }
+}
 
 /** A completed turn must present an idle, unedited page whose classify outcome
  * still yields the reply under its own user message; the branch is the message
@@ -178,17 +186,23 @@ export function createObservation(ctx: ObservationContext) {
     // before navigation; unknown delivery is never permission to recreate.
     const before = await observe(t, b);
     if (fingerprint(before) !== current) return before;
-    if (before.draft?.trim() || before.attachments) {
+    if (before.draft !== "" || before.attachments) {
       probe.error =
         "STALLED_REPLY: refresh deferred to preserve draft or attachments";
       return before;
     }
-    probe.lastRefreshedAt = new Date().toISOString();
-    probe.refreshes++;
-    delete probe.error;
-    ctx.save(t); // Durable budget before navigation, including process interruption.
     try {
-      await b.run("reload");
+      await b.runChecked(["reload"], async () => {
+        const latest = await observe(t, b);
+        if (fingerprint(latest) !== current)
+          throw new RefreshDeferred(latest, "changed");
+        if (latest.draft !== "" || latest.attachments)
+          throw new RefreshDeferred(latest, "draft");
+        probe.lastRefreshedAt = new Date().toISOString();
+        probe.refreshes++;
+        delete probe.error;
+        ctx.save(t); // Durable budget immediately before navigation.
+      });
       for (let n = 0; n < 80; n++) {
         const p: PageState = await b.read();
         ctx.guard(t);
@@ -206,6 +220,17 @@ export function createObservation(ctx: ObservationContext) {
         "REFRESH_HISTORY_UNAVAILABLE: delivery remains confirmed; do not resend",
       );
     } catch (e) {
+      if (
+        e instanceof ActionNotDispatched &&
+        e.cause instanceof RefreshDeferred
+      ) {
+        if (e.cause.reason === "draft") {
+          probe.error =
+            "STALLED_REPLY: refresh deferred to preserve draft or attachments";
+          ctx.save(t);
+        }
+        return e.cause.page;
+      }
       probe.failures++;
       probe.error = String(e);
       ctx.save(t);

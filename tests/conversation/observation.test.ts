@@ -278,6 +278,28 @@ test("stalled refresh preserves drafts, bounds navigation and never resends", as
   expect(browser.sends).toBe(1);
 });
 
+test("stalled refresh cancels when a draft appears during pacing", async () => {
+  const { state, browser, conversation } = setup();
+  const first = await start(conversation, "paced-refresh-draft", "Review");
+  const page = browser.pages.get(first.binding!.target);
+  const saved = conversation.get(first.id);
+  saved.runs[0].completionProbe!.unchangedSince = new Date(0).toISOString();
+  saved.runs[0].completionProbe!.lastRefreshedAt = new Date(0).toISOString();
+  state.write("task-" + first.id, saved);
+  browser.gate = async (where) => {
+    if (
+      where === "before-dispatch:reload:" + first.binding!.target ||
+      where === "run:reload:" + first.binding!.target
+    )
+      page.draft = "Keep this draft";
+  };
+  const observed = await conversation.poll(first.id, first.currentRun);
+  expect(observed.runs[0].state).toBe("waiting");
+  expect(browser.reloads).toBe(0);
+  expect(page.draft).toBe("Keep this draft");
+  expect(browser.sends).toBe(1);
+});
+
 test("missing owned creation can be replaced only before the first send", async () => {
   const { state, browser } = setup();
   let ready = false;
@@ -387,6 +409,86 @@ test("partial history waits for the saved user ID after older messages appear", 
   const resumed = await conversation.resume(first.id, first.currentRun);
   expect(resumed.runs[0].state).toBe("waiting");
   expect(reads).toBeGreaterThanOrEqual(2);
+  expect(browser.sends).toBe(1);
+});
+
+test("watch retries older visible history until the submitted user anchor mounts", async () => {
+  const { state, browser, conversation } = setup();
+  const first = await start(conversation, "partial-history-watch", "Review");
+  const page = browser.pages.get(first.binding!.target);
+  const submitted = structuredClone(page.messages[0]);
+  page.messages = [
+    { id: "old-user", role: "user", text: "Earlier", final: true },
+  ];
+  page.generating = false;
+  const reports: any[] = [];
+  let polls = 0;
+  const watcher = {
+    get: conversation.get.bind(conversation),
+    poll: async (id: string, run: string) => {
+      polls++;
+      try {
+        return await conversation.poll(id, run);
+      } catch (error) {
+        if (polls === 1) {
+          page.messages.push(submitted, {
+            id: "answer-restored",
+            role: "assistant",
+            text: "Answer",
+            final: true,
+          });
+        }
+        throw error;
+      }
+    },
+  };
+  expect(
+    await waitForConversation(
+      state,
+      watcher,
+      first.id,
+      first.currentRun,
+      5,
+      new AbortController().signal,
+      (report) => reports.push(report),
+    ),
+  ).toBe(2);
+  expect(polls).toBe(2);
+  expect(reports[0].observationRetry).toMatchObject({ attempt: 1 });
+  expect(reports.at(-1).state).toBe("complete");
+  expect(browser.sends).toBe(1);
+});
+
+test("known URL target disappearing after tab list is retried on a new owned page", async () => {
+  const { browser, conversation } = setup();
+  const first = await start(conversation, "target-lost-watch", "Review");
+  const originalTarget = first.binding!.target;
+  const saved = structuredClone(browser.pages.get(originalTarget));
+  const originalPage = browser.page.bind(browser);
+  let gone = false;
+  browser.page = async (target) => {
+    if (!gone && target === originalTarget) {
+      gone = true;
+      browser.targets = browser.targets.filter((x) => x.targetId !== target);
+      browser.pages.delete(target);
+      throw new Error("tab_gone");
+    }
+    return originalPage(target);
+  };
+  await expect(
+    conversation.poll(first.id, first.currentRun),
+  ).rejects.toBeInstanceOf(ObservationError);
+  expect(conversation.get(first.id).runs[0].state).toBe("waiting");
+  const originalTabs = browser.tabs.bind(browser);
+  browser.tabs = async (...args: string[]) => {
+    const result = await originalTabs(...args);
+    if (args[0] === "new" && args[1] === first.url)
+      Object.assign(browser.pages.get(result.targetId!), saved);
+    return result;
+  };
+  const resumed = await conversation.poll(first.id, first.currentRun);
+  expect(resumed.runs[0].state).toBe("waiting");
+  expect(resumed.binding!.target).not.toBe(originalTarget);
   expect(browser.sends).toBe(1);
 });
 

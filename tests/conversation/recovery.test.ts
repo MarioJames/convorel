@@ -337,6 +337,7 @@ for (const scenario of [
       ["waiting", "delivery_unknown", "prepared", "complete"].includes(scenario)
     )
       t.runs[1].state = scenario;
+    if (scenario === "waiting") t.runs[1].observationError = undefined;
     if (scenario === "borrowed") t.binding!.owned = false;
     if (scenario === "closed") t.binding!.closed = true;
     if (scenario === "epoch") browser.epochValue = "restarted";
@@ -392,7 +393,7 @@ for (const drift of ["marker", "history", "target", "epoch"]) {
       return { observedModel: "6 Pro" };
     });
     const result = await conversation.recoverSend(t.id, t.currentRun, options);
-    expect(result.runs[1].state).toBe("blocked");
+    expect(result.runs[1].state).toBe("waiting");
     expect(result.runs[1].userMessageId).toBe(options.expectedUserMessageId);
     expect(result.runs[1].sendRecoveries).toBeUndefined();
     expect(result.runs[1].error).toBeTruthy();
@@ -421,7 +422,9 @@ test("a recovery send transport failure stays uncertain, retains audit, and cann
   const newId = observed.runs[1].userMessageId!;
   p.messages = p.messages.slice(0, 2);
   p.generating = false;
-  await conversation.resume(t.id, t.currentRun);
+  await expect(conversation.resume(t.id, t.currentRun)).rejects.toThrow(
+    "HISTORY_HYDRATING",
+  );
   await expect(
     conversation.recoverSend(t.id, t.currentRun, {
       ...options,
@@ -457,7 +460,7 @@ test("recovery rechecks the composer after the final target check", async () => 
     return original(...args);
   };
   const result = await conversation.recoverSend(t.id, t.currentRun, options);
-  expect(result.runs[1].state).toBe("blocked");
+  expect(result.runs[1].state).toBe("waiting");
   expect(result.runs[1].error).toContain("RECOVERY_DRAFT_OR_SEND_CHANGED");
   expect(result.runs[1].sendRecoveries).toBeUndefined();
   expect(p.draft).toBe("User changed the composer");
@@ -567,7 +570,7 @@ test("recovery retaining a model still refuses a failed final verification", asy
     },
   );
   const result = await conversation.recoverSend(t.id, t.currentRun, options);
-  expect(result.runs[1].state).toBe("blocked");
+  expect(result.runs[1].state).toBe("waiting");
   expect(result.runs[1].error).toContain(
     "MODEL_UNVERIFIED: configured model did not persist",
   );

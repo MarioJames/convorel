@@ -2,8 +2,20 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ActionNotDispatched, Browser } from "../../src/browser/browser.ts";
+import {
+  ActionNotDispatched,
+  Browser,
+  operationSessionPrefix,
+} from "../../src/browser/browser.ts";
 import { State } from "../../src/storage/state.ts";
+
+test("operation session names cannot merge PID and counter digits", () => {
+  expect(operationSessionPrefix(1001, 37)).toBe("ort-11");
+  expect(operationSessionPrefix(36037, 1)).toBe("ort1-1");
+  expect(operationSessionPrefix(1001, 37)).not.toBe(
+    operationSessionPrefix(36037, 1),
+  );
+});
 
 test("concurrent operations close only their own adapter sessions", async () => {
   const root = mkdtempSync(join(tmpdir(), "convorel-session-"));

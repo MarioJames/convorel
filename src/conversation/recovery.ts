@@ -24,7 +24,7 @@ export interface RecoveryContext {
 }
 
 /** Operator-authorized recovery of a verified Cloudflare-rejected followup.
- * DOM absence alone never grants permission to send again. */
+ * Missing DOM history alone never grants permission to send again. */
 export function createRecovery(ctx: RecoveryContext) {
   async function recoverSend(
     id: string,
@@ -35,7 +35,16 @@ export function createRecovery(ctx: RecoveryContext) {
     const t = ctx.get(id),
       r = ctx.current(t, run);
     ctx.checkWorkspace(t, workspace);
-    if (r.state !== "blocked" || !r.userMessageId || r.reply || r.branch)
+    const absentAfterObservation =
+      r.state === "waiting" &&
+      r.observationError?.retryable === true &&
+      r.observationError.message.includes("HISTORY_HYDRATING");
+    if (
+      !(r.state === "blocked" || absentAfterObservation) ||
+      !r.userMessageId ||
+      r.reply ||
+      r.branch
+    )
       throw new Error("RECOVERY_REQUIRES_BLOCKED_DELIVERY");
     if (
       !options.expectedUserMessageId ||

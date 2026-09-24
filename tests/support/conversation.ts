@@ -19,6 +19,8 @@ export class FakeBrowser {
   failSend = false;
   delayedUrl = false;
   sendReady = true;
+  reloads = 0;
+  reloadRestoresComposer = false;
   releases = 0;
   uniqueUrls = false;
   // Concurrency tests inject a barrier here; default behavior is unchanged.
@@ -85,6 +87,10 @@ export class FakeBrowser {
           p.attachments = false;
           p.sendReady = self.sendReady;
           self.targets.find((t) => t.targetId === target).url = p.url;
+        }
+        if (args[0] === "reload") {
+          self.reloads++;
+          if (self.reloadRestoresComposer) p.hasComposer = true;
         }
         if (args[0] === "eval" && args[1].includes("composerCount"))
           return {
@@ -252,7 +258,13 @@ export function conversationHarness() {
     const p = browser.pages.get(sent.binding!.target);
     p.messages = p.messages.slice(0, 2);
     p.generating = false;
-    const blocked = await conversation.resume(sent.id, sent.currentRun);
+    try {
+      await conversation.resume(sent.id, sent.currentRun);
+      throw new Error("EXPECTED_MISSING_SUBMITTED_MESSAGE");
+    } catch (error) {
+      if (!String(error).includes("HISTORY_HYDRATING")) throw error;
+    }
+    const blocked = conversation.get(sent.id);
     const r = blocked.runs.at(-1)!;
     const evidence = [
       {

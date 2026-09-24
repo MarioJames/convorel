@@ -59,6 +59,42 @@ test("a draft changed during pacing cannot be sent", async () => {
   expect(browser.pages.get("target1").draft).toBe("Someone else's draft");
 });
 
+test("a borrowed page draft appearing during fill pacing is never overwritten", async () => {
+  const { browser, conversation } = setup();
+  const { targetId } = await browser.tabs(
+    "new",
+    "https://chatgpt.com/c/borrowed-fill",
+  );
+  const page = browser.pages.get(targetId!);
+  page.messages = [
+    { id: "borrowed-user", role: "user", text: "Previous", final: false },
+    { id: "borrowed-answer", role: "assistant", text: "Done", final: true },
+  ];
+  const first = await conversation.attach(
+    "borrowed-fill",
+    page.url,
+    "borrowed-user",
+  );
+  expect(first.runs[0].state).toBe("complete");
+  const queued = await conversation.create(
+    first.id,
+    "Next review",
+    "next",
+    true,
+  );
+  browser.gate = async (where) => {
+    if (
+      where === "before-dispatch:fill:" + targetId ||
+      where === "run:fill:" + targetId
+    )
+      page.draft = "User's own draft";
+  };
+  const result = await conversation.start(queued.id, queued.currentRun);
+  expect(result.runs.at(-1)?.state).toBe("prepared");
+  expect(page.draft).toBe("User's own draft");
+  expect(browser.sends).toBe(0);
+});
+
 test("a run manually submitted during pacing is reconciled without a second click", async () => {
   const { browser, conversation } = setup();
   browser.gate = async (where) => {
@@ -79,6 +115,77 @@ test("a run manually submitted during pacing is reconciled without a second clic
   expect(t.runs[0].state).toBe("waiting");
   expect(t.runs[0].userMessageId).toBe("manual-user");
   expect(browser.sends).toBe(0);
+});
+test("owned completed page recovers a missing composer before followup", async () => {
+  const { browser, conversation } = setup();
+  const first = await start(conversation, "restore-composer", "Initial review");
+  browser.complete();
+  await conversation.poll(first.id, first.currentRun);
+  const page = browser.pages.get(first.binding!.target);
+  page.hasComposer = false;
+  browser.reloadRestoresComposer = true;
+  const next = await start(
+    conversation,
+    first.id,
+    "Review the fix",
+    "after-fix",
+    true,
+  );
+  expect(next.runs.at(-1)?.state).toBe("waiting");
+  expect(browser.reloads).toBe(1);
+  expect(browser.sends).toBe(2);
+});
+
+test("missing-composer recovery preserves a draft introduced during pacing", async () => {
+  const { browser, conversation } = setup();
+  const first = await start(
+    conversation,
+    "preserve-recovery-draft",
+    "Initial review",
+  );
+  browser.complete();
+  await conversation.poll(first.id, first.currentRun);
+  const page = browser.pages.get(first.binding!.target);
+  page.hasComposer = false;
+  browser.reloadRestoresComposer = true;
+  browser.gate = async (where) => {
+    if (where === "before-dispatch:reload:" + first.binding!.target)
+      page.draft = "User draft";
+  };
+  const next = await start(
+    conversation,
+    first.id,
+    "Review the fix",
+    "after-fix",
+    true,
+  );
+  expect(next.runs.at(-1)?.state).toBe("prepared");
+  expect(browser.reloads).toBe(0);
+  expect(page.draft).toBe("User draft");
+  expect(browser.sends).toBe(1);
+});
+
+test("composer hydration during pacing skips the recovery reload", async () => {
+  const { browser, conversation } = setup();
+  const first = await start(conversation, "hydrate-composer", "Initial review");
+  browser.complete();
+  await conversation.poll(first.id, first.currentRun);
+  const page = browser.pages.get(first.binding!.target);
+  page.hasComposer = false;
+  browser.gate = async (where) => {
+    if (where === "before-dispatch:reload:" + first.binding!.target)
+      page.hasComposer = true;
+  };
+  const next = await start(
+    conversation,
+    first.id,
+    "Review the fix",
+    "after-fix",
+    true,
+  );
+  expect(next.runs.at(-1)?.state).toBe("waiting");
+  expect(browser.reloads).toBe(0);
+  expect(browser.sends).toBe(2);
 });
 test("new tasks resolve stored preferences while followups retain their original snapshot", async () => {
   const { state, browser } = setup();

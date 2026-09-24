@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Browser } from "../../src/browser/browser.ts";
+import { ActionNotDispatched, Browser } from "../../src/browser/browser.ts";
 import { BrowserPacing } from "../../src/browser/pacing.ts";
 import { State } from "../../src/storage/state.ts";
 import { setRuntimePaths } from "../../src/paths.ts";
@@ -64,6 +64,30 @@ test("coordination records a delay before dispatch and covers failed commands", 
     ).rejects.toThrow("unknown write");
     await pacing.run(["fill"], async () => {});
     expect(f.sleeps).toEqual([750]);
+  } finally {
+    f.restore();
+  }
+});
+
+test("checked actions see page changes made during the pacing wait", async () => {
+  const f = fixture();
+  try {
+    let draft = "";
+    const browser = new Browser("1", f.store.root, {
+      ...f.dependencies,
+      sleep: async (ms: number) => {
+        f.advance(ms);
+        draft = "user text";
+      },
+    });
+    const page = await browser.page("target");
+    await page.run("click", "#other");
+    await expect(
+      page.runChecked(["fill", "#input", "agent text"], async () => {
+        if (draft) throw new Error("DRAFT_CHANGED");
+      }),
+    ).rejects.toBeInstanceOf(ActionNotDispatched);
+    expect(f.actions.some((x) => x.args.includes("fill"))).toBe(false);
   } finally {
     f.restore();
   }

@@ -20,6 +20,7 @@ import type { DiagnosticStep } from "../storage/diagnostics.ts";
 import { composePrompt, promptContext, validPrompt } from "./prompt.ts";
 
 class RunMessagePresent extends Error {}
+class ComposerRecovered extends Error {}
 
 export interface SubmissionContext {
   readonly store: State;
@@ -302,8 +303,16 @@ export function createSubmission(ctx: SubmissionContext) {
       recovery?.checkPage(p);
       if (recovery && (p.draft === undefined || p.draft.trim()))
         throw new Error("RECOVERY_REQUIRES_EMPTY_COMPOSER");
-      // A new page may still be loading. No side effects during this bounded readiness wait.
-      for (let n = 0; !p.hasComposer && !p.blocked && n < 20; n++) {
+      // A new page may still be loading. An owned completed page gets a short
+      // hydration window before a guarded reload of that same conversation.
+      const previous = t.runs.at(-2);
+      const recoverableComposer =
+        !!previous && !!t.url && !!t.binding?.owned && !recovery;
+      for (
+        let n = 0;
+        !p.hasComposer && !p.blocked && n < (recoverableComposer ? 4 : 20);
+        n++
+      ) {
         await Bun.sleep(250);
         p = await ctx.observe(t, b);
       }
@@ -311,13 +320,49 @@ export function createSubmission(ctx: SubmissionContext) {
         p.messages.some((m) => m.role === "user" && m.text.includes(r.marker))
       )
         return await ctx.reconcile(t, b);
+      if (
+        recoverableComposer &&
+        !p.hasComposer &&
+        p.draft === "" &&
+        !p.attachments &&
+        !p.generating
+      ) {
+        // The missing composer is the condition being repaired. Validate the
+        // saved completed branch without treating that absence as history drift.
+        safeCompleted(t, { ...p, hasComposer: true }, previous!);
+        try {
+          await b.runChecked(["reload"], async () => {
+            const latest = await ctx.observe(t, b!);
+            if (
+              latest.messages.some(
+                (m) => m.role === "user" && m.text.includes(r.marker),
+              )
+            )
+              throw new RunMessagePresent();
+            if (latest.hasComposer) throw new ComposerRecovered();
+            if (latest.draft !== "" || latest.attachments || latest.generating)
+              throw new Error("RECOVERY_PAGE_CHANGED");
+            safeCompleted(t, { ...latest, hasComposer: true }, previous!);
+          });
+        } catch (error) {
+          if (error instanceof ActionNotDispatched) {
+            if (error.cause instanceof RunMessagePresent)
+              return await ctx.reconcile(t, b);
+            if (!(error.cause instanceof ComposerRecovered)) throw error;
+          } else throw error;
+        }
+        p = await ctx.observe(t, b);
+        for (let n = 0; !p.hasComposer && !p.blocked && n < 20; n++) {
+          await Bun.sleep(250);
+          p = await ctx.observe(t, b);
+        }
+      }
       const checkDraft = (page: PageState) => {
         recovery?.checkPage(page);
         if (page.generating || !page.hasComposer || page.attachments)
           throw new Error("PAGE_NOT_IDLE");
         if (page.draft?.trim() && draftText(page.draft) !== draftText(prompt))
           throw new Error("DRAFT_CHANGED");
-        const previous = t.runs.at(-2);
         if (previous) safeCompleted(t, { ...page, draft: "" }, previous);
         else if (!recovery)
           assertNewConversationPage(page, t.config.projectUrl);
@@ -351,7 +396,19 @@ export function createSubmission(ctx: SubmissionContext) {
       p = await ctx.observe(t, b);
       checkDraft(p);
       ctx.setStep("fill");
-      if (!p.draft?.trim()) await b.run("fill", "#prompt-textarea", prompt);
+      if (p.draft === "")
+        await b.runChecked(["fill", "#prompt-textarea", prompt], async () => {
+          const latest = await ctx.observe(t, b!);
+          if (
+            latest.messages.some(
+              (message) =>
+                message.role === "user" && message.text.includes(r.marker),
+            )
+          )
+            throw new RunMessagePresent();
+          checkDraft(latest);
+          if (latest.draft !== "") throw new Error("DRAFT_CHANGED");
+        });
       ctx.guard(t);
       p = await ctx.observe(t, b);
       // Model popovers can leave a closing overlay after their label has updated.

@@ -422,8 +422,7 @@ export class Conversation {
         userId &&
         same(last.url, t.url) &&
         !last.blocked &&
-        !last.messages.some((m) => m.id === userId) &&
-        (created || !last.hasComposer || !last.messages.length)
+        !last.messages.some((m) => m.id === userId)
       )
         throw new ObservationError(
           "HISTORY_HYDRATING: saved user message has not mounted",
@@ -547,8 +546,15 @@ export class Conversation {
         }
         return await this.observation.reconcile(t, await this.page(t));
       } catch (e) {
-        this.observation.recordFailure(t, e, true);
-        throw e;
+        const error =
+          t.url &&
+          /tab_gone|target.*closed|page.*closed|no tab|(?:tab|target|page).*not found/i.test(
+            String(e),
+          )
+            ? new ObservationError("TARGET_UNAVAILABLE: " + String(e))
+            : e;
+        this.observation.recordFailure(t, error, true);
+        throw error;
       }
     });
   }

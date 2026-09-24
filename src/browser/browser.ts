@@ -9,6 +9,10 @@ import { BrowserPacing, type PacingClock } from "./pacing.ts";
 // Only observation failures may be retried automatically; never a browser action.
 export class ObservationError extends Error {}
 let operationCounter = 0;
+/** Unambiguous across concurrently running CLI processes in one namespace. */
+export function operationSessionPrefix(pid: number, counter: number) {
+  return `o${pid.toString(36)}-${counter.toString(36)}`;
+}
 /** The adapter command was never handed to its executor. Only this fact may
  * restore pre-dispatch state; an executor error is always delivery-uncertain. */
 export class ActionNotDispatched extends Error {
@@ -143,7 +147,7 @@ export class Browser {
     return this.operation.run(
       // agent-browser embeds this name in a Unix socket path (103-byte limit).
       {
-        prefix: `o${process.pid.toString(36)}${(++operationCounter).toString(36)}`,
+        prefix: operationSessionPrefix(process.pid, ++operationCounter),
         sessions: new Set(),
       },
       async () => {
