@@ -75,7 +75,7 @@ A skill requests lifecycle operations; it does not implement a second conversati
 
 Lifecycle ownership does not promise that ChatGPT keeps a remote conversation forever or remains reachable. Login failures, remote deletion, changed branches and uncertain UI actions must produce explicit failure/pending states rather than silently creating a replacement conversation. This release uses explicit CLI calls and a foreground `wait` process; it does not claim a resident daemon, durable job scheduling or automatic business retries.
 
-创建时指定 `--type`/`--topic`（可选 `--language`），主题不明则保留原标题。配置项目时只从该项目专属输入框创建，并在填写和发送前核验项目 URL 与入口；没有先在外部创建再移动的路径。发送与观察阶段不改名；首次命名放到发送成功后的第一轮 wait 正常或超时返回前，前提是持久化 URL 已确认。后续 wait 返回和 finish 前核对当前标题，缺失或被自动标题覆盖时有界补命名。生成中命名使用任务记录中的临时只读观察页获取远端元数据并核验保存，原发送页继续生成，观察页核验身份后关闭。命名失败单独保存，不改变投递状态、不自动重发，显式 `organize` 可在生成期间恢复命名。
+创建时指定 `--type`/`--topic`（可选 `--language`），主题不明则保留原标题。配置项目时只从该项目专属输入框创建，并在填写和发送前核验项目 URL 与入口；没有先在外部创建再移动的路径。发送与观察阶段不改名；首次命名放到发送成功后的第一轮 wait 正常或超时返回前，前提是持久化 URL 已确认。后续 wait 返回和 finish 前被动核对当前页面标题；通用页面标题以及已由远端元数据证伪的同一标题误报不重复触发观察页，出现新的具体标题变化时再核验并纠正。此前已核验的标题若在新一轮复核时遇到写前读取错误，保留上次核验结果并停止自动重试，报告需显式 `organize`。生成中命名使用任务记录中的临时只读观察页获取远端元数据并核验保存，原发送页继续生成，观察页核验身份后关闭。命名失败单独保存，不改变投递状态、不自动重发，显式 `organize` 可在生成期间恢复命名。
 
 自动命名使用 `MMDD｜TYPE｜Topic`，从远端 `createdAt` 转 `Asia/Shanghai` 得到日期，默认英文 TYPE，明确要求中文时使用 `organize --language zh`。无项目配置仍命名且不移动会话；有目标项目时核验既有归属，不移动会话。标题、项目整理和自有标签页释放分别记录结果，不能用 cleanup 成功掩盖组织失败。
 

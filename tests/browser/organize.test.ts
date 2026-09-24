@@ -42,6 +42,7 @@ function fixture(
     menu = "",
     editing = false,
     sequence = 0,
+    reloads = 0,
     focused = "";
   let fallbackPending = false;
   const requests: any[] = [],
@@ -64,6 +65,7 @@ function fixture(
   return {
     mutations,
     saved: () => saved,
+    reloads: () => reloads,
     session: "organize-test",
     read: async () => ({
       url: options.wrongUrl ? "https://chatgpt.com/c/other" : url,
@@ -105,6 +107,7 @@ function fixture(
           },
         };
       if (args[0] === "reload") {
+        reloads++;
         sequence++;
         const requestId = "r" + sequence;
         requests.push({
@@ -231,10 +234,12 @@ describe("conversation organization", () => {
       conversationCreatedAt: "2026-09-15T17:00:00.000Z",
     });
     const count = b.mutations.length;
+    const reloadCount = b.reloads();
     expect(
       await organizeConversation(b, url, preferences, "FIX", "迁移衔接"),
     ).toMatchObject({ verified: true, changed: false });
     expect(b.mutations.length).toBe(count);
+    expect(b.reloads()).toBe(reloadCount);
     expect(b.saved()).toMatchObject({
       is_archived: false,
       is_starred: null,

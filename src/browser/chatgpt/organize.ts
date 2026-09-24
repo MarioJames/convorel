@@ -396,11 +396,10 @@ export async function organizeConversation(
   checkPreserved();
   progress.rename.verified = true;
   onProgress(progress);
-  if (before.title === title && before.projectId === expectedProject)
-    current = await freshMetadata();
+  // Without a write, the initial fresh metadata already verifies persistence.
   if (current.title !== title || current.projectId !== expectedProject)
     throw new Error(
-      "Title/project did not persist after reload; organization not verified",
+      "Title/project did not persist in fresh metadata; organization not verified",
     );
   checkPreserved();
   if (configuredProject) progress.project.state = "verified";

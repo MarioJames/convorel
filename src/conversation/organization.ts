@@ -65,26 +65,48 @@ export function createOrganization(ctx: OrganizationContext) {
     // A released task remains released. Explicit organize can restore a page.
     if (t.binding?.closed) return;
     ctx.begin(t);
+    const wasVerified = !!t.organization?.verified;
     try {
       const page = await ctx.page(t);
+      let documentTitleToCheck: string | undefined;
       if (t.organization?.verified) {
         const p = await ctx.observe(t, page, "naming");
         const title = t.organization.title ?? t.organization.rename?.title;
-        // Read the current document title, not a stale local verified flag.
-        // The provider can finish auto-titling after our initial rename.
+        const documentTitle = p.title?.trim();
+        // A generic document title is not evidence that the saved conversation
+        // title changed. A previously disproved mismatch is not new evidence.
         if (
-          title &&
-          (p.title === title ||
-            p.title?.endsWith(" - " + title) ||
-            p.title?.startsWith(title + " - "))
+          !documentTitle ||
+          /^(?:ChatGPT|OpenAI)(?:\s*[-–—|]\s*(?:ChatGPT|OpenAI))?$/i.test(
+            documentTitle,
+          ) ||
+          documentTitle === t.organization.checkedDocumentTitle
         )
           return;
+        if (
+          title &&
+          (documentTitle === title ||
+            documentTitle.endsWith(" - " + title) ||
+            documentTitle.startsWith(title + " - "))
+        )
+          return;
+        documentTitleToCheck = documentTitle;
       }
-      await applyOrganization(t, page, t.naming);
+      const result = await applyOrganization(t, page, t.naming);
+      if (result.verified && result.changed === false && documentTitleToCheck) {
+        // Persist a no-op metadata check so later waits do not create another
+        // observer for the same stale document title.
+        result.checkedDocumentTitle = documentTitleToCheck;
+        ctx.save(t);
+      }
     } catch (e) {
+      const phase = t.organization?.phase;
+      const revalidationFailedBeforeWrite =
+        wasVerified &&
+        (!phase || ["complete", "metadata", "locating"].includes(phase));
       t.organization = {
         ...t.organization,
-        ...(t.organization?.verified ? { phase: "metadata" } : {}),
+        ...(revalidationFailedBeforeWrite ? { phase: "revalidation" } : {}),
         verified: false,
         error: String(e),
       };

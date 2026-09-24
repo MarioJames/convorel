@@ -543,10 +543,82 @@ test("a wait checkpoint repairs a remotely reverted title even when local naming
   };
   await conversation.ensureNaming(t.id, t.currentRun);
   expect(conversation.get(t.id).organization.verified).toBe(false);
-  browser.gate = undefined;
+  expect(conversationStatus(conversation.get(t.id)).organization).toMatchObject(
+    {
+      state: "revalidation_failed",
+      nextAction: "organize",
+    },
+  );
+  const opened = browser.nextTarget;
   await conversation.ensureNaming(t.id, t.currentRun);
+  expect(browser.nextTarget).toBe(opened);
+  browser.gate = undefined;
+  await conversation.organize(t.id, t.currentRun, "FIX", "可辨认会话");
   expect(conversation.get(t.id).organization.verified).toBe(true);
   expect(browser.sends).toBe(1);
+});
+
+test("verified naming does not repeatedly open and reload metadata pages for an unchanged document title", async () => {
+  const { state, browser } = setup();
+  const title = "0922｜FIX｜可辨认会话";
+  let checks = 0;
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async () => ({ observedModel: "6 Pro" }),
+    async (page, _url, _preferences, _type, _topic, _progress, metadata) => {
+      checks++;
+      await metadata!.read();
+      browser.pages.get(browser.targets.at(-1).targetId).messages = (
+        await page.read()
+      ).messages;
+      await metadata!.run("reload");
+      return {
+        verified: true,
+        title,
+        phase: "complete",
+        changed: false,
+      } as any;
+    },
+  );
+  const t = await start(
+    conversation,
+    "stable-title",
+    "Review",
+    "initial",
+    false,
+    undefined,
+    { type: "FIX", topic: "可辨认会话" },
+  );
+  const main = browser.pages.get(t.binding!.target);
+  main.title = "ChatGPT";
+  await conversation.ensureNaming(t.id, t.currentRun);
+  expect(checks).toBe(1);
+  expect(browser.targets).toHaveLength(1);
+  const opened = browser.nextTarget;
+  const reloads = browser.reloads;
+
+  await conversation.ensureNaming(t.id, t.currentRun);
+  await conversation.ensureNaming(t.id, t.currentRun);
+  expect(checks).toBe(1);
+  expect(browser.nextTarget).toBe(opened);
+  expect(browser.reloads).toBe(reloads);
+
+  main.title = "Project - Automatic title";
+  await conversation.ensureNaming(t.id, t.currentRun);
+  expect(checks).toBe(2);
+  expect(browser.targets).toHaveLength(1);
+  const checked = browser.nextTarget;
+  const checkedReloads = browser.reloads;
+  await conversation.ensureNaming(t.id, t.currentRun);
+  expect(checks).toBe(2);
+  expect(browser.nextTarget).toBe(checked);
+  expect(browser.reloads).toBe(checkedReloads);
+
+  main.title = "Project - A new title";
+  await conversation.ensureNaming(t.id, t.currentRun);
+  expect(checks).toBe(3);
+  expect(browser.nextTarget).toBe(checked + 1);
 });
 
 test("a surviving owned metadata page can replace a lost main tab without becoming borrowed or being closed", async () => {
