@@ -16,7 +16,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { childEnv } from "../../src/process.ts";
 const source = resolve(import.meta.dir, "../..");
 const pkg = await Bun.file(join(source, "package.json")).json();
-const temp = mkdtempSync(join(tmpdir(), "package acceptance "));
+const temp = realpathSync(mkdtempSync(join(tmpdir(), "package acceptance ")));
 // Dependency postinstall scripts may resolve `npm prefix -g` even for a local
 // install. Isolate the package-manager home and prefix, not only skill installs.
 const packageHome = join(temp, "package manager home");

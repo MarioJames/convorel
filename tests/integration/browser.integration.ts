@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import {
   mkdtempSync,
   readFileSync,
+  realpathSync,
   existsSync,
   writeFileSync,
   rmSync,
@@ -34,7 +35,7 @@ import { copyMarkdownScript } from "../../src/browser/chatgpt/copy.ts";
 const chromePath = process.argv[process.argv.indexOf("--chrome") + 1];
 if (!process.argv.includes("--chrome") || !chromePath)
   throw new Error("Pass --chrome with an installed Chrome executable");
-const root = mkdtempSync(join(tmpdir(), "review-browser-"));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "review-browser-")));
 const oldPaths = setRuntimePaths({ configDir: join(root, "preferences") });
 writePreference("browser.actionIntervalMs", "1");
 writePreference("browser.navigationWaitMs", "1");
