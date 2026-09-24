@@ -77,6 +77,7 @@ test("installer keeps prior versions and rolls back failed activation", async ()
     writeFileSync,
     readFileSync,
     readlinkSync,
+    realpathSync,
     readdirSync,
     rmSync,
     symlinkSync,
@@ -146,7 +147,10 @@ test("installer keeps prior versions and rolls back failed activation", async ()
     const first = readlinkSync(join(bin, "convorel"));
     expect(
       JSON.parse(readFileSync(join(prefix, "layout.json"), "utf8")),
-    ).toEqual({ version: 1, binDir: bin });
+    ).toEqual({
+      version: 1,
+      binDir: join(realpathSync(root), 'bin "quoted" \\ path'),
+    });
     expect((await install()).code).toBe(0);
     const current = readlinkSync(join(bin, "convorel"));
     expect(current).not.toBe(first);

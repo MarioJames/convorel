@@ -21,6 +21,10 @@ function signalOwner(owner: ProcessOwner, signal: NodeJS.Signals) {
 /** A live session anchor prevents its session ID from being recycled. Never
  * discover new ownership using only a dead leader's numeric PID/PGID. */
 function sessionMembers(owner: ProcessOwner) {
+  const belongs = (p: { session: string; group: number }, session: string) =>
+    process.platform === "darwin"
+      ? p.group === owner.pid
+      : p.session === session;
   const valid = () => {
     const current = inspect(owner.pid);
     return (
@@ -35,7 +39,7 @@ function sessionMembers(owner: ProcessOwner) {
       "PROCESS_CLEANUP_UNVERIFIED: session anchor is no longer owned",
     );
   const session = inspect(owner.pid)!.session;
-  const members = processes().filter((p) => p.live && p.session === session);
+  const members = processes().filter((p) => p.live && belongs(p, session));
   if (!valid())
     throw new Error(
       "PROCESS_CLEANUP_UNVERIFIED: session anchor changed during inspection",
@@ -59,13 +63,17 @@ export function orphanGroup(leader: ProcessOwner) {
   const session = members.find((p) => p.pid === leader.pid)?.session;
   if (!session) throw unverified();
   const owned = new Map(members.map((p) => [p.pid, p.identity]));
+  const belongs = (p: { session: string; group: number }) =>
+    process.platform === "darwin"
+      ? p.group === leader.pid
+      : p.session === session;
   const remaining = () => {
-    const current = processes().filter((p) => p.live && p.session === session);
+    const current = processes().filter((p) => p.live && belongs(p));
     if (current.some((p) => owned.get(p.pid) !== p.identity))
       throw unverified();
     for (const member of members) {
       const p = inspect(member.pid);
-      if (p?.live && p.identity === member.identity && p.session !== session)
+      if (p?.live && p.identity === member.identity && !belongs(p))
         throw unverified();
     }
     return current;
