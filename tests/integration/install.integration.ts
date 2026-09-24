@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -19,7 +20,9 @@ import { verifyUpgrade } from "./upgrade.integration.ts";
 const source = resolve(import.meta.dir, "../..");
 const pkg = await Bun.file(join(source, "package.json")).json();
 const platform = `${process.platform}-${process.arch}`;
-const temp = mkdtempSync(join(tmpdir(), "convorel install acceptance "));
+const temp = realpathSync(
+  mkdtempSync(join(tmpdir(), "convorel install acceptance ")),
+);
 const home = join(temp, "home"),
   prefix = join(temp, "lib"),
   bin = join(temp, "bin"),

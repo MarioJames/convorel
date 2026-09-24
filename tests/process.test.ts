@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
   existsSync,
 } from "node:fs";
@@ -13,9 +14,10 @@ import { inspectProcess } from "../src/process-info.ts";
 import { MemoryAccess } from "../src/mcp/memory.ts";
 import { processIdentity, State } from "../src/storage/state.ts";
 
-const task =
+const taskRoot =
   process.env.CONVOREL_RUNTIME_TEST_DIR ?? "/tmp/convorel-runtime-tests";
-mkdirSync(task, { recursive: true });
+mkdirSync(taskRoot, { recursive: true });
+const task = realpathSync(taskRoot);
 function live(pid: number) {
   return !!inspectProcess(pid)?.live;
 }
@@ -25,7 +27,7 @@ async function fixture(exit: boolean, pipes = true) {
     backend = join(dir, "backend");
   writeFileSync(
     backend,
-    `#!${process.execPath} --no-env-file\nimport {writeFileSync} from 'node:fs';const p=Bun.spawn(['/bin/sleep','60'],{stdio:['ignore',${pipes ? "'inherit','inherit'" : "'ignore','ignore'"}]});p.unref();writeFileSync(${JSON.stringify(file)},JSON.stringify([process.pid,p.pid]));${exit ? "process.exit(23)" : "setInterval(()=>{},1000)"};`,
+    `#!${process.execPath} --no-env-file\nimport {writeFileSync,renameSync} from 'node:fs';const p=Bun.spawn(['/bin/sleep','60'],{stdio:['ignore',${pipes ? "'inherit','inherit'" : "'ignore','ignore'"}]});p.unref();writeFileSync(${JSON.stringify(file + ".tmp")},JSON.stringify([process.pid,p.pid]));renameSync(${JSON.stringify(file + ".tmp")},${JSON.stringify(file)});${exit ? "process.exit(23)" : "setInterval(()=>{},1000)"};`,
     { mode: 0o700 },
   );
   const owners: { pid: number; identity: string }[] = [];

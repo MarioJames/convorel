@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -17,7 +18,7 @@ import { inspectProcess } from "../../src/process-info.ts";
 
 const cli = join(import.meta.dir, "../../src/cli.ts");
 test("CLI manages detached clients, concurrent starts, logs, restart and exact process identity", async () => {
-  const temp = mkdtempSync(join(tmpdir(), "convorel-service-"));
+  const temp = realpathSync(mkdtempSync(join(tmpdir(), "convorel-service-")));
   const id = "tunnel_" + "4".repeat(32),
     key = tunnelKey(id);
   const workspace = join(temp, "workspace"),
@@ -168,7 +169,9 @@ test("CLI manages detached clients, concurrent starts, logs, restart and exact p
 test.each(["ignore-term", "new-member"] as const)(
   "orphan stop verifies ownership and handles %s",
   async (mode) => {
-    const temp = mkdtempSync(join(tmpdir(), "convorel-orphan-service-"));
+    const temp = realpathSync(
+      mkdtempSync(join(tmpdir(), "convorel-orphan-service-")),
+    );
     const id = "tunnel_" + "e".repeat(32);
     for (const dir of ["bin", "workspace", "state", "prefs"])
       mkdirSync(join(temp, dir));
