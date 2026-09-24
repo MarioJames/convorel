@@ -36,7 +36,7 @@ function fixture(manifest: string, observe?: (path: string) => void) {
   });
   writePreference("release.baseUrl", server.url.toString());
 }
-const platform = `linux-${process.arch === "arm64" ? "arm64" : "x64"}`;
+const platform = `${process.platform}-${process.arch}`;
 const entry = (version: string) =>
   `${"a".repeat(64)}  convorel-${version}-${platform}.tar.gz\n`;
 test("manifest resolves latest and normalizes explicit tags", async () => {
@@ -108,7 +108,7 @@ test("installer keeps prior versions and rolls back failed activation", async ()
     mkdirSync(join(contents, "bin"), { recursive: true });
     writeFileSync(
       join(contents, "bin/convorel"),
-      `#!/bin/sh\n${failAfterMove ? 'case "$(readlink -f "$0")" in */versions/*) exit 1;; esac\n' : ""}echo ${version}\n`,
+      `#!/bin/sh\n${failAfterMove ? 'case "$(realpath "$0")" in */versions/*) exit 1;; esac\n' : ""}echo ${version}\n`,
       { mode: 0o755 },
     );
     if (unsafe) symlinkSync("/bin/sh", join(contents, "bin/agent-browser"));

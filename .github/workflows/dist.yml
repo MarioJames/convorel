@@ -28,3 +28,14 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
+  macos-arm64:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: test "$(uname -m)" = arm64
+      - run: bun install --frozen-lockfile
+      - name: Build, install and drive the macOS standalone artifact
+        run: bun run test:install

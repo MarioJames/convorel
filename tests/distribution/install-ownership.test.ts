@@ -19,7 +19,7 @@ async function setup() {
   const prefix = join(root, "prefix"),
     bin = join(root, "bin"),
     dist = join(root, "dist");
-  const name = `convorel-9.9.9-linux-${process.arch}`;
+  const name = `convorel-9.9.9-${process.platform}-${process.arch}`;
   for (const p of [prefix, bin, dist, join(root, name, "bin")])
     mkdirSync(p, { recursive: true });
   writeFileSync(join(root, name, "bin/convorel"), "#!/bin/sh\necho 9.9.9\n", {

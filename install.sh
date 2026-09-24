@@ -81,11 +81,22 @@ done
 for path in "$install_dir" "$bin_dir"; do
   case "$path" in /*) ;; *) die "ABSOLUTE_PATH_REQUIRED: $path" ;; esac
 done
-# Canonical paths make ownership checks independent of symlinked parent directories.
-install_dir="$(realpath -m -- "$install_dir")"
-bin_dir="$(realpath -m -- "$bin_dir")"
-[ "$install_dir" != / ] && [ "$bin_dir" != / ] || die "INSTALL_PATH_INVALID: root is not an installation directory"
 case "$install_dir$bin_dir" in *[$'\001'-$'\037']*) die "INSTALL_PATH_INVALID: control characters in path" ;; esac
+# Canonical paths make ownership checks independent of symlinked parent directories.
+canonical_path() {
+  if [ "$(uname -s)" = Darwin ]; then
+    mkdir -p "$(dirname "$1")"
+    case "$(basename "$1")" in
+      / | . | ..) (cd -P "$1" && pwd -P) ;;
+      *) printf '%s/%s\n' "$(cd -P "$(dirname "$1")" && pwd -P)" "$(basename "$1")" ;;
+    esac
+  else
+    realpath -m -- "$1"
+  fi
+}
+install_dir="$(canonical_path "$install_dir")"
+bin_dir="$(canonical_path "$bin_dir")"
+[ "$install_dir" != / ] && [ "$bin_dir" != / ] || die "INSTALL_PATH_INVALID: root is not an installation directory"
 case "$bin_dir/" in "$install_dir/versions/"*|"$install_dir/parts/"*) die "INSTALL_PATH_INVALID: bin directory overlaps managed releases" ;; esac
 valid_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z][0-9A-Za-z.+-]*)?$ ]]; }
 if [ "$version" != latest ]; then
@@ -93,12 +104,17 @@ if [ "$version" != latest ]; then
   valid_version "$version" || die "VERSION_INVALID: expected a release version"
 fi
 
-command -v flock >/dev/null || die "INSTALL_LOCK_UNAVAILABLE: install util-linux (flock)"
 # Keep the same inode outside the removable installation tree. The kernel
-# releases ownership on exit (including SIGKILL); never unlink a flock file.
+# releases ownership on exit (including SIGKILL); never unlink a lock file.
 mkdir -p "$(dirname "$install_dir")"
 exec 9>"$install_dir.install.lock"
-flock -n 9 || die "INSTALL_BUSY: another install or uninstall is in progress"
+if [ "$(uname -s)" = Darwin ]; then
+  command -v lockf >/dev/null || die "INSTALL_LOCK_UNAVAILABLE: macOS lockf is required"
+  lockf -s -t 0 9 || die "INSTALL_BUSY: another install or uninstall is in progress"
+else
+  command -v flock >/dev/null || die "INSTALL_LOCK_UNAVAILABLE: install util-linux (flock)"
+  flock -n 9 || die "INSTALL_BUSY: another install or uninstall is in progress"
+fi
 
 manifest="$install_dir/.convorel-owned"
 [ ! -L "$manifest" ] || die "INSTALL_OWNERSHIP_INVALID: manifest must not be a symlink"
@@ -118,8 +134,12 @@ hash_of() {
 # parent directories, remove changed files, or recursively delete a prefix.
 safe_owned_path() {
   case "$1" in "$install_dir"|"$install_dir"/*|"$bin_dir/convorel"|"$bin_dir/agent-browser") ;; *) return 1 ;; esac
-  [ "$(realpath -ms -- "$1")" = "$1" ] || return 1
-  [ "$(realpath -m -- "$(dirname "$1")")" = "$(dirname "$1")" ]
+  if [ "$(uname -s)" = Darwin ]; then
+    [ "$(cd -P "$(dirname "$1")" 2>/dev/null && pwd -P)/$(basename "$1")" = "$1" ]
+  else
+    [ "$(realpath -ms -- "$1")" = "$1" ] || return 1
+    [ "$(realpath -m -- "$(dirname "$1")")" = "$(dirname "$1")" ]
+  fi
 }
 owned_entry() {
   [ -f "$manifest" ] || return 1
@@ -128,7 +148,7 @@ owned_entry() {
     [ "$path" = "$2" ] && [ "$kind" = "$1" ] || continue
     safe_owned_path "$path" || continue
     case "$kind" in
-      l) [ -L "$path" ] && [ "$(readlink -- "$path")" = "$fingerprint" ] && return 0 ;;
+      l) [ -L "$path" ] && [ "$(readlink "$path")" = "$fingerprint" ] && return 0 ;;
       f) [ ! -L "$path" ] && [ -f "$path" ] && [ "$(hash_of "$path")" = "$fingerprint" ] && return 0 ;;
     esac
   done < "$manifest"
@@ -149,7 +169,7 @@ if [ "$action" = uninstall ]; then
     while IFS= read -r -d '' kind && IFS= read -r -d '' fingerprint && IFS= read -r -d '' path; do
       safe_owned_path "$path" || continue
       if [ "$kind" = f ] && [ ! -L "$path" ] && [ -f "$path" ] && [ "$(hash_of "$path")" = "$fingerprint" ]; then
-        rm -f -- "$path"
+        rm -f "$path"
       fi
     done < "$manifest"
     # Directory records are written deepest first, after their files.
@@ -159,11 +179,11 @@ if [ "$action" = uninstall ]; then
       [ "$kind" = d ] && safe_owned_path "$path" && [ ! -L "$path" ] || continue
       [ "$path" != "$install_dir" ] || remove_prefix=1
       [ "$path" != "$install_dir/versions" ] || remove_versions=1
-      rmdir -- "$path" 2>/dev/null || true
+      rmdir "$path" 2>/dev/null || true
     done < "$manifest"
-    rm -f -- "$manifest"
-    if [ "$remove_versions" = 1 ]; then rmdir -- "$install_dir/versions" 2>/dev/null || true; fi
-    if [ "$remove_prefix" = 1 ]; then rmdir -- "$install_dir" 2>/dev/null || true; fi
+    rm -f "$manifest"
+    if [ "$remove_versions" = 1 ]; then rmdir "$install_dir/versions" 2>/dev/null || true; fi
+    if [ "$remove_prefix" = 1 ]; then rmdir "$install_dir" 2>/dev/null || true; fi
     say "removed verified installation files; kept unknown or modified content"
   fi
   say "kept $HOME/.local/share/convorel, $HOME/.local/share/convorel-tunnels and $HOME/.config/convorel"
@@ -172,16 +192,17 @@ if [ "$action" = uninstall ]; then
   exit 0
 fi
 
-[ "$(uname -s)" = Linux ] ||
-  die "PLATFORM_UNSUPPORTED: this release ships Linux builds; install from source instead"
-case "$(uname -m)" in
-  x86_64 | amd64) platform=linux-x64 ;;
-  aarch64 | arm64) platform=linux-arm64 ;;
-  *) die "UNSUPPORTED_ARCHITECTURE: $(uname -m)" ;;
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64 | Linux:amd64) platform=linux-x64 ;;
+  Linux:aarch64 | Linux:arm64) platform=linux-arm64 ;;
+  Darwin:arm64) platform=darwin-arm64 ;;
+  *) die "PLATFORM_UNSUPPORTED: supported releases are Linux x64/arm64 and macOS arm64" ;;
 esac
-if [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ] ||
-  { ldd --version 2>&1 | grep -qi musl; }; then
-  die "LIBC_UNSUPPORTED: this release ships glibc builds; on Alpine install convorel from source"
+if [ "${platform#linux-}" != "$platform" ]; then
+  if [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ] ||
+    { ldd --version 2>&1 | grep -qi musl; }; then
+    die "LIBC_UNSUPPORTED: this release ships glibc builds; on Alpine install convorel from source"
+  fi
 fi
 
 fetch() {
@@ -219,18 +240,18 @@ cleanup() {
       for name in convorel; do
         old="$old_convorel"
         if [ -n "$old" ]; then
-          ln -s -- "$old" "$link_staging/rollback-$name"
-          mv -Tf -- "$link_staging/rollback-$name" "$bin_dir/$name"
+          ln -s "$old" "$link_staging/rollback-$name"
+          mv -f "$link_staging/rollback-$name" "$bin_dir/$name"
         else
-          rm -f -- "$bin_dir/$name"
+          rm -f "$bin_dir/$name"
         fi
       done
     fi
-    [ -z "$target" ] || rm -rf -- "$target"
+    [ -z "$target" ] || rm -rf "$target"
   fi
-  [ -z "$link_staging" ] || rm -rf -- "$link_staging"
-  [ -z "$staging" ] || rm -rf -- "$staging"
-  if [ -z "$dist_dir" ] && [ -n "$source_dir" ]; then rm -rf -- "$source_dir"; fi
+  [ -z "$link_staging" ] || rm -rf "$link_staging"
+  [ -z "$staging" ] || rm -rf "$staging"
+  if [ -z "$dist_dir" ] && [ -n "$source_dir" ]; then rm -rf "$source_dir"; fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -249,7 +270,10 @@ else
 fi
 
 # Exactly one safe artifact name per platform, with a validated version and digest.
-mapfile -t lines < <(grep -e "-$platform\.tar\.gz$" "$source_dir/sha256sums.txt" || true)
+lines=()
+while IFS= read -r line; do
+  case "$line" in *"-$platform.tar.gz") lines+=("$line") ;; esac
+done < "$source_dir/sha256sums.txt"
 [ "${#lines[@]}" -gt 0 ] || die "ARTIFACT_MISSING: no $platform build is published"
 [ "${#lines[@]}" = 1 ] || die "MANIFEST_INVALID: multiple artifacts for $platform"
 line="${lines[0]}"
@@ -277,28 +301,38 @@ while IFS= read -r member; do
 done < "$staging/members"
 tar -tvzf "$source_dir/$archive" > "$staging/types"
 awk 'substr($0,1,1) != "-" && substr($0,1,1) != "d" {exit 1}' "$staging/types" || die "ARTIFACT_INVALID: archive contains links or special files"
-tar -xzf "$source_dir/$archive" -C "$staging" --no-same-owner --no-same-permissions
+tar -xzf "$source_dir/$archive" -C "$staging"
 extracted="$staging/${archive%.tar.gz}"
 [ -f "$extracted/bin/convorel" ] && [ -x "$extracted/bin/convorel" ] ||
   die "ARTIFACT_INVALID: the archive does not contain bin/convorel"
-installed="$(timeout 30 "$extracted/bin/convorel" --version)" || die "VERSION_MISMATCH: downloaded binary could not report its version"
+version_output() {
+  "$1" --version 9>&- &
+  local pid=$!
+  (sleep 30; kill "$pid" 2>/dev/null || true) 9>&- >/dev/null 2>&1 &
+  local timer=$!
+  local status=0
+  wait "$pid" || status=$?
+  kill "$timer" 2>/dev/null || true
+  return "$status"
+}
+installed="$(version_output "$extracted/bin/convorel")" || die "VERSION_MISMATCH: downloaded binary could not report its version"
 [ "$installed" = "$release" ] || die "VERSION_MISMATCH: downloaded binary reports $installed, expected $release"
 
 # Every attempt gets an immutable directory: reinstall/downgrade never removes history.
 target="$(mktemp -d "$install_dir/versions/$release-$platform.XXXXXXXX")"
 shopt -s dotglob nullglob
-mv -- "$extracted"/* "$target/"
+mv "$extracted"/* "$target/"
 json_escape() { local value="$1"; value="${value//\\/\\\\}"; value="${value//\"/\\\"}"; printf '%s' "$value"; }
 printf '{"version":1,"binDir":"%s"}\n' "$(json_escape "$bin_dir")" > "$staging/layout.json"
 link_staging="$(mktemp -d "$bin_dir/.convorel-links.XXXXXXXX")"
-ln -s -- "$target/bin/convorel" "$link_staging/convorel"
+ln -s "$target/bin/convorel" "$link_staging/convorel"
 switched=1
-mv -Tf -- "$link_staging/convorel" "$bin_dir/convorel"
-installed="$(timeout 30 "$bin_dir/convorel" --version)" || die "UPGRADE_UNVERIFIED: installed binary failed"
+mv -f "$link_staging/convorel" "$bin_dir/convorel"
+installed="$(version_output "$bin_dir/convorel")" || die "UPGRADE_UNVERIFIED: installed binary failed"
 [ "$installed" = "$release" ] || die "UPGRADE_UNVERIFIED: installed binary version differs"
 # Build the next ownership ledger before publishing. Prior release files stay
 # owned across upgrades; stale fingerprints never authorize deleting edits.
-if [ -f "$manifest" ]; then cat -- "$manifest" > "$staging/owned"
+if [ -f "$manifest" ]; then cat "$manifest" > "$staging/owned"
 else printf 'v\0convorel-owned-v1\0%s\0' "$install_dir" > "$staging/owned"; fi
 while IFS= read -r -d '' file; do
   printf 'f\0%s\0%s\0' "$(hash_of "$file")" "$file" >> "$staging/owned"
@@ -310,11 +344,11 @@ if [ "$created_versions" = 1 ]; then printf 'd\0\0%s\0' "$install_dir/versions" 
 if [ "$created_prefix" = 1 ]; then printf 'd\0\0%s\0' "$install_dir" >> "$staging/owned"; fi
 printf 'l\0%s\0%s\0' "$target/bin/convorel" "$bin_dir/convorel" >> "$staging/owned"
 printf 'f\0%s\0%s\0' "$(hash_of "$staging/layout.json")" "$install_dir/layout.json" >> "$staging/owned"
-mv -Tf -- "$staging/layout.json" "$install_dir/layout.json"
-mv -Tf -- "$staging/owned" "$manifest"
+mv -f "$staging/layout.json" "$install_dir/layout.json"
+mv -f "$staging/owned" "$manifest"
 committed=1
 if owned_link "$bin_dir/agent-browser"; then
-  rm -f -- "$bin_dir/agent-browser"
+  rm -f "$bin_dir/agent-browser"
   say "removed the previously bundled agent-browser link"
 fi
 [ -z "$old_convorel" ] || say "previous release retained at $old_convorel"

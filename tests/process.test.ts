@@ -7,7 +7,9 @@ import {
   existsSync,
 } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { runProcess, childEnv } from "../src/process.ts";
+import { inspectProcess } from "../src/process-info.ts";
 import { MemoryAccess } from "../src/mcp/memory.ts";
 import { processIdentity, State } from "../src/storage/state.ts";
 
@@ -15,13 +17,7 @@ const task =
   process.env.CONVOREL_RUNTIME_TEST_DIR ?? "/tmp/convorel-runtime-tests";
 mkdirSync(task, { recursive: true });
 function live(pid: number) {
-  try {
-    const s = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return !["Z", "X"].includes(s.slice(s.lastIndexOf(")") + 2).split(" ")[0]);
-  } catch (e: any) {
-    if (e.code !== "ENOENT") throw e;
-    return false;
-  }
+  return !!inspectProcess(pid)?.live;
 }
 async function fixture(exit: boolean, pipes = true) {
   const dir = mkdtempSync(join(task, "process-"));
@@ -179,8 +175,16 @@ test("parent SIGKILL closes the lifetime pipe while the command is still running
     stderr: "ignore",
   });
   const pids = await f.ready();
-  const stat = readFileSync(`/proc/${pids[0]}/stat`, "utf8");
-  const anchor = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  const anchor = (() => {
+    if (process.platform === "darwin")
+      return Number(
+        execFileSync("/bin/ps", ["-p", String(pids[0]), "-o", "ppid="], {
+          encoding: "utf8",
+        }).trim(),
+      );
+    const stat = readFileSync(`/proc/${pids[0]}/stat`, "utf8");
+    return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  })();
   const identity = processIdentity(anchor);
   try {
     parent.kill("SIGKILL");

@@ -16,11 +16,17 @@ const releases = () =>
     "https://github.com/MarioJames/convorel/releases"
   ).replace(/\/$/, "");
 export function platform() {
-  if (process.platform !== "linux" || !["arm64", "x64"].includes(process.arch))
+  if (
+    !(
+      (process.platform === "linux" &&
+        ["arm64", "x64"].includes(process.arch)) ||
+      (process.platform === "darwin" && process.arch === "arm64")
+    )
+  )
     throw new Error(
-      "PLATFORM_UNSUPPORTED: standalone releases require Linux x64 or arm64",
+      "PLATFORM_UNSUPPORTED: standalone releases require Linux x64/arm64 or macOS arm64",
     );
-  return `linux-${process.arch}`;
+  return `${process.platform}-${process.arch}`;
 }
 const validVersion =
   /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z][0-9A-Za-z.+-]*)?$/;
@@ -47,7 +53,7 @@ export async function releaseManifest(requested?: string) {
     throw new Error(`ARTIFACT_MISSING: no ${platform()} build in ${reference}`);
   const match =
     entries.length === 1
-      ? /^([a-f0-9]{64})\s+(convorel-([^/\s]+)-linux-(?:x64|arm64)\.tar\.gz)$/.exec(
+      ? /^([a-f0-9]{64})\s+(convorel-([^/\s]+)-(?:linux-(?:x64|arm64)|darwin-arm64)\.tar\.gz)$/.exec(
           entries[0],
         )
       : null;
@@ -78,7 +84,8 @@ export async function versionCheck() {
 // Use the same filesystem resolver as install.sh. Bun 1.4.2 realpath currently
 // treats a Linux backslash in a path as a separator, unlike the kernel.
 function realpathSync(path: string) {
-  const result = Bun.spawnSync(["realpath", "-e", "--", path], {
+  const args = process.platform === "darwin" ? [path] : ["-e", "--", path];
+  const result = Bun.spawnSync(["realpath", ...args], {
     env: childEnv(),
     stdout: "pipe",
     stderr: "pipe",

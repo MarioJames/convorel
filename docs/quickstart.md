@@ -4,7 +4,7 @@ Runnable v0.2 commands; consult validation.md for the verified environment and r
 
 ## Prerequisites
 
-- Linux x64 or arm64 (glibc), Git, an installed Google Chrome, and `agent-browser` on `PATH`. Standalone installation and upgrade also require `flock` from util-linux. A source checkout additionally needs Bun >= 1.3 and Node >= 24.
+- Linux x64 or arm64 (glibc), or macOS arm64; Git, Google Chrome, and `agent-browser` on `PATH`. Linux standalone installation and upgrade require `flock` from util-linux; macOS uses the built-in `lockf`. A source checkout additionally needs Bun >= 1.3 and Node >= 24.
 - Your own ChatGPT account with access to the selected model. The default selects Latest and the Pro endpoint of Power without pinning a version. Override with `convorel config set model MODEL`; other visible models are verified after manual selection.
 - For code tools: your own OpenAI tunnel, runtime key and ChatGPT developer app. Browser-only conversation does not need these.
 
@@ -14,13 +14,13 @@ Runnable v0.2 commands; consult validation.md for the verified environment and r
 curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-The installer downloads the release archive for the current architecture, verifies it against that release's `sha256sums.txt`, unpacks it under `~/.local/lib/convorel` and links `convorel` into `~/.local/bin`. It does not install `agent-browser`. Its only installer options are `--version vX.Y.Z`, `--prefix PATH`, `--bin-dir PATH`, `--dist-dir PATH`, `--uninstall` and `--release-base URL`; installer options are not read from environment variables. It never uses sudo or touches conversation state, preferences or installed skills. Release artifacts carry GitHub build provenance: `gh attestation verify convorel-<version>-linux-x64.tar.gz --repo MarioJames/convorel`. No published npm package is assumed.
+The installer downloads the release archive for the current architecture, verifies it against that release's `sha256sums.txt`, unpacks it under `~/.local/lib/convorel` and links `convorel` into `~/.local/bin`. It does not install `agent-browser`. Its only installer options are `--version vX.Y.Z`, `--prefix PATH`, `--bin-dir PATH`, `--dist-dir PATH`, `--uninstall` and `--release-base URL`; installer options are not read from environment variables. It never uses sudo or touches conversation state, preferences or installed skills. Release artifacts carry GitHub build provenance: `gh attestation verify convorel-<version>-darwin-arm64.tar.gz --repo MarioJames/convorel` for macOS. No published npm package is assumed.
 
 From a source checkout, `bun --no-env-file setup.ts ...` runs `bun install --frozen-lockfile` before the same initialization. The commands below use the installed `convorel`; in a checkout substitute `bun --no-env-file src/cli.ts`.
 
 ## Start a browser
 
-Example for Linux; use the actual installed binary:
+Example for Linux; use the actual installed binary. On macOS, replace `google-chrome` with `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`:
 
 ```bash
 google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \

@@ -17,13 +17,12 @@ import {
 import { stateDirectory } from "../paths.ts";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { inspectProcess } from "../process-info.ts";
 export function processIdentity(pid: number) {
-  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  return (
-    readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() +
-    ":" +
-    stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]
-  );
+  const info = inspectProcess(pid);
+  if (!info)
+    throw Object.assign(new Error("PROCESS_MISSING"), { code: "ENOENT" });
+  return info.identity;
 }
 /** Lock namespaces. Per-task serialization equals per-tab, because a tab
  * binding is one task to one target (see Conversation.claim). */
@@ -40,9 +39,9 @@ export function tabsLockName() {
 export class State {
   readonly root: string;
   constructor(root = stateDirectory()) {
-    if (process.platform !== "linux")
+    if (!(["linux", "darwin"] as string[]).includes(process.platform))
       throw new Error(
-        "PLATFORM_UNSUPPORTED: v0.1 validates process ownership on Linux",
+        "PLATFORM_UNSUPPORTED: process ownership requires Linux or macOS",
       );
     this.root = resolve(root);
     mkdirSync(this.root, { recursive: true, mode: 0o700 });

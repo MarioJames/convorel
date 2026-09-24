@@ -3,8 +3,8 @@ import { consumeRuntimeArgs, runtimePathArgs } from "./src/paths.ts";
 // Source checkout bootstrap: no package dependencies and no global installation.
 if (!process.execArgv.includes("--no-env-file"))
   throw new Error("Run bun --no-env-file setup.ts ...");
-if (process.platform !== "linux")
-  throw new Error("This release supports Linux only");
+if (process.platform !== "linux" && process.platform !== "darwin")
+  throw new Error("This release supports Linux and macOS only");
 const [major, minor] = Bun.version.split(".").map(Number);
 if (major < 1 || (major === 1 && minor < 3))
   throw new Error("Bun >= 1.3 required");

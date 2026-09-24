@@ -24,3 +24,17 @@ jobs:
       - run: bun run check
       - run: bun run format:check
       - run: bun run test:package
+  macos-arm64:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: test "$(uname -m)" = arm64
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test tests/process.test.ts tests/service/service.test.ts tests/storage/state.test.ts tests/workspace/workspace.test.ts tests/distribution/upgrade.test.ts tests/distribution/install-ownership.test.ts
+      - run: bun run test:package
+      - run: bun run test:install
+      - run: bun run test:browser --chrome "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"

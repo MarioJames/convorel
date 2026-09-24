@@ -40,7 +40,7 @@ Convorel 把 ChatGPT 接入本地开发流程。让 Codex 或 Claude Code 带着
 
 ## 为持续协作而设计
 
-**减少上下文搬运。** 编码 Agent 准备问题，ChatGPT 通过 MCP 按需读取代码、核对显式共享记忆，并可在隔离环境中运行受控构建和测试。你可以控制共享哪些目录；无需反复粘贴整份文件。
+**减少上下文搬运。** 编码 Agent 准备问题，ChatGPT 通过 MCP 按需读取代码、核对显式共享记忆，并可在 Linux 的隔离环境中运行受控构建和测试。你可以控制共享哪些目录；无需反复粘贴整份文件。
 
 **任务只描述要做什么。** Convorel 自动附加工作区路径和通用工具使用指引；调用方提供目标、约束和验收要求。每轮保存原始任务、指引快照和最终发送文本，重试沿用原文。网页版收到的是普通消息，不是真正的 system role。
 
@@ -48,13 +48,13 @@ Convorel 把 ChatGPT 接入本地开发流程。让 Codex 或 Claude Code 带着
 
 **内容留在本地并且搜得到。** 每轮 prompt 原文和回复自带的 Markdown 复制件写入私有 SQLite 归档，`conversation search` 直接按中文子串命中；网页关掉、Chrome 停止甚至项目目录删除后仍可回读，也能导出一致性快照备份。归档写入失败不会影响会话投递状态。
 
-**把修改权留在本地。** 共享源码保持只读，受控构建和测试在隔离副本中执行。代码修改与最终验收仍由本地 Agent 负责。
+**把修改权留在本地。** 共享源码保持只读；Linux 上的受控构建和测试在隔离副本中执行。代码修改与最终验收仍由本地 Agent 负责。
 
 **沿用现有工具。** 内置 `chatgpt-review` 技能支持安装到 Codex 和 Claude Code。也可通过 CLI 组织自己的问答或讨论流程；Herdr 是可选增强。
 
 ## 快速开始
 
-当前版本面向 **Linux（x64 / arm64）+ ChatGPT 网页**，使用你已登录的 **有头 Google Chrome + CDP**。需要 Git，以及能使用目标模型的 ChatGPT 账号。默认选择网页 Latest 的 Pro 模式，不固定模型版本。
+当前版本面向 **Linux（x64 / arm64）与 macOS（Apple Silicon）+ ChatGPT 网页**，使用你已登录的 **有头 Google Chrome + CDP**。需要 Git，以及能使用目标模型的 ChatGPT 账号。默认选择网页 Latest 的 Pro 模式，不固定模型版本。
 
 ### 1. 安装
 
@@ -64,7 +64,7 @@ Convorel 把 ChatGPT 接入本地开发流程。让 Codex 或 Claude Code 带着
 curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh | bash
 ```
 
-安装与升级需要 util-linux 提供的 `flock`。脚本会校验发布的 `sha256sums.txt`，安装到 `~/.local/lib/convorel`，并在 `~/.local/bin` 链接 `convorel`；不使用 sudo。安装选项仅通过参数传入：`--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`。卸载只移除可执行文件，保留会话状态、偏好和已安装技能。
+Linux 安装与升级需要 util-linux 的 `flock`；macOS 使用系统自带的 `lockf`。脚本会校验发布的 `sha256sums.txt`，安装到 `~/.local/lib/convorel`，并在 `~/.local/bin` 链接 `convorel`；不使用 sudo。安装选项仅通过参数传入：`--version vX.Y.Z`、`--prefix PATH`、`--bin-dir PATH`、`--dist-dir PATH`、`--uninstall`、`--release-base URL`。卸载只移除可执行文件，保留会话状态、偏好和已安装技能。
 
 安装后可用 `convorel version --check` 检查最新版、`convorel upgrade` 升级，或加 `--version vX.Y.Z` 指定版本；旧版本与用户数据保留。升级不会自动同步已安装技能，需对原安装目标显式运行 `convorel skills check` / `convorel skills update`（沿用 `--agent`/`--scope` 或 `--dir`）；更新保留本地定制，有冲突或旧安装缺基线时停止，详见[技能安装与更新](docs/usage.md#安装与更新审查技能)。
 
@@ -78,6 +78,8 @@ curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh
 google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
   --user-data-dir="$HOME/.local/share/convorel-chrome" https://chatgpt.com
 ```
+
+macOS 将 `google-chrome` 替换为 `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`；同样使用独立 profile。
 
 ### 3. 初始化并安装审查技能
 

@@ -129,7 +129,10 @@ export class Workspace {
       if (s.nlink > 1) throw new Error("HARDLINK_NOT_SUPPORTED");
       if (s.size > (policy ? MAX_OUT : MAX_FILE))
         throw new Error("FILE_TOO_LARGE");
-      if (realpathSync(`/proc/self/fd/${fd}`) !== abs)
+      if (
+        process.platform === "linux" &&
+        realpathSync(`/proc/self/fd/${fd}`) !== abs
+      )
         throw new Error("FILE_CHANGED");
       this.checkRoot();
       const buf = Buffer.alloc((policy ? MAX_OUT : MAX_FILE) + 1);
@@ -141,6 +144,14 @@ export class Workspace {
       }
       if (n > (policy ? MAX_OUT : MAX_FILE)) throw new Error("FILE_TOO_LARGE");
       const end = fstatSync(fd);
+      const atPath = lstatSync(abs);
+      if (
+        atPath.isSymbolicLink() ||
+        atPath.dev !== s.dev ||
+        atPath.ino !== s.ino ||
+        realpathSync(abs) !== abs
+      )
+        throw new Error("FILE_CHANGED");
       if (s.ino !== end.ino || s.size !== end.size || s.mtimeMs !== end.mtimeMs)
         throw new Error("FILE_CHANGED");
       return buf.subarray(0, n);

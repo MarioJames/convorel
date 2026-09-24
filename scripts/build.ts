@@ -16,7 +16,9 @@ const root = resolve(import.meta.dir, "..");
 const out = join(root, "dist");
 const pkg = await Bun.file(join(root, "package.json")).json();
 const commit = process.env.GITHUB_SHA || "development";
-const targets = (process.argv[2] || "bun-linux-x64,bun-linux-arm64")
+const targets = (
+  process.argv[2] || "bun-linux-x64,bun-linux-arm64,bun-darwin-arm64"
+)
   .split(",")
   .map((target) => target.trim())
   .filter(Boolean);
@@ -24,9 +26,9 @@ rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 const checksums: string[] = [];
 for (const target of targets) {
-  if (!/^bun-linux-(x64|arm64)$/.test(target))
+  if (!/^bun-(?:linux-(?:x64|arm64)|darwin-arm64)$/.test(target))
     throw new Error(
-      `UNSUPPORTED_TARGET: ${target}; this release ships Linux glibc only`,
+      `UNSUPPORTED_TARGET: ${target}; supported targets are Linux x64/arm64 and macOS arm64`,
     );
   const platform = target.slice(4),
     directory = `convorel-${pkg.version}-${platform}`,

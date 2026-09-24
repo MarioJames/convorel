@@ -1,23 +1,8 @@
 import { spawn } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { inspectProcess, processes } from "./process-info.ts";
 
 export type ProcessOwner = { pid: number; identity: string };
-const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-function inspect(pid: number) {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-    return {
-      pid,
-      identity: `${boot}:${fields[19]}`,
-      live: !["Z", "X"].includes(fields[0]),
-      group: Number(fields[2]),
-      session: Number(fields[3]),
-    };
-  } catch (e: any) {
-    if (e.code !== "ENOENT" && e.code !== "ESRCH") throw e;
-  }
-}
+const inspect = inspectProcess;
 function processAlive(owner?: ProcessOwner | null) {
   if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid <= 0)
     return false;
@@ -41,7 +26,7 @@ function sessionMembers(owner: ProcessOwner) {
     return (
       current?.live &&
       current.identity === owner.identity &&
-      current.session === owner.pid &&
+      (process.platform !== "linux" || current.session === String(owner.pid)) &&
       current.group === owner.pid
     );
   };
@@ -49,12 +34,8 @@ function sessionMembers(owner: ProcessOwner) {
     throw new Error(
       "PROCESS_CLEANUP_UNVERIFIED: session anchor is no longer owned",
     );
-  const members = readdirSync("/proc")
-    .filter((x) => /^\d+$/.test(x))
-    .map((x) => inspect(Number(x)))
-    .filter(
-      (p): p is NonNullable<typeof p> => !!p?.live && p.session === owner.pid,
-    );
+  const session = inspect(owner.pid)!.session;
+  const members = processes().filter((p) => p.live && p.session === session);
   if (!valid())
     throw new Error(
       "PROCESS_CLEANUP_UNVERIFIED: session anchor changed during inspection",
@@ -75,20 +56,16 @@ export function orphanGroup(leader: ProcessOwner) {
   } catch {
     throw unverified();
   }
+  const session = members.find((p) => p.pid === leader.pid)?.session;
+  if (!session) throw unverified();
   const owned = new Map(members.map((p) => [p.pid, p.identity]));
   const remaining = () => {
-    const current = readdirSync("/proc")
-      .filter((x) => /^\d+$/.test(x))
-      .map((x) => inspect(Number(x)))
-      .filter(
-        (p): p is NonNullable<typeof p> =>
-          !!p?.live && p.session === leader.pid,
-      );
+    const current = processes().filter((p) => p.live && p.session === session);
     if (current.some((p) => owned.get(p.pid) !== p.identity))
       throw unverified();
     for (const member of members) {
       const p = inspect(member.pid);
-      if (p?.live && p.identity === member.identity && p.session !== leader.pid)
+      if (p?.live && p.identity === member.identity && p.session !== session)
         throw unverified();
     }
     return current;

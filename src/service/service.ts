@@ -19,6 +19,7 @@ import { preference } from "../config/preferences.ts";
 import { childEnv } from "../process.ts";
 import { selfExec } from "../runtime.ts";
 import { recoverTunnelLock, tunnelKey, tunnelRegistry } from "./tunnel.ts";
+import { inspectProcess } from "../process-info.ts";
 
 const START_TIMEOUT_MS = 10_000;
 const START_STABLE_MS = 2_000;
@@ -36,10 +37,7 @@ function alive(entry?: { pid?: number; identity?: string } | null) {
     return false;
   try {
     if (processIdentity(pid) !== identity) return false;
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return !["Z", "X"].includes(
-      stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0],
-    );
+    return !!inspectProcess(pid)?.live;
   } catch (e: any) {
     if (e.code !== "ENOENT") throw e;
     return false;

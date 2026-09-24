@@ -162,7 +162,7 @@ export function registerFunctions(
               ),
             })),
             syntax:
-              "One command: NAME --option value. Quote values containing spaces or glob syntax. Options retain their schema names (e.g. startLine). git status/log/show/diff/compare/read_file are aliases for git_* commands. No pipes, redirects or substitutions. Build/test commands: bun test; bun run build/test/check/typecheck/dist (also colon-suffixed scripts). Supply cwd. Runs in a Linux sandbox, requires a Bun project; dependency directories need explicit local grants. Example: read_file --path '/repo/file.ts' --startLine 1 --maxLines 100. Use returned pagination fields to continue.",
+              "One command: NAME --option value. Quote values containing spaces or glob syntax. Options retain their schema names (e.g. startLine). git status/log/show/diff/compare/read_file are aliases for git_* commands. No pipes, redirects or substitutions. Build/test commands: bun test; bun run build/test/check/typecheck/dist (also colon-suffixed scripts). Supply cwd. Build/test execution is available on Linux with a Bubblewrap sandbox and explicit dependency grants; it is unavailable on macOS. Example: read_file --path '/repo/file.ts' --startLine 1 --maxLines 100. Use returned pagination fields to continue.",
           },
           memory: {
             configured: memory.roots.length > 0,

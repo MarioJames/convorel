@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { State, processIdentity } from "../../src/storage/state.ts";
 import { childEnv } from "../../src/process.ts";
 import { tunnelKey } from "../../src/service/tunnel.ts";
+import { inspectProcess } from "../../src/process-info.ts";
 
 const cli = join(import.meta.dir, "../../src/cli.ts");
 test("CLI manages detached clients, concurrent starts, logs, restart and exact process identity", async () => {
@@ -113,12 +114,7 @@ test("CLI manages detached clients, concurrent starts, logs, restart and exact p
     const restarted = JSON.parse(await run(["restart"]));
     expect(restarted.running).toBe(true);
     expect(restarted.client.pid).not.toBe(first.client.pid);
-    try {
-      const stat = readFileSync(`/proc/${descendantPid}/stat`, "utf8");
-      expect(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]).toBe("Z");
-    } catch (error: any) {
-      if (error.code !== "ENOENT") throw error;
-    }
+    expect(inspectProcess(descendantPid)?.live).not.toBe(true);
     let followed = "";
     while (!followed.includes("client ready")) {
       const chunk = await reader.read();
@@ -202,17 +198,7 @@ test.each(["ignore-term", "new-member"] as const)(
       PATH: join(temp, "bin") + ":" + process.env.PATH,
     };
     const owned: { pid: number; identity: string }[] = [];
-    const isAlive = (pid: number) => {
-      try {
-        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-        return !["Z", "X"].includes(
-          stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0],
-        );
-      } catch (e: any) {
-        if (e.code !== "ENOENT") throw e;
-        return false;
-      }
-    };
+    const isAlive = (pid: number) => !!inspectProcess(pid)?.live;
     async function run(action: string, expected = 0) {
       const p = Bun.spawn(
         [

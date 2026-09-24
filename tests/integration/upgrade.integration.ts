@@ -50,15 +50,18 @@ export async function verifyInstallerLock() {
   ];
   const noFlock = join(root, "no-flock");
   mkdirSync(noFlock);
-  symlinkSync(Bun.which("realpath")!, join(noFlock, "realpath"));
-  assert.match(
-    Bun.spawnSync([Bun.which("bash")!, ...args], {
-      env: { ...env, PATH: noFlock },
-      stdout: "pipe",
-      stderr: "pipe",
-    }).stderr.toString(),
-    /INSTALL_LOCK_UNAVAILABLE/,
-  );
+  if (process.platform === "linux") {
+    for (const name of ["realpath", "uname", "dirname", "mkdir"])
+      symlinkSync(Bun.which(name)!, join(noFlock, name));
+    assert.match(
+      Bun.spawnSync([Bun.which("bash")!, ...args], {
+        env: { ...env, PATH: noFlock },
+        stdout: "pipe",
+        stderr: "pipe",
+      }).stderr.toString(),
+      /INSTALL_LOCK_UNAVAILABLE/,
+    );
+  }
   const installer = spawn("bash", args, {
     env,
     detached: true,
@@ -119,7 +122,7 @@ export async function verifyUpgrade(
 ) {
   await verifyInstallerLock();
   const artifact = readdirSync(dist).find((name) =>
-    name.endsWith(`linux-${process.arch}.tar.gz`),
+    name.endsWith(`${process.platform}-${process.arch}.tar.gz`),
   )!;
   const checksums = readFileSync(join(dist, "sha256sums.txt"), "utf8");
   let manifest = checksums;
@@ -249,7 +252,7 @@ export async function verifyUpgrade(
     // A higher-version local release proves the no-argument upgrade selects
     // latest. The candidate's version probe is a tiny executable fixture.
     const next = "99.0.1-rc.1";
-    const directory = `convorel-${next}-linux-${process.arch}`;
+    const directory = `convorel-${next}-${process.platform}-${process.arch}`;
     mkdirSync(join(fixture, directory, "bin"), { recursive: true });
     writeFileSync(
       join(fixture, directory, "bin/convorel"),
@@ -329,7 +332,7 @@ if (import.meta.main) {
         "--no-env-file",
         "run",
         "dist",
-        `bun-linux-${process.arch}`,
+        `bun-${process.platform}-${process.arch}`,
       ],
       { cwd: source },
     );

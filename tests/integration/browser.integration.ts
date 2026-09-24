@@ -1,6 +1,7 @@
 // Adapted from skill-foundry 19f0122 (Apache-2.0), standalone Browser adapter.
 // Run explicitly: bun tests/integration/browser.integration.ts --chrome /path/to/installed/chrome
 import { strict as assert } from "node:assert";
+import { execFileSync } from "node:child_process";
 import {
   mkdtempSync,
   readFileSync,
@@ -45,6 +46,17 @@ const previous = {
 };
 // agent-browser marks each daemon it detaches with the namespace it serves.
 function daemons() {
+  if (process.platform === "darwin") {
+    const output = execFileSync(
+      "/bin/ps",
+      ["-A", "-E", "-ww", "-o", "pid=,command="],
+      { encoding: "utf8" },
+    );
+    return output
+      .split("\n")
+      .filter((line) => line.includes(`AGENT_BROWSER_NAMESPACE=${namespace}`))
+      .map((line) => line.trim().split(/\s+/, 1)[0]);
+  }
   return readdirSync("/proc")
     .filter((entry) => /^\d+$/.test(entry))
     .filter((entry) => {

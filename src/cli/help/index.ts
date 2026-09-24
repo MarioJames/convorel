@@ -58,7 +58,7 @@ function root(): string {
     leafPages(item).flatMap((leaf) => leaf.usage),
   );
   return [
-    `convorel ${packageInfo.version} (Linux, ${COMPILED ? "standalone" : "source"})`,
+    `convorel ${packageInfo.version} (${process.platform}, ${COMPILED ? "standalone" : "source"})`,
     ...usage,
     "",
     "help, -h, and --help show this index and do not run a command.",

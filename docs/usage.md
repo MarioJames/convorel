@@ -26,7 +26,7 @@ flowchart LR
 
 ## 快速开始
 
-首版支持 **Linux（x64 / arm64，glibc）**，需要 Git 和已安装的 Google Chrome；从源码运行另需 Bun ≥ 1.3、Node ≥ 24。当前仅实现 ChatGPT 网页适配。
+支持 **Linux（x64 / arm64，glibc）与 macOS（Apple Silicon）**，需要 Git 和已安装的 Google Chrome；从源码运行另需 Bun ≥ 1.3、Node ≥ 24。当前仅实现 ChatGPT 网页适配。macOS 上的隔离构建/测试工具暂不可用，其余只读代码工具和会话功能可用。
 
 ### 1. 安装
 

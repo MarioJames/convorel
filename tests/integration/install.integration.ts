@@ -18,7 +18,7 @@ import { childEnv } from "../../src/process.ts";
 import { verifyUpgrade } from "./upgrade.integration.ts";
 const source = resolve(import.meta.dir, "../..");
 const pkg = await Bun.file(join(source, "package.json")).json();
-const platform = `linux-${process.arch === "arm64" ? "arm64" : "x64"}`;
+const platform = `${process.platform}-${process.arch}`;
 const temp = mkdtempSync(join(tmpdir(), "convorel install acceptance "));
 const home = join(temp, "home"),
   prefix = join(temp, "lib"),

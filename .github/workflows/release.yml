@@ -48,8 +48,21 @@ jobs:
           name: dist
           path: dist/
           if-no-files-found: error
+  macos-arm64:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: test "$(uname -m)" = arm64
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - name: Build, install and drive the macOS standalone artifact
+        run: bun run test:install
+      - run: bun run test:browser --chrome "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
   publish:
-    needs: build
+    needs: [build, macos-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -78,7 +91,7 @@ jobs:
             echo "curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/install.sh | bash -s -- --version $tag"
             echo '```'
             echo
-            echo "Linux x64 and arm64 (glibc). Verify provenance with \`gh attestation verify <archive> --repo $GITHUB_REPOSITORY\`."
+            echo "Linux x64 and arm64 (glibc), macOS arm64. Verify provenance with \`gh attestation verify <archive> --repo $GITHUB_REPOSITORY\`."
             echo
             echo "## SHA-256"
             echo
