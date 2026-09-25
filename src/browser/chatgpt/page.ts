@@ -14,6 +14,7 @@ export interface Message {
 export interface PageState {
   url: string;
   title: string;
+  visibleConversationTitle?: string | null;
   messages: Message[];
   generating: boolean;
   blocked: string | null;
@@ -162,11 +163,23 @@ export const PAGE_SCRIPT = `(() => {
   const hit = rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
   const sendReady = !!send && !send.disabled && send.getAttribute('aria-disabled') !== 'true'
     && !!hit && (hit === send || send.contains(hit));
+  const path = location.pathname.split('/');
+  const conversation = path.at(-2) === 'c' ? path.at(-1) : null;
+  const sidebarLinks = conversation ? Array.from(document.querySelectorAll('a[data-sidebar-item]')).filter(e => {
+    if (!visible(e) || getComputedStyle(e).visibility === 'hidden') return false;
+    try {
+      const link = new URL(e.href);
+      return link.origin === location.origin && link.pathname.endsWith('/c/' + conversation);
+    } catch { return false; }
+  }) : [];
+  const titleNode = sidebarLinks.length === 1 ? sidebarLinks[0].cloneNode(true) : null;
+  titleNode?.querySelectorAll('button,[role="button"],svg,[hidden],[aria-hidden="true"],[inert]').forEach(e => e.remove());
+  const visibleConversationTitle = titleNode?.textContent?.trim() || null;
   // ProseMirror renders every input line as a paragraph. innerText inserts extra blank lines.
   const draft = composer?.tagName === 'TEXTAREA' ? composer.value : (composer && Array.from(composer.childNodes).every(e => e.nodeType === 1 && e.nodeName === 'P')
     ? Array.from(composer.children).map(e => Array.from(e.childNodes).filter(n => !(n.nodeType === 1 && n.classList?.contains('ProseMirror-trailingBreak'))).map(n => n.nodeName === 'BR' ? '\\n' : n.textContent).join('')).join('\\n')
     : composer?.innerText || '');
-  return { url:location.href, title:document.title, messages,
+  return { url:location.href, title:document.title, visibleConversationTitle, messages,
     generating:buttons.some(e => e.matches(${JSON.stringify(STOP_SELECTOR)})),
     draft, sendReady,
     attachments: Array.from(document.querySelectorAll('button')).some(e => visible(e) && /remove (file|attachment)|移除附件|删除附件/i.test(label(e))),

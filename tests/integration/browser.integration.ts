@@ -45,6 +45,7 @@ const previous = {
   config: process.env.AGENT_BROWSER_CONFIG,
   namespace: process.env.AGENT_BROWSER_NAMESPACE,
 };
+let stopSidebarServer: (() => void) | undefined;
 // agent-browser marks each daemon it detaches with the namespace it serves.
 function daemons() {
   if (process.platform === "darwin") {
@@ -126,6 +127,51 @@ try {
   const b = await controller.page(created.targetId);
   const page = await b.read();
   assert.equal(page.url, url);
+  const sidebarServer = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () =>
+      new Response(
+        '<title>ChatGPT</title><aside><a data-sidebar-item href="/c/review-a"><span>Saved title</span><button>Options</button><svg><title>Icon</title></svg><span hidden>Hidden</span></a><a data-sidebar-item href="/c/other">Other title</a></aside>',
+        { headers: { "Content-Type": "text/html" } },
+      ),
+  });
+  stopSidebarServer = () => sidebarServer.stop(true);
+  const sidebarFixtureUrl = `http://127.0.0.1:${sidebarServer.port}/c/review-a`;
+  const sidebarTab = await tabs("new", sidebarFixtureUrl);
+  const sidebarPage = await controller.page(sidebarTab.targetId);
+  assert.equal((await sidebarPage.read()).title, "ChatGPT");
+  assert.equal(
+    (await sidebarPage.read()).visibleConversationTitle,
+    "Saved title",
+  );
+  await sidebarPage.run(
+    "eval",
+    `document.querySelector('a[data-sidebar-item]').setAttribute('href', '/c/wrong')`,
+  );
+  assert.equal((await sidebarPage.read()).visibleConversationTitle, null);
+  await sidebarPage.run(
+    "eval",
+    `document.querySelector('a[data-sidebar-item]').setAttribute('href', '/c/review-a')`,
+  );
+  await sidebarPage.run(
+    "eval",
+    `document.querySelector('a[data-sidebar-item]').style.visibility = 'hidden'`,
+  );
+  assert.equal((await sidebarPage.read()).visibleConversationTitle, null);
+  await sidebarPage.run(
+    "eval",
+    `document.querySelector('a[data-sidebar-item]').style.visibility = ''`,
+  );
+  await sidebarPage.run(
+    "eval",
+    `document.querySelector('aside').append(document.querySelector('a[data-sidebar-item]').cloneNode(true))`,
+  );
+  assert.equal((await sidebarPage.read()).visibleConversationTitle, null);
+  assert.deepEqual((await sidebarPage.run("errors")).errors, []);
+  await tabs("close", sidebarTab.targetId);
+  stopSidebarServer();
+  stopSidebarServer = undefined;
   const returnUrl =
     "data:text/html," + encodeURIComponent("<main>Temporary home</main>");
   await b.run("open", returnUrl);
@@ -721,11 +767,13 @@ try {
       initialTabs: 1,
       peakTabs: 3,
       remainingTabs: 1,
+      sidebarFixtureUrl,
       pageErrors: pageErrors.errors,
       checks: [
         "list",
         "create",
         "read",
+        "exact visible conversation sidebar title, independent of document title",
         "navigate owned pinned tab and return",
         "rebind",
         "close",
@@ -750,6 +798,7 @@ try {
   );
 } finally {
   try {
+    stopSidebarServer?.();
     // This namespace and browser belong only to this test. Never use close --all on shared sessions.
     await command([
       "agent-browser",

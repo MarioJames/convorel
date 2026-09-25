@@ -68,35 +68,31 @@ export function createOrganization(ctx: OrganizationContext) {
     const wasVerified = !!t.organization?.verified;
     try {
       const page = await ctx.page(t);
-      let documentTitleToCheck: string | undefined;
+      let sidebarTitleToCheck: string | undefined;
       if (t.organization?.verified) {
         const p = await ctx.observe(t, page, "naming");
         const title = t.organization.title ?? t.organization.rename?.title;
-        const documentTitle = p.title?.trim();
-        // A generic document title is not evidence that the saved conversation
-        // title changed. A previously disproved mismatch is not new evidence.
-        if (
-          !documentTitle ||
-          /^(?:ChatGPT|OpenAI)(?:\s*[-–—|]\s*(?:ChatGPT|OpenAI))?$/i.test(
-            documentTitle,
-          ) ||
-          documentTitle === t.organization.checkedDocumentTitle
-        )
+        const sidebarTitle = p.visibleConversationTitle?.trim();
+        // Only the visible entry bound to this conversation is evidence of a
+        // title change. A missing sidebar is inconclusive, not a rename cue.
+        if (!sidebarTitle) return;
+        if (sidebarTitle === title) {
+          // Once the sidebar catches up, a later return to the old label is
+          // fresh evidence and must be checked again.
+          if (t.organization.checkedSidebarTitle) {
+            delete t.organization.checkedSidebarTitle;
+            ctx.save(t);
+          }
           return;
-        if (
-          title &&
-          (documentTitle === title ||
-            documentTitle.endsWith(" - " + title) ||
-            documentTitle.startsWith(title + " - "))
-        )
-          return;
-        documentTitleToCheck = documentTitle;
+        }
+        if (sidebarTitle === t.organization.checkedSidebarTitle) return;
+        sidebarTitleToCheck = sidebarTitle;
       }
       const result = await applyOrganization(t, page, t.naming);
-      if (result.verified && result.changed === false && documentTitleToCheck) {
-        // Persist a no-op metadata check so later waits do not create another
-        // observer for the same stale document title.
-        result.checkedDocumentTitle = documentTitleToCheck;
+      if (result.verified && sidebarTitleToCheck) {
+        // Persist the checked label even after a write: sidebar hydration may
+        // lag behind verified metadata and must not reopen another observer.
+        result.checkedSidebarTitle = sidebarTitleToCheck;
         ctx.save(t);
       }
     } catch (e) {
