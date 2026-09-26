@@ -298,3 +298,13 @@ The first start stopped before send because the fresh page inherited Pro; select
 上一轮修复仍用 `document.title` 判断后续改名：当它始终为通用的 `ChatGPT`、而当前会话侧边栏标题已变化时，会漏掉纠正。现在页面状态只读提取与当前会话 ID 精确匹配的唯一可见侧边栏条目，去掉按钮、图标和隐藏文本；条目缺失或有歧义时不推断标题变化。同一侧边栏差异已由持久元数据核验时，后续检查点不再重复创建观察页；出现新的差异才核验。`document.title` 仍用于页面状态和验证挑战识别，不参与命名判断。
 
 回归测试先复现通用 `document.title` 遮蔽远端改名、以及已纠正但侧边栏延迟更新后再次开观察页的问题，修复后两个相关测试文件 42 项通过；`bun run check` 通过 TypeScript 与 421 项测试。隔离浏览器夹具的实际 APP_URL 为 `http://127.0.0.1:55869/c/review-a`（现已关闭），验证了标题提取、错误会话链接、不可见和重复条目，页面错误为空；夹具非真实 ChatGPT 登录会话，未验证平台风控行为。测试创建的页面、HTTP 服务、Chrome、CDP 和 daemon 均已释放；共享登录浏览器、隧道和持久任务数据未操作。
+
+## 2026-09-26 — 新版 ChatGPT 与语义控件定位
+
+在 `5c4170d` 上使用普通有头 Google Chrome 153.0.8010.36、agent-browser 0.34.0 和已有授权登录态验证新版项目输入框、Latest Pro 完整型号核验、发送、续谈、生成状态、回答 Markdown 捕获及重命名。专用验证会话完成三轮短消息，均按精确用户/助手消息 ID 归档 Markdown，无缺口；语义定位版本的续谈与重命名成功，标题日期来自实际创建时间，项目归属保持一致。验证只覆盖这些短消息流程，不证明所有模型、界面语言或远端工具调用均可用；未单独收集真实页面整个生命周期的控制台和网络错误。
+
+TypeScript 与 261 项浏览器/会话单元测试通过。隔离浏览器夹具验证了移除 Send、Copy、Rename 图标后的语义定位、全页 ref 表中无关控件的排除、嵌套模型检查后的即时 ref、重复候选拒绝及用户/代码块 Copy 不会被当作最终回复。浏览器集成全部通过，页面错误为空；该轮本地侧栏夹具 APP_URL 为 `http://127.0.0.1:55937/c/review-a`，现已释放。
+
+真实验证页、临时观察页、独立探查页和自有 adapter daemon 均已关闭；finish 回执为 `closed: true`、`organizationPending: false`、`replyChanged: false`。隔离测试的 Chrome、临时 profile 与 HTTP 服务由测试脚本释放。保留共享 Chrome 登录态、原有任务页、隧道及持久任务/内容库；本次没有清空用户数据。
+
+0.6.2 发布前，`bun run check` 通过 TypeScript 与 423 项测试（46 个文件），`format:check`、`test:package` 和 Linux x64 `test:install` 均通过。独立安装验收使用临时配置和状态，覆盖校验和拒绝、升级失败保留旧版本、技能资源一致性及安装/卸载保留用户数据。
