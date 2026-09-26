@@ -69,6 +69,38 @@ test("coordination records a delay before dispatch and covers failed commands", 
   }
 });
 
+test("checked Send can inspect a model menu without reacquiring its own pacing lock", async () => {
+  const f = fixture();
+  try {
+    const page = await f.browser().page("target");
+    await page.runChecked(["click", "#send"], async () => {
+      await page.run("click", "#model");
+      await page.run("press", "Escape");
+      await page.read();
+    });
+    const writes = f.actions.filter(
+      (x) => x.args.includes("click") || x.args.includes("press"),
+    );
+    expect(writes.map((x) => x.args.at(-1))).toEqual([
+      "#model",
+      "Escape",
+      "#send",
+    ]);
+    for (let i = 1; i < writes.length; i++)
+      expect(writes[i]!.at - writes[i - 1]!.at).toBeGreaterThanOrEqual(750);
+    expect(f.store.has("lock-browser-pacing")).toBe(false);
+    await expect(
+      page.runChecked(["click", "#send"], async () => {
+        await page.run("click", "#model");
+        throw new Error("MODEL_CHANGED");
+      }),
+    ).rejects.toBeInstanceOf(ActionNotDispatched);
+    expect(f.actions.filter((x) => x.args.at(-1) === "#send")).toHaveLength(1);
+  } finally {
+    f.restore();
+  }
+});
+
 test("checked actions see page changes made during the pacing wait", async () => {
   const f = fixture();
   try {

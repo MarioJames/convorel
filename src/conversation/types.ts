@@ -1,4 +1,5 @@
 import type { Message, PageState } from "../browser/chatgpt/page.ts";
+import type { RunControl } from "../browser/semantic.ts";
 import type { ArchiveNotice } from "../archive/post-archive.ts";
 import type { Config } from "../config/config.ts";
 import type { DiagnosticStep } from "../storage/diagnostics.ts";
@@ -127,9 +128,10 @@ export interface Task {
     priorPromptHash?: string;
   };
 }
-/** The page handle Browser.page() attaches to one target, narrowed to the
- * three members conversation flows actually use. */
+/** The page handle Browser.page() attaches to one target. Control-aware
+ * adapters resolve fresh semantic refs after their checked preflight. */
 export interface Page {
+  runControl?: RunControl;
   session: string;
   run: (...args: string[]) => Promise<any>;
   runChecked: (

@@ -1,12 +1,58 @@
-// Observed ChatGPT DOM contracts. Localized labels are not control identities.
-export const COPY_SELECTOR = 'button[data-testid="copy-turn-action-button"]';
-export const STOP_SELECTOR = 'button[data-testid="stop-button"]';
+// Accessible names are matched only inside an independently verified control
+// scope. Observed DOM contracts are fallback identities when names are absent.
+export const SEND_NAMES = [
+  "Send",
+  "Send message",
+  "发送",
+  "发送消息",
+  "Envoyer",
+  "Envoyer le message",
+];
+export const STOP_NAMES = [
+  "Stop",
+  "Stop generating",
+  "Stop answering",
+  "停止",
+  "停止生成",
+  "中止",
+  "Arrêter",
+];
+export const COPY_NAMES = [
+  "Copy",
+  "Copy response",
+  "复制",
+  "复制回答",
+  "Copier",
+  "Copier la réponse",
+];
+export const RENAME_NAMES = [
+  "Rename",
+  "Rename chat",
+  "重命名",
+  "重命名聊天",
+  "Renommer",
+];
+export const MODEL_NAMES = [
+  "Select ChatGPT model",
+  "Select model",
+  "选择模型",
+  "选择 ChatGPT 模型",
+  "Choisir le modèle",
+];
+export const LATEST_NAMES = ["Latest", "最新", "Le plus récent"];
+export const COMPOSER_SELECTOR =
+  'form[data-chatgpt-composer] [data-composer-markdown][role="textbox"], #prompt-textarea';
+export const COPY_SELECTOR =
+  'button[data-testid="copy-turn-action-button"], .turn-action-controls button:has(svg path[d^="M13.468 11.1216"])';
+export const STOP_SELECTOR =
+  'button[data-testid="stop-button"], form[data-chatgpt-composer] button[type="button"]:has(svg path[d^="M4.5 5.75C4.5 5.05964"])';
+export const RENAME_MASK_PREFIX = "M11.7313%204.20472";
 export const MODEL_PICKER =
-  '[data-testid="composer-intelligence-picker-content"]';
-export const MODEL_SELECT = `${MODEL_PICKER} [role="menuitem"][aria-expanded]`;
-export const MODEL_POWER = `${MODEL_PICKER} [data-testid="composer-model-picker-slider-simple-view"] [role="menuitem"]:has([data-model-reasoning-effort-slider])`;
+  ':is([data-testid="composer-intelligence-picker-content"], [data-model-picker-view])';
+export const MODEL_SELECT = `${MODEL_PICKER} :is([role="menuitem"][aria-expanded], [data-model-picker-view-toggle="true"])`;
+export const MODEL_POWER = `${MODEL_PICKER} :is([data-testid="composer-model-picker-slider-simple-view"] [role="menuitem"]:has([data-model-reasoning-effort-slider]), [data-reasoning-slider="true"])`;
 // The picker places its rolling default before the explicitly versioned models.
-export const MODEL_LATEST = `${MODEL_PICKER} [data-testid="composer-model-picker-slider-advanced-view"] [role="group"] > [role="menuitemradio"]:first-child`;
+export const MODEL_LATEST = `${MODEL_PICKER} :is([data-testid="composer-model-picker-slider-advanced-view"] [role="group"], [data-active="true"] [data-active="true"] > div) > [role="menuitemradio"]:first-of-type`;
 
 // Rename has no semantic test id. Match its observed icon only inside the target
 // conversation menu; a changed icon fails closed rather than selecting by position.

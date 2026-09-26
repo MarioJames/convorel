@@ -1,10 +1,16 @@
+import { COMPOSER_DOM, CONTROL_NAME_DOM } from "./dom.ts";
+import type { RunControl } from "../semantic.ts";
 // Adapted from MarioJames/skill-foundry 19f0122 (Apache-2.0); modified for standalone use.
 import { required } from "../../command.ts";
 import {
   MODEL_SELECT,
   MODEL_POWER,
   MODEL_LATEST,
+  MODEL_PICKER,
   STOP_SELECTOR,
+  STOP_NAMES,
+  MODEL_NAMES,
+  LATEST_NAMES,
 } from "./controls.ts";
 
 interface Control {
@@ -12,6 +18,7 @@ interface Control {
   label: string;
   disabled: boolean;
   expanded: boolean;
+  compact?: boolean;
 }
 interface Power {
   value: number;
@@ -28,10 +35,12 @@ export interface ModelState {
   hasComposer: boolean;
   control: Control | null;
   menuLabel: string | null;
+  menuScope?: string | null;
   power: Power | null;
   latest: { checked: boolean; disabled: boolean } | null;
 }
 interface Browser {
+  runControl?: RunControl;
   session: string;
   run: (...args: string[]) => Promise<any>;
 }
@@ -49,18 +58,19 @@ export const MODEL_SCRIPT = `(() => {
     const value = e.getAttribute(key);
     return value === null || value.trim() === '' ? null : Number(value);
   };
-  const composer = document.querySelector('#prompt-textarea');
+  ${COMPOSER_DOM}
+  ${CONTROL_NAME_DOM}
   const form = composer?.closest('form');
   const controls = Array.from(form?.querySelectorAll('button[aria-haspopup="menu"]') || [])
-    .filter(e => visible(e) && e.getAttribute('data-testid') !== 'composer-plus-btn');
+    .filter(e => visible(e) && e.getAttribute('data-testid') !== 'composer-plus-btn' && e.getAttribute('data-composer-navigation-target') !== 'add-context');
   const control = controls.length === 1 && controls[0].id ? controls[0] : null;
   const menus = Array.from(document.querySelectorAll('[role="menu"]'))
     .filter(e => visible(e) && control && e.getAttribute('aria-labelledby') === control.id);
   const menu = menus.length === 1 ? menus[0] : null;
-  const select = menu && Array.from(menu.querySelectorAll('${SELECT}')).find(visible);
-  const power = menu && Array.from(menu.querySelectorAll('${POWER}')).find(visible);
+  const select = menu && Array.from(menu.querySelectorAll(${JSON.stringify(SELECT)})).find(visible);
+  const power = menu && Array.from(menu.querySelectorAll(${JSON.stringify(POWER)})).find(visible);
   const slider = power?.querySelector('[role="slider"]');
-  const defaults = menu && Array.from(menu.querySelectorAll('${MODEL_LATEST}')).filter(visible);
+  const defaults = menu && Array.from(menu.querySelectorAll(${JSON.stringify(MODEL_LATEST)})).filter(visible);
   const latest = defaults?.length === 1 ? defaults[0] : null;
   const buttons = Array.from(document.querySelectorAll('button')).filter(visible);
   const buttonLabel = e => e.getAttribute('aria-label') || label(e);
@@ -68,11 +78,12 @@ export const MODEL_SCRIPT = `(() => {
   const challenge = /^(Just a moment|Security Verification)/i.test(document.title)
     || Array.from(document.querySelectorAll('iframe')).some(e => /cloudflare security challenge/i.test(e.title));
   return { url: location.href, blocked: challenge ? 'Human verification required' : login ? 'Login required' : null,
-    generating: buttons.some(e => e.matches(${JSON.stringify(STOP_SELECTOR)})),
+    generating: buttons.some(e => e.matches(${JSON.stringify(STOP_SELECTOR)}) || (form?.contains(e) && ${JSON.stringify(STOP_NAMES)}.includes(controlName(e)))),
     hasComposer: visible(composer),
     control: control ? { selector: '#' + CSS.escape(control.id), label: label(control),
-      disabled: disabled(control), expanded: control.getAttribute('aria-expanded') === 'true' } : null,
+      disabled: disabled(control), compact: control.hasAttribute('data-codex-intelligence-trigger'), expanded: control.getAttribute('aria-expanded') === 'true' } : null,
     menuLabel: select ? label(select) : null,
+    menuScope: menu ? '[role="menu"][aria-labelledby=' + JSON.stringify(control.id) + ']' : null,
     power: slider ? { value: numeric(slider, 'aria-valuenow'), min: numeric(slider, 'aria-valuemin'),
       max: numeric(slider, 'aria-valuemax'), disabled: disabled(power),
       focused: document.activeElement === power,
@@ -109,7 +120,32 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
   };
   // Recheck the bound page before every action, including keyboard actions.
   const act = async (...args: string[]) => {
-    await read();
+    const current = await read();
+    if (b.runControl && (args[0] === "click" || args[0] === "focus")) {
+      const trigger = args[1] === current.control!.selector;
+      const names = trigger
+        ? MODEL_NAMES
+        : args[1] === MODEL_LATEST
+          ? LATEST_NAMES
+          : args[1] === SELECT
+            ? [
+                ...MODEL_NAMES,
+                ...(current.menuLabel ? [current.menuLabel] : []),
+              ]
+            : ["Power", "能力", "Puissance"];
+      await b.runControl(args[0], {
+        scope: trigger ? "main form" : current.menuScope || MODEL_PICKER,
+        role: trigger
+          ? "button"
+          : args[1] === MODEL_LATEST
+            ? "menuitemradio"
+            : "menuitem",
+        names,
+        fallback: args[1],
+        url: current.url,
+      });
+      return;
+    }
     await b.run(...args);
   };
   const wait = async (
@@ -141,6 +177,44 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
   ) {
     if (!expectedModel)
       throw new Error("MODEL_UNVERIFIED: exact observed model required");
+    // The redesigned closed trigger shows effort only (e.g. Pro). Inspect its
+    // bound menu for the full model identity without selecting a different model.
+    if (state.control!.compact && !state.control!.expanded) {
+      await act("click", state.control!.selector);
+      state = await wait(
+        (s) => s.menuLabel !== null && !!s.power,
+        "Model verification menu unavailable",
+      );
+      const matches =
+        state.menuLabel === expectedModel &&
+        (!/\bPro$/i.test(expectedModel) ||
+          (!!state.power &&
+            !state.power.disabled &&
+            Number.isFinite(state.power.max) &&
+            state.power.max > state.power.min &&
+            state.power.value === state.power.max &&
+            /\bPro\b/i.test(state.power.description)));
+      await act("press", "Escape");
+      state = await wait(
+        (s) => !s.control!.expanded,
+        "Model verification menu did not close",
+      );
+      if (!matches)
+        throw new Error(
+          "MODEL_UNVERIFIED: select the configured model in this tab",
+        );
+      return {
+        verified: true,
+        expectedModel,
+        observedModel: expectedModel,
+        before,
+        changed: false,
+        url: state.url,
+        target: required(opts, "target"),
+        session: b.session,
+        verifiedAt: new Date().toISOString(),
+      };
+    }
     if (state.control!.expanded || before !== expectedModel)
       throw new Error(
         "MODEL_UNVERIFIED: select the configured model in this tab",
@@ -248,19 +322,22 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     latest: latestVerified,
     description: state.power.description,
   };
+  const confirmedLabel = (s: ModelState) =>
+    s.control!.label === selectedModel ||
+    (s.control!.compact === true && s.control!.label === "Pro");
   await act("press", "Escape");
   state = await wait(
-    (s) => !s.control!.expanded && s.control!.label === selectedModel,
+    (s) => !s.control!.expanded && confirmedLabel(s),
     "Closed model control did not confirm selected Pro",
   );
   // A second read prevents a transient label from being treated as final confirmation.
   state = await read();
-  if (state.control!.expanded || state.control!.label !== selectedModel)
+  if (state.control!.expanded || !confirmedLabel(state))
     throw new Error("Model selection did not persist");
   return {
     verified: true,
     expectedModel: expectedModel || "latest-pro",
-    observedModel: state.control!.label,
+    observedModel: selectedModel,
     before,
     changed,
     url: state.url,

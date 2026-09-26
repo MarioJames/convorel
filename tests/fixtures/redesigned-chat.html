@@ -1,0 +1,213 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Redesigned ChatGPT controls</title>
+<style>
+  [hidden],
+  [inert] {
+    display: none !important;
+  }
+  body {
+    font: 16px sans-serif;
+    margin: 24px;
+  }
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+  [role="menuitem"],
+  [role="menuitemradio"],
+  button {
+    padding: 6px;
+  }
+  [data-composer-markdown] {
+    min-height: 30px;
+    border: 1px solid;
+  }
+</style>
+<nav>
+  <div role="group">
+    <div data-thread-title-trigger>
+      <a data-interactive-row-link href="/c/redesigned"
+        ><span data-thread-title>Review title</span></a
+      >
+    </div>
+    <button id="chat-actions" aria-haspopup="menu">Actions</button>
+  </div>
+  <div role="group">
+    <a data-interactive-row-link href="/c/other">Other</a
+    ><button id="other-actions" aria-haspopup="menu">Actions</button>
+  </div>
+</nav>
+<main>
+  <h1>Agent reviews</h1>
+  <div data-turn-key="u1">
+    <div
+      data-chatgpt-search-unit-key="fallback-turn-0:0:user"
+      data-chatgpt-search-message-ids="u1"
+    >
+      <div data-user-message-bubble>
+        <div data-search-result-target>Request</div>
+      </div>
+      <div class="turn-action-controls">
+        <button id="user-copy">
+          <svg><path d="M13.468 11.1216" /></svg>
+        </button>
+      </div>
+    </div>
+    <div data-chatgpt-search-unit-key="fallback-turn-0:1:assistant">
+      <div data-chatgpt-selection-message-id="reasoning">
+        <div data-markdown-text-style="assistant-message">Preliminary</div>
+      </div>
+      <div data-chatgpt-selection-message-id="a1">
+        <div data-markdown-text-style="assistant-message">
+          Stable reply
+          <pre><button id="code-copy">Copy</button></pre>
+        </div>
+      </div>
+    </div>
+    <div class="turn-action-controls">
+      <button id="answer-copy">
+        <svg><path d="M13.468 11.1216" /></svg>
+      </button>
+    </div>
+  </div>
+  <form
+    data-chatgpt-composer
+    onsubmit="event.preventDefault(); window.sends=(window.sends||0)+1"
+  >
+    <div
+      contenteditable="true"
+      data-composer-markdown
+      role="textbox"
+      aria-label="New chat in Agent reviews"
+    >
+      <p><br class="ProseMirror-trailingBreak" /></p>
+    </div>
+    <button
+      type="button"
+      aria-haspopup="menu"
+      data-composer-navigation-target="add-context"
+    >
+      +
+    </button>
+    <button
+      type="button"
+      id="model"
+      data-codex-intelligence-trigger
+      data-composer-navigation-target="reasoning"
+      aria-haspopup="menu"
+      aria-expanded="false"
+    >
+      Pro
+    </button>
+    <button id="send" type="submit">
+      <svg><path d="M9.33467 16.6663" /></svg>
+    </button>
+  </form>
+</main>
+<div id="picker" role="menu" aria-labelledby="model" hidden>
+  <div data-model-picker-view="simple">
+    <div
+      id="select"
+      role="menuitem"
+      tabindex="0"
+      data-model-picker-view-toggle="true"
+    >
+      6 Pro
+    </div>
+    <div id="simple" data-active="true">
+      <div
+        id="power"
+        role="menuitem"
+        tabindex="0"
+        data-reasoning-slider="true"
+        aria-describedby="power-description"
+      >
+        <span
+          role="slider"
+          aria-hidden="true"
+          aria-valuemin="0"
+          aria-valuemax="4"
+          aria-valuenow="4"
+        ></span>
+      </div>
+      <span id="power-description"
+        >Pro, 5 of 5. Use Left and Right arrow keys to adjust power</span
+      >
+    </div>
+    <div id="advanced" data-active="false" inert>
+      <div data-active="true">
+        <div>
+          <div
+            id="latest"
+            role="menuitemradio"
+            aria-checked="true"
+            tabindex="0"
+          >
+            Latest
+          </div>
+          <div role="menuitemradio" aria-checked="false" tabindex="0">
+            GPT-5.6 Sol
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="conversation-menu" role="menu" aria-labelledby="chat-actions" hidden>
+  <div id="rename" role="menuitem">
+    <span
+      style="
+        mask-image: url(&quot;data:image/svg+xml;utf8,%3Cpath%20d=%22M11.7313%204.20472%22/%3E&quot;);
+      "
+    ></span
+    ><span>Rename</span>
+  </div>
+  <div role="menuitem">Delete</div>
+</div>
+<div role="dialog" aria-modal="true" hidden id="rename-dialog">
+  <form
+    onsubmit="event.preventDefault(); document.querySelector('[data-thread-title]').textContent=this.querySelector('input').value; this.closest('[role=dialog]').hidden=true"
+  >
+    <input aria-label="Chat title" value="Review title" />
+    <button type="submit">Save</button>
+  </form>
+</div>
+<script>
+  const $ = (selector) => document.querySelector(selector);
+  // ProseMirror creates paragraph nodes without HTML source indentation.
+  $("[data-composer-markdown]").innerHTML =
+    '<p><br class="ProseMirror-trailingBreak"></p>';
+  $("#model").onclick = () => {
+    $("#picker").hidden = false;
+    $("#model").setAttribute("aria-expanded", "true");
+  };
+  $("#select").onclick = () => {
+    $("#simple").inert = true;
+    $("#advanced").inert = false;
+    $("#advanced").dataset.active = "true";
+  };
+  $("#latest").onclick = () => {
+    $("#simple").inert = false;
+    $("#advanced").inert = true;
+    $("#advanced").dataset.active = "false";
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      $("#picker").hidden = true;
+      $("#model").setAttribute("aria-expanded", "false");
+      $("#rename-dialog").hidden = true;
+    }
+  });
+  $("#user-copy").onclick = () => navigator.clipboard.writeText("Request");
+  $("#answer-copy").onclick = () =>
+    navigator.clipboard.writeText("**Stable reply**");
+  $("#code-copy").onclick = () => navigator.clipboard.writeText("code");
+  $("#chat-actions").onclick = () => {
+    $("#conversation-menu").hidden = false;
+  };
+  $("#rename").onclick = () => {
+    $("#conversation-menu").hidden = true;
+    $("#rename-dialog").hidden = false;
+  };
+</script>

@@ -1,3 +1,6 @@
+import { COMPOSER_DOM } from "./chatgpt/dom.ts";
+import { controlRef, type ControlTarget, type RunControl } from "./semantic.ts";
+import { SEND_NAMES } from "./chatgpt/controls.ts";
 // Attachment pattern adapted from skill-foundry 19f0122 (Apache-2.0).
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -43,7 +46,8 @@ export async function clearDraft(
       if (p.draft !== expected.draft) throw new Error('DRAFT_CHANGED');
     };
     check();
-    const e = document.querySelector('#prompt-textarea');
+    ${COMPOSER_DOM}
+    const e = composer;
     if (!e || (e.tagName !== 'TEXTAREA' && !e.isContentEditable)) throw new Error('COMPOSER_UNRECOGNIZED');
     e.focus();
     check();
@@ -78,6 +82,7 @@ export async function clearDraft(
 
 export async function sendPrompt(
   page: {
+    runControl?: RunControl;
     runChecked: (
       args: string[],
       beforeDispatch: () => Promise<void>,
@@ -87,6 +92,19 @@ export async function sendPrompt(
   beforeDispatch: () => Promise<void>,
 ) {
   if (!observed.sendReady) throw new Error("SEND_CONTROL_UNAVAILABLE");
+  if (page.runControl)
+    return page.runControl(
+      "click",
+      {
+        scope: "main form",
+        role: "button",
+        names: SEND_NAMES,
+        fallback: SEND_SELECTOR,
+        url: observed.url,
+      },
+      undefined,
+      beforeDispatch,
+    );
   return page.runChecked(["click", SEND_SELECTOR], beforeDispatch);
 }
 export function cdpEndpoint(value: string) {
@@ -168,15 +186,33 @@ export class Browser {
     pin: boolean,
     args: string[],
     beforeDispatch?: () => Promise<void>,
+    control?: ControlTarget,
   ) {
     const actualSession = this.sessionName(session);
     (this.operation.getStore()?.sessions ?? this.sessions).add(actualSession);
     let handedToExecutor = false;
     try {
       return await this.pacing.run(args, async () => {
-        // Read-only preflight runs after pacing. A caller may also persist its
-        // intent here, but must not issue another paced browser action.
+        // Preflight runs after pacing. Menu-only inspection may reuse this
+        // adapter's pacing lease; the caller persists send intent afterwards.
         await beforeDispatch?.();
+        const resolved = control
+          ? [
+              args[0]!,
+              controlRef(
+                await this.invoke(
+                  session,
+                  pin,
+                  "snapshot",
+                  "-i",
+                  "-s",
+                  control.scope,
+                ),
+                control,
+              ),
+              ...args.slice(2),
+            ]
+          : args;
         handedToExecutor = true;
         const x = JSON.parse(
           await this.execute(
@@ -184,7 +220,7 @@ export class Browser {
               actualSession,
               pin ? "--pin-tab" : "--no-pin-tab",
               "--json",
-              ...args,
+              ...resolved,
             ),
           ),
         );
@@ -290,10 +326,21 @@ export class Browser {
             this.dispatch(session, true, args, beforeDispatch),
           )
         : this.dispatch(session, true, args, beforeDispatch);
+    const runControl: RunControl = (action, target, value, beforeDispatch) => {
+      const args = [
+        action,
+        target.fallback || target.scope,
+        ...(value === undefined ? [] : [value]),
+      ];
+      const dispatch = () =>
+        this.dispatch(session, true, args, beforeDispatch, target);
+      return scope ? this.operation.run(scope, dispatch) : dispatch();
+    };
     return {
       session: this.sessionName(session),
       run,
       runChecked,
+      runControl,
       read: async (): Promise<PageState> => {
         let result;
         try {

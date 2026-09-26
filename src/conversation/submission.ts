@@ -1,3 +1,4 @@
+import { COMPOSER_SELECTOR } from "../browser/chatgpt/controls.ts";
 import { randomUUID } from "node:crypto";
 import {
   ActionNotDispatched,
@@ -396,8 +397,8 @@ export function createSubmission(ctx: SubmissionContext) {
       p = await ctx.observe(t, b);
       checkDraft(p);
       ctx.setStep("fill");
-      if (p.draft === "")
-        await b.runChecked(["fill", "#prompt-textarea", prompt], async () => {
+      if (p.draft === "") {
+        const beforeFill = async () => {
           const latest = await ctx.observe(t, b!);
           if (
             latest.messages.some(
@@ -408,7 +409,22 @@ export function createSubmission(ctx: SubmissionContext) {
             throw new RunMessagePresent();
           checkDraft(latest);
           if (latest.draft !== "") throw new Error("DRAFT_CHANGED");
-        });
+        };
+        if (b.runControl)
+          await b.runControl(
+            "fill",
+            {
+              scope: "main form",
+              role: "textbox",
+              fallback: COMPOSER_SELECTOR,
+              url: p.url,
+            },
+            prompt,
+            beforeFill,
+          );
+        else
+          await b.runChecked(["fill", COMPOSER_SELECTOR, prompt], beforeFill);
+      }
       ctx.guard(t);
       p = await ctx.observe(t, b);
       // Model popovers can leave a closing overlay after their label has updated.
@@ -430,8 +446,8 @@ export function createSubmission(ctx: SubmissionContext) {
       checkDraft(p);
       ctx.setStep("send");
       await sendPrompt(b, p, async () => {
-        // The pacing lock and delay have completed. Nothing in this callback
-        // may enqueue another paced browser action.
+        // The pacing lock and delay have completed. Model-menu inspection
+        // reuses this adapter's lease and settles before the final page checks.
         let latest = await ctx.observe(t, b!);
         if (
           !recovery &&

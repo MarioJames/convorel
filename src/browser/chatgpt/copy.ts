@@ -1,4 +1,4 @@
-import { COPY_SELECTOR } from "./controls.ts";
+import { MESSAGE_DOM } from "./dom.ts";
 /**
  * A completed reply is archived as Markdown, not as rendered text. The page's own
  * "Copy response" control is what yields the source the model produced, so the capture
@@ -32,14 +32,14 @@ export function copyMarkdownScript(messageId: string) {
       clearTimeout(timer);
     }
   };
-  const find = () => Array.from(document.querySelectorAll('[data-message-author-role]'))
-    .find(e => e.getAttribute('data-message-id') === wanted);
+  ${MESSAGE_DOM}
+  const find = () => messageNodesFor().find(e => messageId(e) === wanted);
   // The turn's own action bar sits inside the message element and its label changes on
   // click, so identity is measured on the rendered body only. Length alone would accept
   // an equal-length rewrite, so the body is fingerprinted as well.
   const body = e => {
     if (!e) return null;
-    const rendered = e.querySelector('.markdown');
+    const rendered = messageBody(e);
     return (rendered || e).innerText;
   };
   const fingerprint = e => {
@@ -56,10 +56,9 @@ export function copyMarkdownScript(messageId: string) {
   const message = find();
   if (!message) return { ok: false, reason: 'MESSAGE_NOT_RENDERED' };
   const before = fingerprint(message);
-  const turn = message.closest('[data-testid^="conversation-turn-"]')
-    || message.closest('[data-turn="assistant"]');
+  const turn = messageTurn(message);
   if (!turn) return { ok: false, reason: 'TURN_NOT_FOUND' };
-  const buttons = Array.from(turn.querySelectorAll(${JSON.stringify(COPY_SELECTOR)}));
+  const buttons = messageCopies(message);
   if (buttons.length !== 1)
     return { ok: false, reason: buttons.length ? 'COPY_BUTTON_AMBIGUOUS' : 'COPY_BUTTON_MISSING' };
   const clipboard = navigator.clipboard;

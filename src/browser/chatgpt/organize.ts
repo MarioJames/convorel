@@ -1,5 +1,7 @@
 // Adapted from MarioJames/skill-foundry 19f0122 (Apache-2.0); modified for standalone use.
-import { RENAME_ICON } from "./controls.ts";
+import { RENAME_ICON, RENAME_MASK_PREFIX, RENAME_NAMES } from "./controls.ts";
+import { CONTROL_NAME_DOM } from "./dom.ts";
+import type { RunControl } from "../semantic.ts";
 import { conversationId } from "./page.ts";
 
 export interface OrganizationPreferences {
@@ -9,6 +11,7 @@ export interface OrganizationPreferences {
   language: "en" | "zh";
 }
 interface Browser {
+  runControl?: RunControl;
   session: string;
   run: (...args: string[]) => Promise<any>;
   read: () => Promise<any>;
@@ -126,12 +129,21 @@ export function metadataFromResponse(
 // Only inspect this conversation's visible controls. Selectors are returned, never prompts/account data.
 export function organizationUiScript(id: string) {
   return `(() => {
+    ${CONTROL_NAME_DOM}
     const visible = e => !!e && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
-    const links = Array.from(document.querySelectorAll('a[data-sidebar-item]')).filter(e => {
+    const links = Array.from(document.querySelectorAll('a[data-sidebar-item], nav a[data-interactive-row-link]')).filter(e => {
       try { return new URL(e.href).pathname.endsWith('/c/' + ${JSON.stringify(id)}); } catch { return false; }
     });
     let options = 'button[data-conversation-options-trigger=' + JSON.stringify(${JSON.stringify(id)}) + ']';
     let buttons = Array.from(document.querySelectorAll(options)).filter(visible);
+    if (!buttons.length) {
+      const rows = links.filter(visible).map(e => e.closest('[role="group"]')).filter(Boolean);
+      const candidates = [...new Set(rows.flatMap(row => Array.from(row.querySelectorAll('button[aria-haspopup="menu"]')).filter(e => e.closest('[role="group"]') === row && visible(e))))];
+      if (candidates.length === 1 && candidates[0].id) {
+        options = '#' + CSS.escape(candidates[0].id);
+        buttons = candidates;
+      }
+    }
     if (!buttons.length) {
       // The current conversation header remains available when history is virtualized or collapsed.
       options = 'button[data-testid="conversation-options-button"][id=' + JSON.stringify('conversation-options-' + ${JSON.stringify(id)}) + ']';
@@ -140,15 +152,23 @@ export function organizationUiScript(id: string) {
     const button = buttons.length === 1 ? buttons[0] : null;
     const panel = links.length === 1 ? links[0].closest('[id]') : null;
     const expanders = panel ? Array.from(document.querySelectorAll('[aria-controls]')).filter(e => visible(e) && e.getAttribute('aria-controls') === panel.id && e.getAttribute('aria-expanded') === 'false') : [];
-    const expand = expanders.length === 1 ? '[aria-controls=' + JSON.stringify(panel.id) + ']' : null;
+    let expand = expanders.length === 1 ? '[aria-controls=' + JSON.stringify(panel.id) + ']' : null;
+    if (!expand && !button) {
+      const selector = 'main header button[aria-controls="browser-sidebar-popover"][aria-expanded="false"]';
+      if (Array.from(document.querySelectorAll(selector)).filter(visible).length === 1) expand = selector;
+    }
     const menuSelector = button?.id ? '[role="menu"][aria-labelledby=' + JSON.stringify(button.id) + ']' : null;
     const menus = menuSelector ? Array.from(document.querySelectorAll(menuSelector)).filter(visible) : [];
-    const renameSelector = menuSelector ? menuSelector + ' [role="menuitem"]:has(svg path[d=' + JSON.stringify(${JSON.stringify(RENAME_ICON)}) + '])' : null;
+    const renameSelector = menuSelector ? menuSelector + ' [role="menuitem"]:is(:has(svg path[d=' + JSON.stringify(${JSON.stringify(RENAME_ICON)}) + ']), :has([style*=' + JSON.stringify(${JSON.stringify(RENAME_MASK_PREFIX)}) + ']))' : null;
     const actions = menus.length === 1 ? Array.from(document.querySelectorAll(renameSelector)).filter(visible) : [];
     const rename = actions.length === 1 && actions[0].getAttribute('aria-disabled') !== 'true' ? renameSelector : null;
-    const inputs = Array.from(document.querySelectorAll('input[name="title-editor"]')).filter(visible);
+    const namedActions = menus.length === 1 ? Array.from(menus[0].querySelectorAll('[role="menuitem"]')).filter(e => visible(e) && ${JSON.stringify(RENAME_NAMES)}.includes(controlName(e)) && e.getAttribute('aria-disabled') !== 'true') : [];
+    const inputSelector = 'input[name="title-editor"], [role="dialog"][aria-modal="true"] form:has(button[type="submit"]) input:not([type])';
+    const inputs = Array.from(document.querySelectorAll(inputSelector)).filter(visible);
     return { options: button ? options : null, expand, rename,
-      titleInput: inputs.length === 1 ? 'input[name="title-editor"]' : null };
+      menu: menus.length === 1 ? menuSelector : null,
+      renameName: namedActions.length === 1 ? controlName(namedActions[0]) : null,
+      titleInput: inputs.length === 1 ? (inputs[0].name === 'title-editor' ? 'input[name="title-editor"]' : '[role="dialog"][aria-modal="true"] form:has(button[type="submit"]) input:not([type])') : null };
   })()`;
 }
 
@@ -366,17 +386,38 @@ export async function organizeConversation(
   if (current.title !== title) {
     await openOptions();
     const menu = await waitUi(
-      (s) => !!s.rename,
+      (s) => !!s.rename || !!s.renameName,
       "Conversation rename action unavailable or ambiguous",
     );
     progress.phase = "editing";
     onProgress(progress);
-    await act("click", menu.rename);
+    if (b.runControl && menu.menu) {
+      const page = await guard();
+      await b.runControl("click", {
+        scope: menu.menu,
+        role: "menuitem",
+        names: RENAME_NAMES,
+        fallback: menu.rename,
+        url: page.url,
+      });
+    } else await act("click", menu.rename);
     const state = await waitUi(
       (s) => !!s.titleInput,
       "Chat title input unavailable",
     );
-    await act("fill", state.titleInput, title);
+    if (b.runControl) {
+      const page = await guard();
+      await b.runControl(
+        "fill",
+        {
+          scope: '[role="dialog"] form, input[name="title-editor"]',
+          role: "textbox",
+          fallback: state.titleInput,
+          url: page.url,
+        },
+        title,
+      );
+    } else await act("fill", state.titleInput, title);
     const previous = new Set<string>(
       (await requests()).map((r: any) => r.requestId),
     );

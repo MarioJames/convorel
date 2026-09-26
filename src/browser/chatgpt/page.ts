@@ -1,5 +1,6 @@
+import { COMPOSER_DOM, MESSAGE_DOM } from "./dom.ts";
 // Adapted from MarioJames/skill-foundry 19f0122 (Apache-2.0); modified for standalone use.
-import { COPY_SELECTOR, STOP_SELECTOR } from "./controls.ts";
+import { SEND_NAMES, STOP_NAMES, STOP_SELECTOR } from "./controls.ts";
 export interface Message {
   id: string;
   role: string;
@@ -112,13 +113,14 @@ export function classify(
 }
 // Verified against the live composer. The submit ID alone also identifies other composer actions.
 export const SEND_SELECTOR =
-  'form:has(#prompt-textarea) button[data-testid="send-button"][type="submit"]';
+  'form:has(#prompt-textarea) button[data-testid="send-button"][type="submit"], form[data-chatgpt-composer] button[type="submit"]:has(svg path[d^="M9.33467 16.6663"])';
 export const PAGE_SCRIPT = `(() => {
   const main = document.querySelector('main');
   const visible = e => !!e && e.getClientRects().length > 0;
   const buttons = Array.from(document.querySelectorAll('button')).filter(visible);
   const label = e => (e.getAttribute('aria-label') || e.textContent || '').trim();
-  const messageNodes = Array.from(document.querySelectorAll('[data-message-author-role]'));
+  ${MESSAGE_DOM}
+  const messageNodes = messageNodesFor();
   const failures = new Map();
   const failurePanels = [];
   // Generation errors can be plain paragraphs outside the assistant message body.
@@ -142,13 +144,11 @@ export const PAGE_SCRIPT = `(() => {
   }
   messageNodes.sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
   const messages = messageNodes.map(e => {
-    const turn = e.closest('[data-turn="assistant"], [data-testid^="conversation-turn-"]');
-    const actions = turn ? Array.from(turn.querySelectorAll('button')) : [];
-    return { id: e.getAttribute('data-message-id') || '', role: e.getAttribute('data-message-author-role') || 'assistant',
-      text: (e.querySelector('.markdown') || e).innerText,
+    return { id: messageId(e), role: messageRole(e),
+      text: messageBody(e).innerText,
       error: failures.get(e),
       model: e.getAttribute('data-message-model-slug') || undefined,
-      final: actions.some(b => b.matches(${JSON.stringify(COPY_SELECTOR)})) };
+      final: messageCopies(e).length === 1 };
   });
   const challenge = /^(Just a moment|Security Verification)/i.test(document.title)
     || Array.from(document.querySelectorAll('iframe')).some(e => /cloudflare security challenge/i.test(e.title));
@@ -156,8 +156,10 @@ export const PAGE_SCRIPT = `(() => {
   const alerts = Array.from(document.querySelectorAll('[role="alert"]')).filter(e => visible(e)
     && !failurePanels.some(panel => panel.contains(e) || e.contains(panel))).map(e => e.innerText).join(' ');
   const error = /something went wrong|unable to load conversation|出了点问题|无法加载对话/i.test(alerts);
-  const composer = document.querySelector('#prompt-textarea');
-  const sends = Array.from(document.querySelectorAll(${JSON.stringify(SEND_SELECTOR)})).filter(visible);
+  ${COMPOSER_DOM}
+  const composerButtons = Array.from(composer?.closest('form')?.querySelectorAll('button') || []).filter(visible);
+  const semanticSends = composerButtons.filter(e => e.type === 'submit' && ${JSON.stringify(SEND_NAMES)}.includes(controlName(e)));
+  const sends = semanticSends.length ? semanticSends : Array.from(document.querySelectorAll(${JSON.stringify(SEND_SELECTOR)})).filter(visible);
   const send = sends.length === 1 ? sends[0] : undefined;
   const rect = send?.getBoundingClientRect();
   const hit = rect && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
@@ -165,7 +167,7 @@ export const PAGE_SCRIPT = `(() => {
     && !!hit && (hit === send || send.contains(hit));
   const path = location.pathname.split('/');
   const conversation = path.at(-2) === 'c' ? path.at(-1) : null;
-  const sidebarLinks = conversation ? Array.from(document.querySelectorAll('a[data-sidebar-item]')).filter(e => {
+  const sidebarLinks = conversation ? Array.from(document.querySelectorAll('a[data-sidebar-item], nav a[data-interactive-row-link]')).filter(e => {
     if (!visible(e) || getComputedStyle(e).visibility === 'hidden') return false;
     try {
       const link = new URL(e.href);
@@ -180,9 +182,9 @@ export const PAGE_SCRIPT = `(() => {
     ? Array.from(composer.children).map(e => Array.from(e.childNodes).filter(n => !(n.nodeType === 1 && n.classList?.contains('ProseMirror-trailingBreak'))).map(n => n.nodeName === 'BR' ? '\\n' : n.textContent).join('')).join('\\n')
     : composer?.innerText || '');
   return { url:location.href, title:document.title, visibleConversationTitle, messages,
-    generating:buttons.some(e => e.matches(${JSON.stringify(STOP_SELECTOR)})),
+    generating:composerButtons.some(e => ${JSON.stringify(STOP_NAMES)}.includes(controlName(e))) || buttons.some(e => e.matches(${JSON.stringify(STOP_SELECTOR)})),
     draft, sendReady,
     attachments: Array.from(document.querySelectorAll('button')).some(e => visible(e) && /remove (file|attachment)|移除附件|删除附件/i.test(label(e))),
-    hasComposer:!!document.querySelector('[contenteditable="true"][role="textbox"], #prompt-textarea'),
+    hasComposer:!!composer,
     blocked:challenge ? 'Human verification required' : login ? 'Login required' : error ? 'Conversation UI reported an error' : null };
 })()`;

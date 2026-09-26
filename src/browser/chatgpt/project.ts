@@ -1,3 +1,4 @@
+import { COMPOSER_DOM, MESSAGE_DOM } from "./dom.ts";
 import { projectId } from "./organize.ts";
 import type { PageState } from "./page.ts";
 
@@ -5,13 +6,14 @@ import type { PageState } from "./page.ts";
 export function projectComposerScript() {
   return `(() => {
     const visible = e => e.getClientRects().length > 0 && !e.closest('[aria-hidden="true"], [inert]');
-    const composers = Array.from(document.querySelectorAll('main form #prompt-textarea')).filter(visible);
+    ${COMPOSER_DOM}
+    ${MESSAGE_DOM}
     const headings = Array.from(document.querySelectorAll('main h1')).filter(visible);
     return {
       url: location.href,
       composerCount: composers.length,
       editable: composers.length === 1 && !composers[0].matches(':disabled, [readonly], [aria-disabled="true"]') && (composers[0].isContentEditable || composers[0].tagName === 'TEXTAREA'),
-      messageCount: document.querySelectorAll('main [data-message-author-role]').length,
+      messageCount: messageNodesFor().length,
       projectName: headings.length === 1 ? headings[0].textContent.trim() : null,
     };
   })()`;

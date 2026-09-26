@@ -1,4 +1,5 @@
 import { State } from "../storage/state.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   browserPacingSettings,
   MAX_BROWSER_PACING_MS,
@@ -22,9 +23,10 @@ const key = "browser-pacing";
 // Bounded contention: one command has a 25s transport timeout, plus <=10s pacing.
 const lockWaitMs = 60_000;
 
-/** Shares only timestamps across CLI instances. The lock spans one action, not
- * a page/session lifecycle; observations never acquire it. */
+/** Shares only timestamps across CLI instances. The lock spans an action and
+ * its menu inspection, not a page lifecycle; observations never acquire it. */
 export class BrowserPacing {
+  private readonly lease = new AsyncLocalStorage<{ active: boolean }>();
   private readonly store: State;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<unknown>;
@@ -46,47 +48,63 @@ export class BrowserPacing {
       ? Math.max(actionIntervalMs, navigationWaitMs)
       : actionIntervalMs;
     let dispatched = false;
-    try {
-      return await this.store.locked(
+    const parent = this.lease.getStore();
+    const nested = parent?.active === true;
+    const locked = async (work: () => Promise<T>) => {
+      if (nested) return work();
+      return this.store.locked(
         async () => {
-          if (this.store.has(key)) {
-            const record = this.store.read<{
-              version: 1;
-              nextActionAt: number;
-            }>(key);
-            if (
-              !Number.isSafeInteger(record.nextActionAt) ||
-              record.nextActionAt < 0
-            )
-              throw new Error("BROWSER_PACING_METADATA_INVALID");
-            // Clock skew must not turn a stale private record into an unbounded wait.
-            const delay = Math.min(
-              MAX_BROWSER_PACING_MS,
-              Math.max(0, record.nextActionAt - this.now()),
-            );
-            if (delay) await this.sleep(delay);
-          }
-          const recordNext = () =>
-            this.store.write(key, {
-              version: 1,
-              nextActionAt: this.now() + interval,
-            });
-          // Persist before dispatch as well as after completion (including errors).
-          recordNext();
-          dispatched = true;
+          const lease = { active: true };
           try {
-            return await execute();
+            return await this.lease.run(lease, work);
           } finally {
-            recordNext();
+            lease.active = false;
           }
         },
         key,
         lockWaitMs,
       );
+    };
+    try {
+      return await locked(async () => {
+        if (this.store.has(key)) {
+          const record = this.store.read<{
+            version: 1;
+            nextActionAt: number;
+          }>(key);
+          if (
+            !Number.isSafeInteger(record.nextActionAt) ||
+            record.nextActionAt < 0
+          )
+            throw new Error("BROWSER_PACING_METADATA_INVALID");
+          // Clock skew must not turn a stale private record into an unbounded wait.
+          const delay = Math.min(
+            MAX_BROWSER_PACING_MS,
+            Math.max(0, record.nextActionAt - this.now()),
+          );
+          if (delay) await this.sleep(delay);
+        }
+        const recordNext = () =>
+          this.store.write(key, {
+            version: 1,
+            nextActionAt: this.now() + interval,
+          });
+        // Persist before dispatch as well as after completion (including errors).
+        recordNext();
+        dispatched = true;
+        try {
+          return await execute();
+        } finally {
+          recordNext();
+        }
+      });
     } finally {
-      // Keep stabilization outside the lock. Other readers are never delayed;
-      // other writers honor the durable timestamp through their own lock.
-      if (dispatched && navigation) await this.sleep(navigationWaitMs);
+      // Top-level navigation settles outside its lock. A nested inspection
+      // remains inside the parent's lease; read-only observation is immediate.
+      // A model inspection can open/close a menu in a checked Send preflight.
+      // Reuse its held lease and settle before returning to the outer dispatch.
+      if (dispatched && nested) await this.sleep(interval);
+      else if (dispatched && navigation) await this.sleep(navigationWaitMs);
     }
   }
 }

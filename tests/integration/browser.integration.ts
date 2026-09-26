@@ -31,6 +31,7 @@ import { projectComposerScript } from "../../src/browser/chatgpt/project.ts";
 import { setRuntimePaths } from "../../src/paths.ts";
 import { writePreference } from "../../src/config/preferences.ts";
 import { copyMarkdownScript } from "../../src/browser/chatgpt/copy.ts";
+import { redesignedControls } from "./redesigned-controls.ts";
 
 const chromePath = process.argv[process.argv.indexOf("--chrome") + 1];
 if (!process.argv.includes("--chrome") || !chromePath)
@@ -108,6 +109,7 @@ try {
   const initial = await list();
   assert.equal(initial.length, 1);
   controller = new Browser(cdp, root);
+  await redesignedControls(controller);
   namespace = controller.namespace;
   const tabs = (...args: string[]) => controller.tabs(...args);
   await tabs("list");
@@ -411,7 +413,7 @@ try {
     (await localizedPage.run("eval", organizationUiScript("review-a"))).result
       .rename,
     null,
-    "unknown icon fails closed even with a matching label",
+    "an unknown icon is unavailable as a structural fallback",
   );
   await localizedPage.run(
     "eval",
@@ -680,6 +682,18 @@ try {
       const page = await controller.page(target);
       return {
         ...page,
+        runControl: (
+          action: Parameters<typeof page.runControl>[0],
+          control: Parameters<typeof page.runControl>[1],
+          value?: string,
+          beforeDispatch?: () => Promise<void>,
+        ) =>
+          page.runControl(
+            action,
+            { ...control, url: fixtureUrl },
+            value,
+            beforeDispatch,
+          ),
         read: async () => ({ ...(await page.read()), url: followupUrl }),
       };
     },
