@@ -145,7 +145,7 @@ export const PAGE_SCRIPT = `(() => {
   messageNodes.sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
   const messages = messageNodes.map(e => {
     return { id: messageId(e), role: messageRole(e),
-      text: messageBody(e).innerText,
+      text: messageText(e),
       error: failures.get(e),
       model: e.getAttribute('data-message-model-slug') || undefined,
       final: messageCopies(e).length === 1 };

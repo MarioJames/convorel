@@ -435,6 +435,138 @@ try {
     "header fallback must bind the exact conversation ID",
   );
   await tabs("close", localizedTab.targetId);
+  // A hidden stale application root must not look like a later user turn.
+  const duplicateTab = await tabs(
+    "new",
+    "data:text/html," +
+      encodeURIComponent(`
+    <main><div data-message-author-role="user" data-message-id="duplicate-user">Prompt</div>
+    <article data-turn="assistant"><div data-message-author-role="assistant" data-message-id="duplicate-answer"><div class="markdown">Answer</div></div>
+    <button data-testid="copy-turn-action-button">Copy</button></article></main>
+    <div style="display:none"><main><div data-message-author-role="user" data-message-id="duplicate-user">Prompt</div></main></div>
+    <form><div id="prompt-textarea" contenteditable="true"></div></form>`),
+  );
+  const duplicatePage = await controller.page(duplicateTab.targetId);
+  const duplicateOutcome = async () => {
+    const p = await duplicatePage.read();
+    return classify(
+      { ...p, url: "https://chatgpt.com/c/duplicate" },
+      "https://chatgpt.com/c/duplicate",
+      "duplicate-user",
+    );
+  };
+  assert.equal(
+    (await duplicatePage.read()).messages.length,
+    2,
+    "hidden duplicate roots are excluded",
+  );
+  assert.equal((await duplicateOutcome()).state, "complete");
+  await duplicatePage.run(
+    "eval",
+    `document.querySelector('main').append(document.querySelector('[data-message-id="duplicate-user"]').cloneNode(true))`,
+  );
+  assert.equal(
+    (await duplicatePage.read()).messages.length,
+    2,
+    "identical visible message IDs have one identity",
+  );
+  assert.equal(
+    (await duplicateOutcome()).state,
+    "complete",
+    "identical user duplicate is not a later turn",
+  );
+  await duplicatePage.run(
+    "eval",
+    `document.querySelector('main').lastElementChild.setAttribute('data-message-id','different-user')`,
+  );
+  assert.equal(
+    (await duplicateOutcome()).state,
+    "superseded",
+    "a different later user still supersedes",
+  );
+  await duplicatePage.run(
+    "eval",
+    `{const e=document.querySelector('main').lastElementChild; e.setAttribute('data-message-id','duplicate-user'); e.textContent='Conflicting prompt'}`,
+  );
+  await assert.rejects(
+    () => duplicatePage.read(),
+    /MESSAGE_ID_CONFLICT/,
+    "same ID with different content remains ambiguous",
+  );
+  await duplicatePage.run(
+    "eval",
+    `{const e=document.querySelector('main').lastElementChild; e.textContent='Prompt'; e.setAttribute('data-message-author-role','assistant')}`,
+  );
+  await assert.rejects(
+    () => duplicatePage.read(),
+    /MESSAGE_ID_CONFLICT/,
+    "same ID cannot change roles",
+  );
+  await duplicatePage.run(
+    "eval",
+    `{const e=document.querySelector('main').lastElementChild; e.setAttribute('data-message-author-role','user'); e.removeAttribute('data-message-id')}`,
+  );
+  assert.equal(
+    (await duplicateOutcome()).state,
+    "superseded",
+    "unknown user identities are not deduplicated",
+  );
+  await tabs("close", duplicateTab.targetId);
+  // A lazily mounted code toolbar action is UI, not an edit to the answer.
+  const toolbarTab = await tabs(
+    "new",
+    "data:text/html," +
+      encodeURIComponent(`
+      <main><article data-turn="assistant">
+      <div data-message-author-role="assistant" data-message-id="toolbar-answer"><div class="markdown">
+      <p>Run is part of the answer.</p>
+      <div data-markdown-copy="code-block"><div data-markdown-copy="exclude" style="display:flex"><span>Python</span><div id="code-actions"></div></div><pre>print("Run")</pre></div>
+      <p>Run</p></div></div><button data-testid="copy-turn-action-button">Copy</button>
+      </article></main>`),
+  );
+  const toolbarPage = await controller.page(toolbarTab.targetId);
+  const toolbarBefore = (await toolbarPage.read()).messages[0]!.text;
+  assert.ok(toolbarBefore.includes('print("Run")'));
+  assert.ok(toolbarBefore.includes("Run is part of the answer."));
+  await toolbarPage.run(
+    "eval",
+    `document.querySelector('#code-actions').innerHTML='<button aria-label="Run code" style="color:red!important">Run</button><button role="button">Copy</button>'; window.toolbarHtml=document.querySelector('main').outerHTML`,
+  );
+  assert.equal(
+    (await toolbarPage.read()).messages[0]!.text,
+    toolbarBefore,
+    "code toolbar controls cannot change an already completed answer",
+  );
+  const restoredToolbar = (
+    await toolbarPage.run(
+      "eval",
+      `({actual: document.querySelector('main').outerHTML, expected: window.toolbarHtml})`,
+    )
+  ).result;
+  assert.equal(
+    restoredToolbar.actual,
+    restoredToolbar.expected,
+    "reading restores the original DOM and inline styles",
+  );
+  await toolbarPage.run(
+    "eval",
+    `{const a=document.querySelector('[data-message-id]'); const copy=a.cloneNode(true); copy.querySelector('#code-actions').replaceChildren(); a.after(copy)}`,
+  );
+  assert.equal(
+    (await toolbarPage.read()).messages.length,
+    1,
+    "duplicate identity ignores only toolbar UI differences",
+  );
+  await toolbarPage.run(
+    "eval",
+    `document.querySelector('[data-message-id]').nextElementSibling.querySelector('pre').textContent='print("Changed")'`,
+  );
+  await assert.rejects(
+    () => toolbarPage.read(),
+    /MESSAGE_ID_CONFLICT/,
+    "actual code changes still conflict even with toolbar differences",
+  );
+  await tabs("close", toolbarTab.targetId);
   // file: is a secure context for the real Clipboard API, unlike data: fixtures.
   const copyTab = await tabs(
     "new",
@@ -784,6 +916,8 @@ try {
       sidebarFixtureUrl,
       pageErrors: pageErrors.errors,
       checks: [
+        "hidden/identical duplicate messages, conflicting IDs, and real later users",
+        "dynamic code toolbar actions excluded, literal Run preserved, exact DOM restored",
         "list",
         "create",
         "read",

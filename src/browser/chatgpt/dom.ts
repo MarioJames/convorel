@@ -9,13 +9,33 @@ export const CONTROL_NAME_DOM = `
 /** Shared DOM identities for observation, draft editing and Markdown attribution. */
 export const MESSAGE_DOM = `
   ${CONTROL_NAME_DOM}
-  const messageNodesFor = () => Array.from(document.querySelectorAll(
-    '[data-message-author-role], [data-user-message-bubble], [data-chatgpt-selection-message-id]'
-  )).filter(e => !e.closest('[aria-hidden="true"], [inert]') && (
-    e.hasAttribute('data-message-author-role') ||
-    e.hasAttribute('data-user-message-bubble') ||
-    !!e.querySelector('[data-markdown-text-style="assistant-message"]')
-  ));
+  const messageNodesFor = () => {
+    const nodes = Array.from(document.querySelectorAll(
+      '[data-message-author-role], [data-user-message-bubble], [data-chatgpt-selection-message-id]'
+    )).filter(e => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden'
+      && !e.closest('[aria-hidden="true"], [inert]') && (
+        e.hasAttribute('data-message-author-role') ||
+        e.hasAttribute('data-user-message-bubble') ||
+        !!e.querySelector('[data-markdown-text-style="assistant-message"]')
+      ));
+    const identities = new Map();
+    return nodes.filter(e => {
+      const id = messageId(e);
+      if (!id) return true;
+      const prior = identities.get(id);
+      if (!prior) {
+        identities.set(id, e);
+        return true;
+      }
+      if (messageRole(prior) !== messageRole(e)
+        || messageContent(prior) !== messageContent(e)
+        || prior.getAttribute('data-message-model-slug') !== e.getAttribute('data-message-model-slug'))
+        throw new Error('MESSAGE_ID_CONFLICT');
+      // Keep one exact representation. Never merge completion/copy controls
+      // from different roots or discard unidentified later user messages.
+      return false;
+    });
+  };
   const messageRole = e => e.getAttribute('data-message-author-role')
     || (e.hasAttribute('data-user-message-bubble') ? 'user' : 'assistant');
   const messageId = e => {
@@ -26,6 +46,31 @@ export const MESSAGE_DOM = `
   };
   const messageBody = e => e.querySelector('[data-markdown-text-style="assistant-message"], .markdown')
     || e.querySelector('[data-search-result-target]') || e;
+  const codeActions = '[data-markdown-copy="code-block"] [data-markdown-copy="exclude"] button, '
+    + '[data-markdown-copy="code-block"] [data-markdown-copy="exclude"] [role="button"]';
+  const messageContent = e => {
+    const body = messageBody(e).cloneNode(true);
+    body.querySelectorAll(codeActions).forEach(control => control.remove());
+    return body.textContent;
+  };
+  const messageText = e => {
+    const body = messageBody(e);
+    // ChatGPT lazily adds Run/Copy actions inside code-block toolbars. Preserve
+    // the rendered language label and whitespace, but exclude those controls.
+    // A detached clone loses innerText layout semantics. Mask only these UI
+    // nodes synchronously and restore exact styles before returning or repaint.
+    const controls = Array.from(body.querySelectorAll(codeActions));
+    const styles = controls.map(control => [control, control.getAttribute('style')]);
+    try {
+      for (const [control] of styles) control.setAttribute('style', 'display:none!important');
+      return body.innerText;
+    } finally {
+      for (const [control, style] of styles) {
+        if (style === null) control.removeAttribute('style');
+        else control.setAttribute('style', style);
+      }
+    }
+  };
   const messageTurn = e => e.closest('[data-turn-key]')
     || e.closest('[data-turn="assistant"], [data-testid^="conversation-turn-"]');
   const messageCopies = e => {

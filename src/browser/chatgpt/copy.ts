@@ -37,11 +37,7 @@ export function copyMarkdownScript(messageId: string) {
   // The turn's own action bar sits inside the message element and its label changes on
   // click, so identity is measured on the rendered body only. Length alone would accept
   // an equal-length rewrite, so the body is fingerprinted as well.
-  const body = e => {
-    if (!e) return null;
-    const rendered = messageBody(e);
-    return (rendered || e).innerText;
-  };
+  const body = e => e ? messageText(e) : null;
   const fingerprint = e => {
     const text = body(e);
     if (typeof text !== 'string') return null;
