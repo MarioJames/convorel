@@ -308,3 +308,11 @@ TypeScript 与 261 项浏览器/会话单元测试通过。隔离浏览器夹具
 真实验证页、临时观察页、独立探查页和自有 adapter daemon 均已关闭；finish 回执为 `closed: true`、`organizationPending: false`、`replyChanged: false`。隔离测试的 Chrome、临时 profile 与 HTTP 服务由测试脚本释放。保留共享 Chrome 登录态、原有任务页、隧道及持久任务/内容库；本次没有清空用户数据。
 
 0.6.2 发布前，`bun run check` 通过 TypeScript 与 423 项测试（46 个文件），`format:check`、`test:package` 和 Linux x64 `test:install` 均通过。独立安装验收使用临时配置和状态，覆盖校验和拒绝、升级失败保留旧版本、技能资源一致性及安装/卸载保留用户数据。
+
+## 2026-09-29 — 0.6.3 发布验证
+
+发布范围为 0.6.2 之后的消息身份修复：忽略隐藏节点并合并完全一致的重复消息，拒绝同 ID 的内容冲突；读取正文及复制指纹时排除代码块动态工具栏操作，同时保留正文中的 Run 字样并还原控件样式。
+
+`bun run check` 通过 TypeScript 与 423 项测试（46 个文件），`format:check`、`test:package`、Linux x64 `test:install` 均通过。安装验收覆盖真实独立程序、升级失败保护、旧版本保留及安装/卸载保留用户数据。
+
+`bun run test:browser --chrome /usr/bin/google-chrome` 在独立无头浏览器中通过，覆盖重复消息、冲突 ID、后续用户消息及动态代码工具栏回归。侧栏夹具 APP_URL 为 `http://127.0.0.1:43752/c/review-a`，页面错误为空；未单独采集全程控制台和网络错误，也未重跑真实 ChatGPT 登录会话。测试自有 Chrome、CDP 端口、daemon、HTTP 服务及一次性 profile 均已释放；现有登录浏览器和持久会话数据未操作。
