@@ -325,3 +325,11 @@ TypeScript 与 261 项浏览器/会话单元测试通过。隔离浏览器夹具
 `bun run check` 通过 TypeScript 与 423 项测试（46 个文件），`format:check`、`test:package`、Linux x64 `test:install` 均通过。安装验收覆盖真实独立程序、升级失败保护、旧版本保留及安装/卸载保留用户数据。
 
 `bun run test:browser --chrome /usr/bin/google-chrome` 在独立无头浏览器中通过，覆盖重复消息、冲突 ID、后续用户消息及动态代码工具栏回归。侧栏夹具 APP_URL 为 `http://127.0.0.1:43752/c/review-a`，页面错误为空；未单独采集全程控制台和网络错误，也未重跑真实 ChatGPT 登录会话。测试自有 Chrome、CDP 端口、daemon、HTTP 服务及一次性 profile 均已释放；现有登录浏览器和持久会话数据未操作。
+
+## 2026-10-07 — 0.7.0 发布验证
+
+发布范围为 0.6.3 之后的托管 Chrome profile：`init` 不带 `--cdp` 时创建专用 profile 并等待一次 ChatGPT 登录，绑定保存 Chrome 路径与 profile；需要浏览器的命令按需拉起，`browser start` 续接登录，外部 `--cdp` 模式不变。
+
+`bun run check` 通过 TypeScript 与 432 项测试（47 个文件），`format:check`、`test:package`、Linux x64 `test:install` 均通过。安装验收覆盖真实独立程序、升级失败保护、旧版本保留、外部绑定下 doctor 报告失效 CDP 以及安装/卸载保留用户数据。
+
+`bun run test:browser --chrome /usr/bin/google-chrome` 在独立无头浏览器中通过，侧栏夹具 APP_URL 为 `http://127.0.0.1:44784/c/review-a`，页面错误为空，初始/峰值/收尾页数为 1/3/1。托管浏览器的真实 Chrome 与登录验证见本文件开头的 2026-10-07 记录。测试自有 Chrome、CDP 端口、daemon、HTTP 服务及一次性 profile 均已释放；用户的托管登录浏览器和持久会话数据未操作。
