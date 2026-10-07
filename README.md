@@ -70,24 +70,15 @@ Linux 安装与升级需要 util-linux 的 `flock`；macOS 使用系统自带的
 
 也可以从源码运行（需要 Bun ≥ 1.3、Node ≥ 24）：`git clone https://github.com/MarioJames/convorel.git`，下文命令把 `convorel` 换成 `bun --no-env-file src/cli.ts`，初始化改用 `bun --no-env-file setup.ts`。
 
-### 2. 启动专用浏览器并登录
-
-在另一个终端运行，使用独立的持久化 profile 保存登录态：
-
-```bash
-google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/.local/share/convorel-chrome" https://chatgpt.com
-```
-
-macOS 将 `google-chrome` 替换为 `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`；同样使用独立 profile。
-
-### 3. 初始化并安装审查技能
+### 2. 初始化、登录并安装审查技能
 
 替换为实际代码工作区：
 
 ```bash
-convorel setup --workspace /absolute/path/to/your-project --cdp 9222 --agent codex
+convorel setup --workspace /absolute/path/to/your-project --agent codex
 ```
+
+Convorel 会在状态目录中创建专用 Chrome profile，以有头模式打开 ChatGPT 并等待你登录一次；端口与 profile 写入配置，之后浏览器未运行时由 Convorel 自动拉起。登录超时可用 `convorel browser start` 继续。需要使用自己启动的 Chrome 时，改为传入 `--cdp PORT`。
 
 使用 Claude Code 时，将 `codex` 换成 `claude-code`；同时安装用 `codex,claude-code`。已有同名技能时会停止并提示，不会覆盖个人修改。
 

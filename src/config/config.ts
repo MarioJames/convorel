@@ -1,10 +1,13 @@
 import { preference } from "./preferences.ts";
 import { projectId } from "../browser/chatgpt/organize.ts";
+import type { ManagedBrowser } from "../browser/managed.ts";
 
 export interface Config {
   version: 1;
   workspace: string;
   cdp: string;
+  /** Present when Convorel launches its own Chrome profile for `cdp`. */
+  browser?: ManagedBrowser;
   model?: string;
   projectUrl?: string;
   projectName?: string;

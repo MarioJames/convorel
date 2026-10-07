@@ -20,6 +20,7 @@ import { runUpgrade, runVersion } from "./release.ts";
 import { isServiceCommand, runService } from "./service.ts";
 import { runMcp } from "./mcp.ts";
 import { runInit, runSetup } from "./init.ts";
+import { ensureManagedBrowser, runBrowser } from "./browser.ts";
 import { runSkills } from "./skills.ts";
 import { runConfig } from "./config.ts";
 import { runRecoverLock } from "./locks.ts";
@@ -81,6 +82,7 @@ export async function main(args = process.argv.slice(2)) {
   const store = getStore();
   if (area === "recover-lock") return runRecoverLock(args, store, print);
   if (area === "init") return runInit(args, store, print);
+  if (area === "browser") return runBrowser(sub, rest, store, print);
   if (
     area === "conversation" &&
     (sub === "list" || sub === "status" || sub === "result")
@@ -108,6 +110,7 @@ export async function main(args = process.argv.slice(2)) {
     assertOutsideSharedRoots(store.root);
     assertOutsideSharedRoots(preferenceDirectory());
     const config = store.read<Config>("config");
+    await ensureManagedBrowser(config, store);
     return runConversation(
       sub!,
       conversationOptions!,
@@ -126,6 +129,7 @@ export async function main(args = process.argv.slice(2)) {
   access.assertPrivate(store.root);
   access.assertPrivate(preferenceDirectory());
   const roots = access.roots.map((ws) => ws.root);
+  if (area !== "tunnel") await ensureManagedBrowser(config, store);
   if (area === "doctor") return runDoctor(config, browser, roots, print);
   if (area === "tunnel") return runTunnelArea(sub, rest, config, roots, print);
   if (area !== "conversation") throw new Error("UNKNOWN_COMMAND");

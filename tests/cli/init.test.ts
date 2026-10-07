@@ -101,3 +101,69 @@ test("unconfigured preferences do not inherit old persisted model or project def
   expect(config.projectUrl).toBeUndefined();
   expect(config.projectName).toBeUndefined();
 });
+
+test("browser ownership options are validated before any binding is written", () => {
+  const root = mkdtempSync(join(tmpdir(), "convorel-init-browser-"));
+  const state = new State(join(root, "state")),
+    workspace = join(root, "workspace"),
+    bin = join(root, "bin");
+  mkdirSync(workspace);
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, "agent-browser"),
+    "#!/bin/sh\nprintf '%s\\n' 'agent-browser 9.9.9'\n",
+    { mode: 0o755 },
+  );
+  const run = (...args: string[]) =>
+    Bun.spawnSync(
+      [
+        process.execPath,
+        "--no-env-file",
+        join(import.meta.dir, "../../src/cli.ts"),
+        "--state-dir",
+        state.root,
+        "--config-dir",
+        join(root, "prefs"),
+        ...args,
+      ],
+      // No Chrome on PATH.
+      { env: { ...childEnv(), PATH: bin }, stdout: "pipe", stderr: "pipe" },
+    );
+  try {
+    const noChrome = run("init", "--workspace", workspace);
+    expect(noChrome.exitCode).toBe(1);
+    expect(noChrome.stderr.toString()).toContain("CHROME_NOT_FOUND");
+    const mixed = run(
+      "init",
+      "--workspace",
+      workspace,
+      "--cdp",
+      "9222",
+      "--chrome",
+      "/usr/bin/google-chrome",
+    );
+    expect(mixed.exitCode).toBe(1);
+    expect(mixed.stderr.toString()).toContain("MANAGED_BROWSER_OPTION");
+    const foreignHost = run(
+      "init",
+      "--workspace",
+      workspace,
+      "--browser",
+      "managed",
+      "--cdp",
+      "http://localhost:9222",
+    );
+    expect(foreignHost.exitCode).toBe(1);
+    expect(foreignHost.stderr.toString()).toContain("INVALID_CDP");
+    expect(state.has("config")).toBe(false);
+
+    const external = run("init", "--workspace", workspace, "--cdp", "9222");
+    expect(external.exitCode, external.stderr.toString()).toBe(0);
+    expect(state.read<any>("config").browser).toBeUndefined();
+    const start = run("browser", "start");
+    expect(start.exitCode).toBe(1);
+    expect(start.stderr.toString()).toContain("BROWSER_NOT_MANAGED");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -18,26 +18,27 @@ The installer downloads the release archive for the current architecture, verifi
 
 From a source checkout, `bun --no-env-file setup.ts ...` runs `bun install --frozen-lockfile` before the same initialization. The commands below use the installed `convorel`; in a checkout substitute `bun --no-env-file src/cli.ts`.
 
-## Start a browser
+## Initialize and sign in
 
-Example for Linux; use the actual installed binary. On macOS, replace `google-chrome` with `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`:
+```bash
+convorel setup --workspace /absolute/path/to/repo
+```
+
+Without `--cdp`, Convorel manages the browser. It creates a dedicated profile in `chrome/` under the state directory, starts headed Chrome (`google-chrome`, `google-chrome-stable`, `chromium` or `chromium-browser` on `PATH`, Google Chrome.app on macOS, or `--chrome PATH`) with CDP bound to `127.0.0.1` (9222, or a free port when taken), opens ChatGPT and waits until you sign in once (`--login-timeout`, default 600 seconds). The port, Chrome path and profile are saved in the binding before the wait; `convorel browser start` resumes an unfinished sign-in. Later commands start that profile again when its endpoint is down and refuse an endpoint answered by another browser. Chrome output goes to `chrome.log` in the state directory. Chrome 136+ only opens CDP for a non-default data directory: [Chrome documentation](https://developer.chrome.com/blog/remote-debugging-port). Do not reuse browser-harness’s bundled headless Chromium, session, or profile for ChatGPT review.
+
+To use a Chrome you start yourself, pass its endpoint:
 
 ```bash
 google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
   --user-data-dir="$HOME/.local/share/convorel-chrome" https://chatgpt.com
-```
-
-Use headed Chrome over CDP and sign in manually. Keep this dedicated profile to preserve login. Do not reuse browser-harness’s bundled headless Chromium, session, or profile for ChatGPT review. Chrome 136+ requires a non-default data directory when these remote-debugging switches are used: [Chrome documentation](https://developer.chrome.com/blog/remote-debugging-port).
-
-## Initialize
-
-```bash
 convorel setup --workspace /absolute/path/to/repo --cdp 9222
 ```
 
+An existing external binding switches to a managed browser on the same port with `convorel init --workspace SAME_PATH --browser managed --cdp SAME_PORT` after closing the old browser; the new profile needs one sign-in.
+
 Preferences default to `~/.config/convorel/preferences.json`; task state defaults to `~/.local/share/convorel`. Use `convorel [--config-dir PATH] [--state-dir PATH] COMMAND` to select different directories, with global options before the command. Keep both directories outside MCP-shared roots. Configuration comes only from the preferences file, with no environment override. Use separate configuration and state directories for independently configured workspaces.
 
-`setup` finds `agent-browser` on `PATH`, saves that path, initializes private configuration, optionally installs the skill and checks CDP/MCP; the source bootstrap additionally installs locked dependencies. Agent skill installation is described below. Missing `agent-browser` stops initialization before the workspace binding is saved. Missing CDP produces a nonzero doctor result while preserving configuration. Bun, Git, Chrome and agent-browser remain user-managed prerequisites.
+`setup` finds `agent-browser` on `PATH`, saves that path, initializes private configuration, optionally installs the skill and checks CDP/MCP; the source bootstrap additionally installs locked dependencies. Agent skill installation is described below. Missing `agent-browser` stops initialization before the workspace binding is saved. A missing Chrome stops a managed initialization before the binding is saved; with `--cdp`, an unreachable endpoint produces a nonzero doctor result while preserving configuration. Bun, Git, Chrome and agent-browser remain user-managed prerequisites.
 
 ## Manage a persistent conversation
 
@@ -130,7 +131,7 @@ bun --no-env-file src/cli.ts skills install --dir /absolute/custom-skills
 bun --no-env-file src/cli.ts skills install --agent codex,claude-code
 bun --no-env-file src/cli.ts skills install --agent claude-code --scope project --cwd /absolute/project
 # 或在源码初始化时选择安装
-bun --no-env-file setup.ts --workspace /absolute/project --cdp 9222 --agent codex
+bun --no-env-file setup.ts --workspace /absolute/project --agent codex
 ```
 
 该入口固定调用 `skills@1.6.0`，安装源是当前 Convorel 安装包的 `skills` 目录；安装前检查公共 `.agents/skills/chatgpt-review` 与所选 Agent 路径（包括旧 `.codex/skills/chatgpt-review`），存在目录或链接即拒绝覆盖；安装后核验 `SKILL.md`，不另建技能注册表。Codex 使用公共目录，Claude Code 链接到同一技能。`setup --agent` 在初始化后安装，再 doctor；不传 `--agent` 则不安装。已有个人技能保持原状，安装不更改其内容。

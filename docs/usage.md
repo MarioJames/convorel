@@ -40,24 +40,25 @@ curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh
 
 从源码运行时：`git clone https://github.com/MarioJames/convorel.git`，以下命令把 `convorel` 换成 `bun --no-env-file src/cli.ts`，初始化改用 `bun --no-env-file setup.ts`（它会先执行 `bun install --frozen-lockfile`）。
 
-### 2. 准备浏览器
-
-在另一个终端启动 Chrome，随后手动登录 ChatGPT；已有 Convorel 专用的有头 Chrome CDP 会话可以直接复用。验收侧 browser-harness 使用独立的自带 Chromium + 无头模式，其配置、session 和 profile 不用于这里。
-
-```bash
-google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/.local/share/convorel-chrome" https://chatgpt.com
-```
-
-将 `google-chrome` 换成实际安装的浏览器命令。调试端口只绑定本机，并使用单独的持久化 profile；[Chrome 136+ 要求使用非默认数据目录](https://developer.chrome.com/blog/remote-debugging-port)。
-
-### 3. 初始化
+### 2. 初始化并登录
 
 将 `--workspace` 替换为代码工作区的绝对路径：
 
 ```bash
+convorel setup --workspace /absolute/path/to/your-project
+```
+
+默认由 Convorel 管理浏览器：在状态目录的 `chrome/` 下创建专用 profile，查找 `PATH` 中的 `google-chrome`、`google-chrome-stable`、`chromium` 或 `chromium-browser`（macOS 为 Google Chrome.app，也可用 `--chrome PATH` 指定），以有头模式打开 ChatGPT，等待你在该窗口登录一次（默认 600 秒，可用 `--login-timeout` 调整）。调试端口只绑定 `127.0.0.1`，默认 9222，被占用时选空闲端口；端口、Chrome 路径和 profile 写入状态目录的 `config.json`。绑定先于登录等待保存，超时后用 `convorel browser start` 继续登录。之后需要浏览器的命令发现端点未运行时会自动拉起这个 profile；端口被其他浏览器占用时拒绝连接，不会误用。Chrome 输出写入状态目录的 `chrome.log`。[Chrome 136+ 要求使用非默认数据目录](https://developer.chrome.com/blog/remote-debugging-port)，因此不能复用日常 Chrome 的默认 profile。验收侧 browser-harness 的自带 Chromium、session 和 profile 不用于这里。
+
+使用自己启动的 Chrome 时，传入 `--cdp 9222`（外部模式），由你负责启动和登录：
+
+```bash
+google-chrome --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/.local/share/convorel-chrome" https://chatgpt.com
 convorel setup --workspace /absolute/path/to/your-project --cdp 9222
 ```
+
+已有外部绑定可在同一端口改为托管：先关闭原浏览器，再运行 `convorel init --workspace 原路径 --browser managed --cdp 原端口`；新 profile 需重新登录一次。
 
 `setup` 将配置写入 `~/.local/share/convorel/`，并检查 CDP 和本地 MCP（源码方式还会先安装锁定的本地依赖）。模型和项目偏好仅从 `convorel config` 管理的偏好文件读取，新任务保存当时的配置。
 
@@ -147,7 +148,7 @@ convorel skills install --dir /absolute/custom-skills
 bun --no-env-file src/cli.ts skills install --agent claude-code --scope project --cwd /absolute/path/to/project
 ```
 
-安装入口直接复制本安装包内置的完整技能资源；预检公共 `.agents/skills` 及所选 Agent 的目标路径（包含旧 `.codex/skills`），发现同名目录或链接就拒绝覆盖，安装后核验技能入口。也可在初始化时增加 `--agent codex`，例如 `bun --no-env-file setup.ts --workspace /absolute/path/to/project --cdp 9222 --agent codex`：初始化后安装技能，再执行 doctor。省略 `--agent` 不安装技能。
+安装入口直接复制本安装包内置的完整技能资源；预检公共 `.agents/skills` 及所选 Agent 的目标路径（包含旧 `.codex/skills`），发现同名目录或链接就拒绝覆盖，安装后核验技能入口。也可在初始化时增加 `--agent codex`，例如 `bun --no-env-file setup.ts --workspace /absolute/path/to/project --agent codex`：初始化后安装技能，再执行 doctor。省略 `--agent` 不安装技能。
 
 `--dir` 与 `--agent`、`--scope`、`--cwd` 互斥，同样拒绝覆盖已有技能，不创建 Agent 专用链接。
 

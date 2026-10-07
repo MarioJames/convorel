@@ -14,11 +14,13 @@ convorel --help
 
 审查侧使用普通 Google Chrome 的有头窗口，通过 loopback CDP 连接。启动参数不得包含 `--headless`，登录 profile 与验收侧自带 Chromium 分开。Convorel 始终显式连接其已配置 CDP，不从 browser-harness 继承可执行路径、窗口模式或 profile；不得为审查修改验收侧 agent-browser 配置。
 
-已有需求沿用其状态目录和配置目录。新绑定使用 MCP 允许根之外的持久私有目录，按用户授权的代码工作区和实际 loopback CDP 初始化：
+已有需求沿用其状态目录和配置目录。新绑定使用 MCP 允许根之外的持久私有目录，按用户授权的代码工作区初始化；默认由 Convorel 创建专用 Chrome profile 并等待用户登录一次，之后按需自动拉起：
 
 ```bash
-convorel init --workspace /absolute/project --cdp 9222
+convorel init --workspace /absolute/project
 ```
+
+托管浏览器显示 `Login required` 或登录超时时，运行 `convorel browser start` 并请用户在打开的窗口登录；不要替用户输入凭据，也不要改用其他 profile。用户自己启动的浏览器使用 `--cdp PORT` 绑定，由用户负责启动和登录。
 
 Convorel 仅从偏好文件读取配置，不接受环境覆盖，不把个人配置写入技能。用 `convorel config set project.url URL` 和 `convorel config set project.name NAME` 成对设置项目；不要只提供其中一个或猜项目 URL。模型可选，默认 Latest + Power 末端 Pro；用户明确选择的模型通过 `convorel config set model MODEL` 配置。其他配置键为 `tunnel.id`（`tunnel_` 加 32 位十六进制）、`tunnel.apiKey`、`mcp.roots`（1–16 个绝对路径或 `~/` 路径的 JSON 数组）、`mcp.memoryRoots`（明确共享的规范 OpenViking URI 子树 JSON 数组，未设置不开放）、`mcp.memoryExecutable`（可选的 ov CLI 绝对路径）、`mcp.execDependencyRoots`（允许隔离构建读取的 node_modules 完整目录 JSON 数组，未设置不挂载）、`browser.executable`（`init` 保存的 agent-browser 绝对路径）、`browser.serial`（`true`/`false`）、`browser.actionIntervalMs`（默认 750，1–10000）、`browser.navigationWaitMs`（默认 1500，1–10000）、`locks.taskWaitMs`（正整数）、`release.baseUrl`（不含凭据、query、fragment 的 HTTP(S) URL）和 `diagnostics.enabled`（未设置或 `true` 时记录，`false` 关闭；其他值或偏好读取失败也关闭）。`diagnostics --task ID [--run UUID] [--fields LIST]` 读取私有诊断库，不打开浏览器，也不授权重试或重发。
 

@@ -1,5 +1,14 @@
 # 验证记录
 
+## 2026-10-07：托管 Chrome profile
+
+`init` 不带 `--cdp` 时由 Convorel 管理浏览器：在状态目录 `chrome/` 创建专用 profile，以有头模式在 `127.0.0.1` 打开 CDP（默认 9222，占用时选空闲端口），打开 ChatGPT 并等待用户登录；绑定在等待前写入 `config.json` 的 `browser`（Chrome 路径与 profile）。需要浏览器的命令在端点不可达时于 `browser` 锁内拉起该 profile；端点由其他浏览器进程占用时拒绝。新增 `browser start` 续接登录。带 `--cdp` 的外部模式行为不变，`--browser managed --cdp PORT` 让已有绑定在原端口改为托管。
+
+- `bun run check`：TypeScript 与 432 项测试通过。新增用例覆盖托管端点只接受 IPv4 loopback、Chrome 有头启动参数、按进程命令行判断 profile/端口归属（路径与端口前缀不误判、子进程不计）、已运行时复用与外部占用拒绝、未运行时只拉起一次并等待 CDP、启动超时报告日志路径、登录等待的状态去重与截止时间，以及 CLI 在写入绑定前拒绝缺少 Chrome、外部模式混用托管参数和非 127.0.0.1 端点，外部绑定执行 `browser start` 被拒绝。
+- 真实浏览器（Linux x64 WSL2、Google Chrome 153.0.8010.36、agent-browser 0.34.0）：一次性状态目录中托管 init 在 9222 拉起有头 Chrome，真实 chatgpt.com 依次报告加载中与 `Login required`，25 秒后 `CHATGPT_LOGIN_TIMEOUT`，绑定已保存；`browser start` 复用同一进程；结束进程后 `doctor` 自动拉起并连接；另一 profile 占用的 9876 被 `MANAGED_BROWSER_PORT_IN_USE` 拒绝；不带 `--cdp` 重跑 init 保留已存端口。登录态脚本经 agent-browser `eval` 等待 Promise，未登录返回 false。
+- 实测发现 Chrome 153 使用固定端口时不写 `DevToolsActivePort`，最初基于该文件的归属判断会拒绝自己拉起的浏览器，已改为匹配浏览器主进程的 `--user-data-dir` 与 `--remote-debugging-port` 参数。
+- 开发者本机将既有 9876 外部绑定迁移为托管：用户在新 profile 手动登录一次后 init 返回 `login: "ready"`；随后 `doctor` 连接成功、本地 MCP 通过，标签页停在设置页时 UI 报告 `unrecognized_or_loading`。未向 ChatGPT 发送测试消息。一次性 profile、Chrome 进程和临时目录均已回收。
+
 ## 2026-09-22：目录与模块重组
 
 以 `2e4ba20` 的命名检查点/释放实现为源码基线，保留同期 `9e524a5` 的 v0.2.5 版本提交。`src/` 按 cli、conversation、archive、browser、workspace、mcp、config、storage、service、distribution 分组，根目录 TypeScript 文件从 31 个减少到 6 个；`tests/` 根目录从 29 个减少到仅保留 preload，显式浏览器/打包/安装/升级验收归入 integration。根 cli.ts 与 runtime.ts 的安装和子进程重入位置保持稳定，临时兼容转发入口已删除。
