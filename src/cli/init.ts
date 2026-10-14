@@ -18,11 +18,7 @@ import { command, required } from "../command.ts";
 import { writePreference } from "../config/preferences.ts";
 import { installSkill } from "../distribution/skills.ts";
 import { opts, type Printer } from "./args.ts";
-import {
-  ensureManagedBrowser,
-  loginTimeoutMs,
-  waitForChatgptLogin,
-} from "./browser.ts";
+import { loginTimeoutMs, signInManagedBrowser } from "./browser.ts";
 
 const INIT_OPTIONS = ["workspace", "cdp", "browser", "chrome", "login-timeout"];
 
@@ -84,8 +80,7 @@ export async function runInit(args: string[], store: State, print: Printer) {
   }, "config");
   // The binding is saved first, so an unfinished sign-in resumes with browser start.
   if (browser) {
-    await ensureManagedBrowser(config, store);
-    await waitForChatgptLogin(config, store, timeoutMs);
+    await signInManagedBrowser(config, store, timeoutMs);
   }
   print({
     ...effective,

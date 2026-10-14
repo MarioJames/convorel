@@ -20,6 +20,7 @@ export const settingKeys = [
   "project.name",
   "browser.executable",
   "browser.serial",
+  "browser.headless",
   "browser.actionIntervalMs",
   "browser.navigationWaitMs",
   "locks.taskWaitMs",
@@ -106,6 +107,8 @@ function validate(key: SettingKey, value: string) {
     throw new Error(`INVALID_VALUE: ${key} must not contain a newline or NUL`);
   if (key === "browser.serial" && !["true", "false"].includes(value))
     throw new Error("INVALID_VALUE: browser.serial must be true or false");
+  if (key === "browser.headless" && !["true", "false"].includes(value))
+    throw new Error("INVALID_VALUE: browser.headless must be true or false");
   if (key === "diagnostics.enabled" && !["true", "false"].includes(value))
     throw new Error("INVALID_VALUE: diagnostics.enabled must be true or false");
   if (key === "browser.actionIntervalMs" || key === "browser.navigationWaitMs")

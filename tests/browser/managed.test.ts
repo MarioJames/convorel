@@ -6,9 +6,12 @@ import {
   CHATGPT_URL,
   chatgptLoginProbe,
   chromeArgs,
+  headedUserAgent,
+  managedBrowserProcess,
   managedEndpoint,
   profileOwnsEndpoint,
   startManagedBrowser,
+  stopManagedBrowser,
   waitForLogin,
   type LoginStatus,
 } from "../../src/browser/managed.ts";
@@ -47,6 +50,86 @@ test("Chrome starts headed on its own profile with CDP bound to loopback", () =>
   expect(args).toContain("--remote-debugging-port=9333");
   expect(args.at(-1)).toBe(CHATGPT_URL);
   expect(args.some((arg) => arg.startsWith("--headless"))).toBe(false);
+});
+
+test("a headless start keeps the headed user agent of the installed Chrome and a desktop-sized window", async () => {
+  expect(headedUserAgent("Google Chrome 155.0.8059.39\n", "linux")).toBe(
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  );
+  expect(headedUserAgent("Google Chrome 155.0.8059.39", "darwin")).toContain(
+    "Macintosh; Intel Mac OS X 10_15_7",
+  );
+  expect(() => headedUserAgent("Chromium")).toThrow("CHROME_VERSION_UNKNOWN");
+  const root = mkdtempSync(join(tmpdir(), "convorel-managed-"));
+  try {
+    const launches: string[][] = [];
+    let up = false;
+    await startManagedBrowser(
+      { executable: "/chrome", userDataDir: join(root, "profile") },
+      "http://127.0.0.1:9444",
+      "/log",
+      {
+        ...fakeClock(),
+        reachable: async () => up,
+        version: () => "Google Chrome 155.0.8059.39",
+        launch: (_, args) => {
+          launches.push(args);
+          up = true;
+        },
+      },
+      true,
+    );
+    expect(launches[0]).toContain("--headless=new");
+    expect(launches[0]).toContain("--window-size=1600,1000");
+    expect(
+      launches[0]!.find((arg) => arg.startsWith("--user-agent=")),
+    ).not.toContain("Headless");
+    expect(launches[0]!.at(-1)).toBe(CHATGPT_URL);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("only the managed profile's own browser process is found and stopped", async () => {
+  const browser = { executable: "/chrome", userDataDir: "/state/chrome" };
+  const cdp = "http://127.0.0.1:9222";
+  const list = [
+    {
+      pid: 10,
+      line: "/chrome --user-data-dir=/other --remote-debugging-port=9222",
+    },
+    {
+      pid: 11,
+      line: "/chrome --type=renderer --user-data-dir=/state/chrome --remote-debugging-port=9222",
+    },
+    {
+      pid: 12,
+      line: "/chrome --user-data-dir=/state/chrome --remote-debugging-port=9222 --headless=new",
+    },
+  ];
+  expect(managedBrowserProcess(browser, cdp, list)).toEqual({
+    pid: 12,
+    headless: true,
+  });
+  expect(managedBrowserProcess(browser, cdp, list.slice(0, 2))).toBeUndefined();
+
+  let running = true;
+  const killed: number[] = [];
+  expect(
+    await stopManagedBrowser(browser, cdp, {
+      find: () => (running ? { pid: 12 } : undefined),
+      kill: (pid) => {
+        killed.push(pid);
+        running = false;
+      },
+      reachable: async () => false,
+      sleep: async () => undefined,
+    }),
+  ).toBe(true);
+  expect(killed).toEqual([12]);
+  expect(
+    await stopManagedBrowser(browser, cdp, { find: () => undefined }),
+  ).toBe(false);
 });
 
 test("the profile owns an endpoint only when its browser process opened that port", () => {

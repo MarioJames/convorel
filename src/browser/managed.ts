@@ -62,10 +62,26 @@ export function managedEndpoint(port: number | string) {
   return url.origin;
 }
 
+/** Headless Chrome announces itself as HeadlessChrome, which ChatGPT
+ * challenges; keep the user agent a headed Chrome of the same version sends. */
+export function headedUserAgent(
+  version: string,
+  platform: NodeJS.Platform = process.platform,
+) {
+  const major = version.match(/(\d+)\.\d+\.\d+\.\d+/)?.[1];
+  if (!major) throw new Error("CHROME_VERSION_UNKNOWN: " + version.trim());
+  const system =
+    platform === "darwin"
+      ? "Macintosh; Intel Mac OS X 10_15_7"
+      : "X11; Linux x86_64";
+  return `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
+
 export function chromeArgs(
   browser: ManagedBrowser,
   cdp: string,
   urls: string[] = [],
+  headless?: { userAgent: string },
 ) {
   return [
     `--user-data-dir=${browser.userDataDir}`,
@@ -73,6 +89,14 @@ export function chromeArgs(
     `--remote-debugging-port=${new URL(cdp).port}`,
     "--no-first-run",
     "--no-default-browser-check",
+    // The sidebar collapses in the default 800x600 headless window.
+    ...(headless
+      ? [
+          "--headless=new",
+          "--window-size=1600,1000",
+          `--user-agent=${headless.userAgent}`,
+        ]
+      : []),
     ...urls,
   ];
 }
@@ -110,17 +134,29 @@ export async function choosePort() {
   });
 }
 
-function commandLines() {
+export type ProcessLine = { pid: number; line: string };
+
+function processes(): ProcessLine[] {
   if (process.platform === "darwin")
-    return execFileSync("/bin/ps", ["-A", "-ww", "-o", "command="], {
+    return execFileSync("/bin/ps", ["-A", "-ww", "-o", "pid=,command="], {
       encoding: "utf8",
-    }).split("\n");
+    })
+      .split("\n")
+      .flatMap((row) => {
+        const match = row.match(/^\s*(\d+)\s+(.*)$/);
+        return match ? [{ pid: Number(match[1]), line: match[2]! }] : [];
+      });
   return readdirSync("/proc")
     .filter((pid) => /^\d+$/.test(pid))
     .flatMap((pid) => {
       try {
         return [
-          readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" "),
+          {
+            pid: Number(pid),
+            line: readFileSync(`/proc/${pid}/cmdline`, "utf8")
+              .split("\0")
+              .join(" "),
+          },
         ];
       } catch {
         return [];
@@ -130,18 +166,33 @@ function commandLines() {
 
 /** CDP does not reveal the profile, so match the Chrome browser process that
  * was started with both this profile and this port. */
-export function profileOwnsEndpoint(
+export function managedBrowserProcess(
   browser: ManagedBrowser,
   cdp: string,
-  lines: string[] = commandLines(),
+  list: ProcessLine[] = processes(),
 ) {
   const has = (line: string, arg: string) =>
     (" " + line.trim() + " ").includes(" " + arg + " ");
-  return lines.some(
-    (line) =>
+  const found = list.find(
+    ({ line }) =>
       !line.includes(" --type=") &&
       has(line, `--user-data-dir=${browser.userDataDir}`) &&
       has(line, `--remote-debugging-port=${new URL(cdp).port}`),
+  );
+  return (
+    found && { pid: found.pid, headless: has(found.line, "--headless=new") }
+  );
+}
+
+export function profileOwnsEndpoint(
+  browser: ManagedBrowser,
+  cdp: string,
+  lines: string[] = processes().map((p) => p.line),
+) {
+  return !!managedBrowserProcess(
+    browser,
+    cdp,
+    lines.map((line) => ({ pid: 0, line })),
   );
 }
 
@@ -185,6 +236,7 @@ export type StartDependencies = {
   sleep?: (ms: number) => Promise<unknown>;
   now?: () => number;
   timeoutMs?: number;
+  version?: (executable: string) => string;
 };
 
 /** Start the managed profile unless its endpoint already answers. Another
@@ -194,6 +246,7 @@ export async function startManagedBrowser(
   cdp: string,
   logPath: string,
   dependencies: StartDependencies = {},
+  headless = false,
 ) {
   const {
     launch = spawnChrome,
@@ -202,6 +255,8 @@ export async function startManagedBrowser(
     sleep = Bun.sleep,
     now = Date.now,
     timeoutMs = 30_000,
+    version = (executable: string) =>
+      execFileSync(executable, ["--version"], { encoding: "utf8" }),
   } = dependencies;
   if (await reachable(cdp)) {
     if (!owns(browser, cdp))
@@ -211,7 +266,18 @@ export async function startManagedBrowser(
     return { launched: false };
   }
   mkdirSync(browser.userDataDir, { recursive: true, mode: 0o700 });
-  launch(browser.executable, chromeArgs(browser, cdp, [CHATGPT_URL]), logPath);
+  launch(
+    browser.executable,
+    chromeArgs(
+      browser,
+      cdp,
+      [CHATGPT_URL],
+      headless
+        ? { userAgent: headedUserAgent(version(browser.executable)) }
+        : undefined,
+    ),
+    logPath,
+  );
   const deadline = now() + timeoutMs;
   while (now() < deadline) {
     await sleep(250);
@@ -220,6 +286,36 @@ export async function startManagedBrowser(
   throw new Error(
     `MANAGED_BROWSER_START_FAILED: Chrome did not open ${cdp} within ${timeoutMs / 1000}s. ` +
       `If this profile is already open without remote debugging, close that window first. Log: ${logPath}`,
+  );
+}
+
+/** Stop only the Chrome process started with this profile and port, so the
+ * next start can switch between a window and headless mode. */
+export async function stopManagedBrowser(
+  browser: ManagedBrowser,
+  cdp: string,
+  dependencies: {
+    find?: () => { pid: number } | undefined;
+    kill?: (pid: number) => void;
+    reachable?: typeof cdpReachable;
+    sleep?: (ms: number) => Promise<unknown>;
+  } = {},
+) {
+  const {
+    find = () => managedBrowserProcess(browser, cdp),
+    kill = (pid: number) => process.kill(pid, "SIGTERM"),
+    reachable = cdpReachable,
+    sleep = Bun.sleep,
+  } = dependencies;
+  const owned = find();
+  if (!owned) return false;
+  kill(owned.pid);
+  for (let n = 0; n < 60; n++) {
+    if (!find() && !(await reachable(cdp))) return true;
+    await sleep(250);
+  }
+  throw new Error(
+    `MANAGED_BROWSER_STOP_FAILED: Chrome ${owned.pid} still holds ${cdp}`,
   );
 }
 

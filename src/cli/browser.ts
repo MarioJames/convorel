@@ -2,15 +2,20 @@ import { join } from "node:path";
 import { Browser } from "../browser/browser.ts";
 import {
   chatgptLoginProbe,
+  managedBrowserProcess,
   startManagedBrowser,
+  stopManagedBrowser,
   waitForLogin,
   type LoginStatus,
 } from "../browser/managed.ts";
+import { preference } from "../config/preferences.ts";
 import type { Config } from "../config/config.ts";
 import type { State } from "../storage/state.ts";
 import { opts, rejectUnknown, type Printer } from "./args.ts";
 
 const DEFAULT_LOGIN_TIMEOUT_SECONDS = 600;
+// A signed-in headless page settles within this; otherwise sign-in needs a window.
+const HEADLESS_LOGIN_CHECK_MS = 20_000;
 const LOGIN_HINTS: Record<Exclude<LoginStatus, "ready">, string> = {
   login:
     "Sign in to ChatGPT in the Chrome window Convorel opened. Convorel continues once you are signed in.",
@@ -30,7 +35,13 @@ export function loginTimeoutMs(value?: string) {
 
 /** Start the binding's own Chrome profile when its endpoint is down. An
  * external endpoint stays the user's to start. */
-export async function ensureManagedBrowser(config: Config, store: State) {
+const headlessPreferred = () => preference("browser.headless") === "true";
+
+export async function ensureManagedBrowser(
+  config: Config,
+  store: State,
+  headless = headlessPreferred(),
+) {
   if (!config.browser) return { launched: false };
   return store.locked(
     () =>
@@ -38,26 +49,72 @@ export async function ensureManagedBrowser(config: Config, store: State) {
         config.browser!,
         config.cdp,
         join(store.root, "chrome.log"),
+        {},
+        headless,
       ),
     "browser",
     60_000,
   );
 }
 
+async function restartManagedBrowser(
+  config: Config,
+  store: State,
+  headless: boolean,
+) {
+  await store.locked(
+    () => stopManagedBrowser(config.browser!, config.cdp),
+    "browser",
+    60_000,
+  );
+  return ensureManagedBrowser(config, store, headless);
+}
+
 export async function waitForChatgptLogin(
   config: Config,
   store: State,
   timeoutMs: number,
+  quiet = false,
 ) {
   const browser = new Browser(config.cdp, store.root);
   await browser.withSessionScope(() =>
     waitForLogin(chatgptLoginProbe(browser), {
       timeoutMs,
       onStatus: (status) => {
-        if (status !== "ready") console.error(LOGIN_HINTS[status]);
+        if (!quiet && status !== "ready") console.error(LOGIN_HINTS[status]);
       },
     }),
   );
+}
+
+/** Start the managed browser and wait until ChatGPT is signed in. Sign-in
+ * needs a window: a headless browser that is not signed in is restarted with
+ * one, and returns to headless afterwards when that is preferred. A window
+ * that was already open is left alone. */
+export async function signInManagedBrowser(
+  config: Config,
+  store: State,
+  timeoutMs: number,
+) {
+  let { launched } = await ensureManagedBrowser(config, store);
+  if (managedBrowserProcess(config.browser!, config.cdp)?.headless) {
+    try {
+      await waitForChatgptLogin(config, store, HEADLESS_LOGIN_CHECK_MS, true);
+      return { launched };
+    } catch (error) {
+      if (!String(error).includes("CHATGPT_LOGIN_TIMEOUT")) throw error;
+    }
+    await restartManagedBrowser(config, store, false);
+    launched = true;
+    await waitForChatgptLogin(config, store, timeoutMs);
+    if (headlessPreferred()) {
+      await restartManagedBrowser(config, store, true);
+      await waitForChatgptLogin(config, store, HEADLESS_LOGIN_CHECK_MS, true);
+    }
+    return { launched };
+  }
+  await waitForChatgptLogin(config, store, timeoutMs);
+  return { launched };
 }
 
 export async function runBrowser(
@@ -75,8 +132,7 @@ export async function runBrowser(
     throw new Error(
       `BROWSER_NOT_MANAGED: this binding uses your own browser at ${config.cdp}; start it yourself or run init --browser managed`,
     );
-  const { launched } = await ensureManagedBrowser(config, store);
-  await waitForChatgptLogin(config, store, timeoutMs);
+  const { launched } = await signInManagedBrowser(config, store, timeoutMs);
   print({
     cdp: config.cdp,
     profile: config.browser.userDataDir,

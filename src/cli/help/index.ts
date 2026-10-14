@@ -75,7 +75,7 @@ function root(): string {
     "bun --no-env-file setup.ts installs locked dependencies, then runs setup. convorel setup does not.",
     "",
     "Configuration keys: model, project.url, project.name, tunnel.id, tunnel.apiKey,",
-    "mcp.roots, browser.executable, browser.serial, browser.actionIntervalMs,",
+    "mcp.roots, browser.executable, browser.serial, browser.headless, browser.actionIntervalMs,",
     "browser.navigationWaitMs, locks.taskWaitMs, release.baseUrl, diagnostics.enabled.",
     "Run convorel config --help for the value rules.",
   ].join("\n");

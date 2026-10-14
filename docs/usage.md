@@ -48,7 +48,9 @@ curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh
 convorel setup --workspace /absolute/path/to/your-project
 ```
 
-默认由 Convorel 管理浏览器：在状态目录的 `chrome/` 下创建专用 profile，查找 `PATH` 中的 `google-chrome`、`google-chrome-stable`、`chromium` 或 `chromium-browser`（macOS 为 Google Chrome.app，也可用 `--chrome PATH` 指定），以有头模式打开 ChatGPT，等待你在该窗口登录一次（默认 600 秒，可用 `--login-timeout` 调整）。调试端口只绑定 `127.0.0.1`，默认 9222，被占用时选空闲端口；端口、Chrome 路径和 profile 写入状态目录的 `config.json`。绑定先于登录等待保存，超时后用 `convorel browser start` 继续登录。之后需要浏览器的命令发现端点未运行时会自动拉起这个 profile；端口被其他浏览器占用时拒绝连接，不会误用。Chrome 输出写入状态目录的 `chrome.log`。[Chrome 136+ 要求使用非默认数据目录](https://developer.chrome.com/blog/remote-debugging-port)，因此不能复用日常 Chrome 的默认 profile。验收侧 browser-harness 的自带 Chromium、session 和 profile 不用于这里。
+默认由 Convorel 管理浏览器：在状态目录的 `chrome/` 下创建专用 profile，查找 `PATH` 中的 `google-chrome`、`google-chrome-stable`、`chromium` 或 `chromium-browser`（macOS 为 Google Chrome.app，也可用 `--chrome PATH` 指定），以有头模式打开 ChatGPT，等待你在该窗口登录一次（默认 600 秒，可用 `--login-timeout` 调整）。调试端口只绑定 `127.0.0.1`，默认 9222，被占用时选空闲端口；端口、Chrome 路径和 profile 写入状态目录的 `config.json`。绑定先于登录等待保存，超时后用 `convorel browser start` 继续登录。之后需要浏览器的命令发现端点未运行时会自动拉起这个 profile；端口被其他浏览器占用时拒绝连接，不会误用。Chrome 输出写入状态目录的 `chrome.log`。
+
+不想让任务标签打断当前工作时，运行 `convorel config set browser.headless true`：之后自动拉起的托管 Chrome 无窗口运行，并沿用同版本有头 Chrome 的 User-Agent，避免被识别为无头浏览器。已打开的窗口不会被强制关闭，关闭后下次按需以无头方式启动。登录必须有窗口：`init` 或 `browser start` 发现无头实例未登录时，会停掉这个托管实例、打开窗口等待登录，完成后再切回无头。[Chrome 136+ 要求使用非默认数据目录](https://developer.chrome.com/blog/remote-debugging-port)，因此不能复用日常 Chrome 的默认 profile。验收侧 browser-harness 的自带 Chromium、session 和 profile 不用于这里。
 
 使用自己启动的 Chrome 时，传入 `--cdp 9222`（外部模式），由你负责启动和登录：
 
@@ -114,6 +116,7 @@ convorel --config-dir /private/config --state-dir /private/state conversation li
 | `mcp.roots`                    | 允许读取的目录 JSON 数组                                           |
 | `browser.executable`           | `init` 保存的 `agent-browser` 绝对路径，不是 Chrome 路径           |
 | `browser.serial`               | `true` 或 `false`。`true` 使用全局浏览器操作锁                     |
+| `browser.headless`             | `true` 或 `false`。`true` 时托管 Chrome 无窗口运行，登录仍打开窗口 |
 | `browser.actionIntervalMs`     | 动作间隔，1–10000 的整数毫秒，默认 400                             |
 | `browser.navigationWaitMs`     | 导航或新建页面后的等待，1–10000 的整数毫秒，默认 1500              |
 | `locks.taskWaitMs`             | 同任务操作锁的最大等待毫秒数，正整数                               |
