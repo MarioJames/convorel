@@ -57,6 +57,21 @@ export function projectId(value: string) {
     throw new Error("Expected an observed ChatGPT project URL");
   return match[1];
 }
+/** Until the server assigns an ID, a first message shows a client-side
+ * `/c/local-...` path in the project (or root) it was sent from. */
+export function isPendingConversationUrl(value: string, projectUrl?: string) {
+  const url = new URL(value);
+  const match = url.pathname.match(
+    /^(?:\/g\/(g-p-[a-z0-9]+)(?:-[^/]+)?)?\/c\/local-[^/]+$/i,
+  );
+  return (
+    url.origin === "https://chatgpt.com" &&
+    !url.search &&
+    !url.hash &&
+    !!match &&
+    match[1] === (projectUrl ? projectId(projectUrl) : undefined)
+  );
+}
 export function validatePreferences(value: OrganizationPreferences) {
   if (!!value.projectUrl !== !!value.projectName?.trim())
     throw new Error("Project URL and name must be configured together");

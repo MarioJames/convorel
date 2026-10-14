@@ -38,6 +38,18 @@ test("a submitted message can precede its persisted conversation URL without all
     "RUN_NOT_PREPARED",
   );
   const p = [...browser.pages.values()][0];
+  // ChatGPT shows a client-side ID until the server assigns the conversation.
+  p.url =
+    "https://chatgpt.com/c/local-chatgpt%3A88835360-10f4-4f4f-aefb-0bf72e78a9f6";
+  browser.targets[0].url = p.url;
+  const pending = await conversation.resume(first.id, first.currentRun);
+  expect(pending.url).toBeUndefined();
+  expect(pending.runs[0].state).toBe("waiting");
+  p.url = "https://chatgpt.com/g/g-p-other/c/local-chatgpt%3A1";
+  browser.targets[0].url = p.url;
+  await expect(conversation.resume(first.id, first.currentRun)).rejects.toThrow(
+    "CONVERSATION_CHANGED",
+  );
   p.url = "https://chatgpt.com/c/test-conversation";
   browser.targets[0].url = p.url;
   browser.complete();

@@ -4,6 +4,7 @@ import {
   PageNotIdleError,
   type PageState,
 } from "../browser/chatgpt/page.ts";
+import { isPendingConversationUrl } from "../browser/chatgpt/organize.ts";
 import { ActionNotDispatched, ObservationError } from "../browser/browser.ts";
 import { sha } from "../hash.ts";
 import { diagnosticCode } from "../storage/diagnostics.ts";
@@ -277,7 +278,10 @@ export function createObservation(ctx: ObservationContext) {
       try {
         conversationId(p.url);
       } catch {
-        if (p.url !== (t.config.projectUrl || "https://chatgpt.com/"))
+        if (
+          p.url !== (t.config.projectUrl || "https://chatgpt.com/") &&
+          !isPendingConversationUrl(p.url, t.config.projectUrl)
+        )
           throw new Error("CONVERSATION_CHANGED");
         r.state = "waiting";
         r.error =
