@@ -333,3 +333,11 @@ TypeScript 与 261 项浏览器/会话单元测试通过。隔离浏览器夹具
 `bun run check` 通过 TypeScript 与 432 项测试（47 个文件），`format:check`、`test:package`、Linux x64 `test:install` 均通过。安装验收覆盖真实独立程序、升级失败保护、旧版本保留、外部绑定下 doctor 报告失效 CDP 以及安装/卸载保留用户数据。
 
 `bun run test:browser --chrome /usr/bin/google-chrome` 在独立无头浏览器中通过，侧栏夹具 APP_URL 为 `http://127.0.0.1:44784/c/review-a`，页面错误为空，初始/峰值/收尾页数为 1/3/1。托管浏览器的真实 Chrome 与登录验证见本文件开头的 2026-10-07 记录。测试自有 Chrome、CDP 端口、daemon、HTTP 服务及一次性 profile 均已释放；用户的托管登录浏览器和持久会话数据未操作。
+
+## 2026-10-13 — 0.7.1 发布验证
+
+发布范围为 0.7.0 之后的登录等待修复：等待 ChatGPT 登录时只在开始时绑定一次 ChatGPT 标签，之后按 target ID 跟随；标签跳转到 Google 等身份提供方期间不读取页面、不新开标签，只有 ChatGPT 标签全部关闭时补开一次。修复前每 2 秒的轮询都会激活 ChatGPT 标签并在第三方登录页上重复新开标签，导致登录页被抢走焦点、无法完成登录。
+
+`bun run check` 通过 TypeScript 与 433 项测试（47 个文件），`format:check`、`test:package`、Linux x64 `test:install` 均通过。临时无头 Chrome 中用真实 `Browser` 对照：模拟登录页置前后连续 4 轮轮询，旧实现每轮都把登录页切到后台，新实现登录页始终保持 `visible`。
+
+`bun run test:browser --chrome /usr/bin/google-chrome` 在独立无头浏览器中通过，页面错误为空，初始/峰值/收尾页数为 1/3/1。测试自有 Chrome、CDP 端口、daemon、HTTP 服务及一次性 profile 均已释放；用户的托管登录浏览器和持久会话数据未操作。
