@@ -341,3 +341,11 @@ TypeScript 与 261 项浏览器/会话单元测试通过。隔离浏览器夹具
 `bun run check` 通过 TypeScript 与 433 项测试（47 个文件），`format:check`、`test:package`、Linux x64 `test:install` 均通过。临时无头 Chrome 中用真实 `Browser` 对照：模拟登录页置前后连续 4 轮轮询，旧实现每轮都把登录页切到后台，新实现登录页始终保持 `visible`。
 
 `bun run test:browser --chrome /usr/bin/google-chrome` 在独立无头浏览器中通过，页面错误为空，初始/峰值/收尾页数为 1/3/1。测试自有 Chrome、CDP 端口、daemon、HTTP 服务及一次性 profile 均已释放；用户的托管登录浏览器和持久会话数据未操作。
+
+## 2026-10-14 — 0.8.0 发布验证
+
+发布范围为 0.7.1 之后：`browser.headless=true` 时托管 Chrome 以无头模式运行（同版本有头 User-Agent、1600×1000 窗口），`init`/`browser start` 在无头实例未登录时改用窗口登录、完成后切回无头，已打开的窗口不强制关闭；发送后 ChatGPT 先显示 `/c/local-…` 临时会话地址时继续等待正式地址，不再判定为 `CONVERSATION_CHANGED`；项目会话同时出现在项目与 Recents 两行时命名使用第一行；Latest 已选中时不再重复选择和复核，默认动作间隔由 750ms 调为 400ms。
+
+`bun run check` 通过 TypeScript 与 436 项测试（47 个文件），`format:check`、`test:package`、Linux x64 `test:install` 均通过。`bun run test:browser --chrome /usr/bin/google-chrome` 在独立无头浏览器中通过，初始/峰值/收尾页数为 1/3/1。
+
+真实已登录托管 profile（loopback 9222）上：0.7.1 冒烟中复现侧栏双行导致命名重试、`/c/local-chatgpt%3A…` 导致运行停在 `needs_attention`；修复后两个停住的任务经 `resume` 恢复并完成命名与标签关闭。有头 Latest Pro 追踪中 start 由 13.0s 降至 8.2s，模型选择由约 4.6s 降至约 1.5s，整轮任务页 1 个、命名观察页 1 个、观察页刷新 2 次，结束后均关闭。无头 + Instant 全流程送达、回复、命名校验与标签关闭通过，全程无窗口；其间一次 `retry` 导航遇到 `COMMAND_TIMEOUT`，未发送，再次 `retry` 正常完成，未复现。
