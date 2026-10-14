@@ -166,6 +166,25 @@ export async function redesignedControls(browser: Browser) {
       ).result,
       "0926｜FIX｜页面验证",
     );
+    // A project conversation also listed under Recents has two rows.
+    await page.run(
+      "eval",
+      `document.querySelector('nav').insertAdjacentHTML('beforeend', '<div role="group" id="recent-row"><a data-interactive-row-link href="/g/g-p-x/c/redesigned">Review title</a><button id="recent-actions" aria-haspopup="menu">Actions</button></div>')`,
+    );
+    assert.equal(
+      (await page.run("eval", organizationUiScript("redesigned"))).result
+        .options,
+      "#chat-actions",
+    );
+    await page.run(
+      "eval",
+      `document.querySelector('#recent-row').insertAdjacentHTML('beforeend', '<button id="extra-actions" aria-haspopup="menu">More</button>')`,
+    );
+    assert.equal(
+      (await page.run("eval", organizationUiScript("redesigned"))).result
+        .options,
+      null,
+    );
     assert.equal(
       (await page.run("eval", organizationUiScript("missing"))).result.options,
       null,

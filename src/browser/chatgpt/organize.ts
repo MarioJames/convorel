@@ -137,8 +137,11 @@ export function organizationUiScript(id: string) {
     let options = 'button[data-conversation-options-trigger=' + JSON.stringify(${JSON.stringify(id)}) + ']';
     let buttons = Array.from(document.querySelectorAll(options)).filter(visible);
     if (!buttons.length) {
-      const rows = links.filter(visible).map(e => e.closest('[role="group"]')).filter(Boolean);
-      const candidates = [...new Set(rows.flatMap(row => Array.from(row.querySelectorAll('button[aria-haspopup="menu"]')).filter(e => e.closest('[role="group"]') === row && visible(e))))];
+      const rows = [...new Set(links.filter(visible).map(e => e.closest('[role="group"]')).filter(Boolean))];
+      const perRow = rows.map(row => Array.from(row.querySelectorAll('button[aria-haspopup="menu"]')).filter(e => e.closest('[role="group"]') === row && visible(e)));
+      // A project conversation can also be listed under Recents. Every such row
+      // acts on this conversation, so the first is used when each has one menu.
+      const candidates = perRow.length && perRow.every(menus => menus.length === 1) ? [perRow[0][0]] : [];
       if (candidates.length === 1 && candidates[0].id) {
         options = '#' + CSS.escape(candidates[0].id);
         buttons = candidates;
