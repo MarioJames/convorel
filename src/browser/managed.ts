@@ -231,29 +231,50 @@ const SESSION_SCRIPT = `(async () => {
   return !!(session && session.user);
 })()`;
 
-/** Read whether the ChatGPT tab is signed in, opening one when none exists. */
-export async function chatgptLoginStatus(
-  browser: Browser,
-): Promise<LoginStatus> {
-  const { tabs } = await browser.tabs("list");
-  const target = tabs.find(
-    (tab: any) =>
-      tab.url?.startsWith(CHATGPT_URL) ||
-      tab.url?.startsWith("https://auth.openai.com/"),
-  );
-  if (!target) {
-    await browser.tabs("new", CHATGPT_URL);
-    return "loading";
-  }
-  const page = await browser.page(target.targetId);
-  const state = await page.read();
-  if (state.blocked === "Login required") return "login";
-  if (state.blocked === "Human verification required") return "verification";
-  if (state.hasComposer && !state.blocked) return "ready";
-  // Settings and other signed-in pages have no composer.
-  if (!state.url.startsWith(CHATGPT_URL)) return "loading";
-  const session = await page.run("eval", SESSION_SCRIPT);
-  return session.result === true ? "ready" : "loading";
+const isChatgptUrl = (url: unknown) =>
+  typeof url === "string" &&
+  (url.startsWith(CHATGPT_URL) || url.startsWith("https://auth.openai.com/"));
+
+/**
+ * Poll whether the ChatGPT tab is signed in without taking focus from the
+ * person signing in. Binding a page activates its tab, so the tab is bound
+ * once and followed by target ID while sign-in moves it to an identity
+ * provider, which is never read. A tab is opened only when none is left.
+ */
+export function chatgptLoginProbe(
+  browser: Pick<Browser, "tabs" | "page">,
+): () => Promise<LoginStatus> {
+  let tracked:
+    | { targetId: string; page?: Awaited<ReturnType<Browser["page"]>> }
+    | undefined;
+  let opened = false;
+  return async () => {
+    const { tabs } = await browser.tabs("list");
+    let tab =
+      tracked && tabs.find((t: any) => t.targetId === tracked!.targetId);
+    if (!tab) {
+      tab = tabs.find((t: any) => isChatgptUrl(t.url));
+      if (!tab) {
+        if (!opened) await browser.tabs("new", CHATGPT_URL);
+        opened = true;
+        tracked = undefined;
+        return "loading";
+      }
+      opened = false;
+      tracked = { targetId: tab.targetId };
+    }
+    if (!isChatgptUrl(tab.url)) return "login";
+    tracked!.page ??= await browser.page(tab.targetId);
+    const page = tracked!.page;
+    const state = await page.read();
+    if (state.blocked === "Login required") return "login";
+    if (state.blocked === "Human verification required") return "verification";
+    if (state.hasComposer && !state.blocked) return "ready";
+    // Settings and other signed-in pages have no composer.
+    if (!state.url.startsWith(CHATGPT_URL)) return "loading";
+    const session = await page.run("eval", SESSION_SCRIPT);
+    return session.result === true ? "ready" : "loading";
+  };
 }
 
 export async function waitForLogin(

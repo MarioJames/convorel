@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CHATGPT_URL,
+  chatgptLoginProbe,
   chromeArgs,
   managedEndpoint,
   profileOwnsEndpoint,
@@ -170,4 +171,52 @@ test("login waiting stops at its deadline", async () => {
   await expect(
     waitForLogin(async () => "login", { ...fakeClock(), timeoutMs: 10_000 }),
   ).rejects.toThrow(/CHATGPT_LOGIN_TIMEOUT: still login/);
+});
+
+test("login polling binds the ChatGPT tab once and leaves the sign-in tab in front", async () => {
+  let tabs: { targetId: string; url: string }[] = [];
+  const bound: string[] = [];
+  const opened: string[] = [];
+  let signedIn = false;
+  const browser = {
+    tabs: async (op: string, url?: string) => {
+      if (op === "new") {
+        opened.push(url!);
+        return {};
+      }
+      return { tabs: tabs.map((t) => ({ ...t })) };
+    },
+    page: async (targetId: string) => {
+      bound.push(targetId);
+      return {
+        read: async () => ({
+          url: tabs.find((t) => t.targetId === targetId)!.url,
+          blocked: signedIn ? undefined : "Login required",
+          hasComposer: signedIn,
+        }),
+        run: async () => ({ result: signedIn }),
+      };
+    },
+  } as any;
+  const probe = chatgptLoginProbe(browser);
+
+  expect(await probe()).toBe("loading");
+  expect(await probe()).toBe("loading");
+  expect(opened).toEqual([CHATGPT_URL]);
+
+  tabs = [{ targetId: "T1", url: CHATGPT_URL }];
+  expect(await probe()).toBe("login");
+  tabs[0]!.url = "https://accounts.google.com/v3/signin/identifier";
+  expect(await probe()).toBe("login");
+  expect(await probe()).toBe("login");
+  expect(opened).toEqual([CHATGPT_URL]);
+
+  tabs[0]!.url = CHATGPT_URL;
+  signedIn = true;
+  expect(await probe()).toBe("ready");
+  expect(bound).toEqual(["T1"]);
+
+  tabs = [];
+  expect(await probe()).toBe("loading");
+  expect(opened).toEqual([CHATGPT_URL, CHATGPT_URL]);
 });

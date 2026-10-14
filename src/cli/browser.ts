@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Browser } from "../browser/browser.ts";
 import {
-  chatgptLoginStatus,
+  chatgptLoginProbe,
   startManagedBrowser,
   waitForLogin,
   type LoginStatus,
@@ -51,7 +51,7 @@ export async function waitForChatgptLogin(
 ) {
   const browser = new Browser(config.cdp, store.root);
   await browser.withSessionScope(() =>
-    waitForLogin(() => chatgptLoginStatus(browser), {
+    waitForLogin(chatgptLoginProbe(browser), {
       timeoutMs,
       onStatus: (status) => {
         if (status !== "ready") console.error(LOGIN_HINTS[status]);
