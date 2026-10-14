@@ -175,7 +175,7 @@ Top-level `start`, `stop`, `restart`, `status` and `logs` manage a detached `tun
 
 Legacy JSON is readable but cannot authorize browser mutations until `conversation migrate --id ID` imports the task under watch/operation/task/registry locks. The transaction preserves its complete document and records the original bytes’ hash. The original file remains unchanged; repeated migration does not overwrite database state. Every database read/write checks retained legacy evidence, and fails closed if an old runtime changed it or it disappeared. Migration requires quiescing the old runtime for that task; the hash fence detects old writes but cannot control an old binary’s browser actions. New database tasks reject colliding legacy files. No live task is migrated automatically. Content archive projection reads the current source through State and keeps its independent failure boundary.
 
-浏览器动作节奏复用 State 的跨进程锁与私有时间记录，默认动作间隔 750ms、导航稳定等待 1500ms；只读命令不锁定，写动作只派发一次。命名持久化 locating/editing/save_pending/verifying/complete 阶段与原始元数据基线，保存不确定后仅做只读核验。观察页清理先按浏览器 epoch 与精确 target 对账，避免关闭成功但回执丢失导致永久卡住。投递未知只恢复观察，不授予再次发送权限。
+浏览器动作节奏复用 State 的跨进程锁与私有时间记录，默认动作间隔 400ms、导航稳定等待 1500ms；只读命令不锁定，写动作只派发一次。命名持久化 locating/editing/save_pending/verifying/complete 阶段与原始元数据基线，保存不确定后仅做只读核验。观察页清理先按浏览器 epoch 与精确 target 对账，避免关闭成功但回执丢失导致永久卡住。投递未知只恢复观察，不授予再次发送权限。
 
 ## Managed subprocess lifetime
 

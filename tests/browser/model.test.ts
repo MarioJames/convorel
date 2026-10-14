@@ -201,6 +201,20 @@ describe("pre-send Pro selection", () => {
       evidence: { power: 6, latest: true },
     });
   });
+  test("an already selected Latest Pro is confirmed without selecting it again", async () => {
+    const b = fixture({ version: "6", effort: 4 });
+    expect(await ensureModel(b, opts)).toMatchObject({
+      observedModel: "6 Pro",
+      changed: false,
+      evidence: { latest: true },
+    });
+    expect(b.mutations).toEqual([
+      ["click", "#model"],
+      ["click", MODEL_SELECT],
+      ["click", MODEL_LATEST],
+      ["press", "Escape"],
+    ]);
+  });
   test("maximum effort without a Pro label is not a valid default", async () => {
     await expect(
       ensureModel(fixture({ maxLabel: "Ultra" }), opts),

@@ -253,16 +253,18 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     state = await wait((s) => !!s.latest, "Latest model option unavailable");
     if (state.latest!.disabled) throw new Error("Latest model option disabled");
     changed = !state.latest!.checked;
-    await act("click", MODEL_LATEST);
-    state = await wait(
-      (s) => !!s.power && s.menuLabel !== null,
-      "Power menu unavailable after model selection",
-    );
-    // Verify the model family, even when an older Pro has an identical effort label.
-    await act("click", SELECT);
-    state = await wait((s) => !!s.latest, "Latest model option unavailable");
-    if (!state.latest!.checked || state.latest!.disabled)
-      throw new Error("Latest selection did not persist");
+    if (changed) {
+      await act("click", MODEL_LATEST);
+      state = await wait(
+        (s) => !!s.power && s.menuLabel !== null,
+        "Power menu unavailable after model selection",
+      );
+      // Verify the model family, even when an older Pro has an identical effort label.
+      await act("click", SELECT);
+      state = await wait((s) => !!s.latest, "Latest model option unavailable");
+      if (!state.latest!.checked || state.latest!.disabled)
+        throw new Error("Latest selection did not persist");
+    }
     latestVerified = true;
     await act("click", MODEL_LATEST);
     state = await wait(

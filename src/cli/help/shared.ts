@@ -33,7 +33,7 @@ export const configRules = [
   "  mcp.execDependencyRoots       JSON array of explicitly shared node_modules directories for isolated builds/tests.",
   "  browser.executable            Absolute agent-browser path saved by init. It is not Chrome.",
   "  browser.serial                true or false. true uses one global browser lock.",
-  "  browser.actionIntervalMs      Integer milliseconds from 1 to 10000. Default 750.",
+  "  browser.actionIntervalMs      Integer milliseconds from 1 to 10000. Default 400.",
   "  browser.navigationWaitMs      Integer milliseconds from 1 to 10000. Default 1500.",
   "  locks.taskWaitMs              Positive integer. How long one task waits for its own operation lock.",
   "  release.baseUrl               HTTP(S) URL with no credentials, query, or fragment.",

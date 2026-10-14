@@ -48,7 +48,7 @@ export function browserPacingSettings() {
   return {
     actionIntervalMs: pacingMilliseconds(
       "browser.actionIntervalMs",
-      values["browser.actionIntervalMs"] ?? "750",
+      values["browser.actionIntervalMs"] ?? "400",
     ),
     navigationWaitMs: pacingMilliseconds(
       "browser.navigationWaitMs",

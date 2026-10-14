@@ -58,12 +58,12 @@ test("coordination records a delay before dispatch and covers failed commands", 
     const pacing = new BrowserPacing(f.store.root, f.dependencies);
     await expect(
       pacing.run(["click"], async () => {
-        expect(f.store.read("browser-pacing").nextActionAt).toBe(100_750);
+        expect(f.store.read("browser-pacing").nextActionAt).toBe(100_400);
         throw new Error("unknown write");
       }),
     ).rejects.toThrow("unknown write");
     await pacing.run(["fill"], async () => {});
-    expect(f.sleeps).toEqual([750]);
+    expect(f.sleeps).toEqual([400]);
   } finally {
     f.restore();
   }
@@ -87,7 +87,7 @@ test("checked Send can inspect a model menu without reacquiring its own pacing l
       "#send",
     ]);
     for (let i = 1; i < writes.length; i++)
-      expect(writes[i]!.at - writes[i - 1]!.at).toBeGreaterThanOrEqual(750);
+      expect(writes[i]!.at - writes[i - 1]!.at).toBeGreaterThanOrEqual(400);
     expect(f.store.has("lock-browser-pacing")).toBe(false);
     await expect(
       page.runChecked(["click", "#send"], async () => {
@@ -139,10 +139,10 @@ test("adapter spaces every requested action across browser instances while reads
     for (const action of ["fill", "press", "focus", "select"])
       await second.invoke("p", true, action, "private-body");
     await first.tabs("close", "target");
-    expect(f.sleeps).toEqual([750, 750, 750, 750, 750]);
-    expect(f.now()).toBe(103_750);
+    expect(f.sleeps).toEqual([400, 400, 400, 400, 400]);
+    expect(f.now()).toBe(102_000);
     const saved = readFileSync(f.store.path("browser-pacing"), "utf8");
-    expect(JSON.parse(saved)).toEqual({ version: 1, nextActionAt: 104_500 });
+    expect(JSON.parse(saved)).toEqual({ version: 1, nextActionAt: 102_400 });
     expect(saved).not.toContain("private");
     expect(lstatSync(f.store.path("browser-pacing")).mode & 0o777).toBe(0o600);
   } finally {
@@ -237,7 +237,7 @@ test("concurrent adapters coordinate only actions, allowing observation during a
     expect(f.actions).toHaveLength(2);
     release();
     await Promise.all([first, second]);
-    expect(f.actions.map((x) => x.at)).toEqual([100_000, 100_000, 100_750]);
+    expect(f.actions.map((x) => x.at)).toEqual([100_000, 100_000, 100_400]);
   } finally {
     release();
     f.restore();
@@ -275,13 +275,13 @@ test("separate CLI processes share the timestamp and private lock without storin
     expect(results.map((x) => x.code)).toEqual([0, 0, 0]);
     expect(results.map((x) => x.error)).toEqual(["", "", ""]);
     expect(results.map((x) => x.at).sort((a, b) => a - b)).toEqual([
-      100_000, 100_750, 101_500,
+      100_000, 100_400, 100_800,
     ]);
     expect(
       f.store.read<{ version: 1; nextActionAt: number }>("browser-pacing"),
     ).toEqual({
       version: 1,
-      nextActionAt: 102_250,
+      nextActionAt: 101_200,
     });
     expect(f.store.has("lock-browser-pacing")).toBe(false);
   } finally {
@@ -303,8 +303,8 @@ test("failed preflight leaves the write untouched and command duration counts be
       f.advance(500);
     });
     await f.browser().invoke("p", true, "click", "#send");
-    expect(f.actions[0]!.at).toBe(101_250);
-    expect(f.sleeps).toEqual([750]);
+    expect(f.actions[0]!.at).toBe(100_900);
+    expect(f.sleeps).toEqual([400]);
   } finally {
     f.restore();
   }
@@ -329,7 +329,7 @@ test("close authorization is checked after pacing and can veto dispatch", async 
         if (changed) throw new Error("DRAFT_CHANGED");
       }),
     ).rejects.toThrow("DRAFT_CHANGED");
-    expect(checkedAt).toBe(100_750);
+    expect(checkedAt).toBe(100_400);
     expect(f.actions.some((x) => x.args.includes("close"))).toBe(false);
     expect(f.store.has("lock-browser-pacing")).toBe(false);
     await browser.closeTab("target", async () => {

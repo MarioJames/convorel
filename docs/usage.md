@@ -114,7 +114,7 @@ convorel --config-dir /private/config --state-dir /private/state conversation li
 | `mcp.roots`                    | 允许读取的目录 JSON 数组                                           |
 | `browser.executable`           | `init` 保存的 `agent-browser` 绝对路径，不是 Chrome 路径           |
 | `browser.serial`               | `true` 或 `false`。`true` 使用全局浏览器操作锁                     |
-| `browser.actionIntervalMs`     | 动作间隔，1–10000 的整数毫秒，默认 750                             |
+| `browser.actionIntervalMs`     | 动作间隔，1–10000 的整数毫秒，默认 400                             |
 | `browser.navigationWaitMs`     | 导航或新建页面后的等待，1–10000 的整数毫秒，默认 1500              |
 | `locks.taskWaitMs`             | 同任务操作锁的最大等待毫秒数，正整数                               |
 | `release.baseUrl`              | HTTP(S) 基址，不能带凭据、query 或 fragment                        |
@@ -448,7 +448,7 @@ bun --no-env-file src/cli.ts conversation recover-send \
 
 ### 浏览器节奏与分阶段恢复
 
-默认点击、填入、按键及关闭等动作之间至少间隔 750 毫秒；导航、刷新或新建页面后等待 1500 毫秒，再按页面实际状态核验。复用同一状态目录的多个 CLI 协调间隔，只读观察不等待。可用现有配置调整（均为 1–10000 毫秒的正整数）：
+默认点击、填入、按键及关闭等动作之间至少间隔 400 毫秒；导航、刷新或新建页面后等待 1500 毫秒，再按页面实际状态核验。复用同一状态目录的多个 CLI 协调间隔，只读观察不等待。可用现有配置调整（均为 1–10000 毫秒的正整数）：
 
 ```sh
 convorel config set browser.actionIntervalMs 1000
