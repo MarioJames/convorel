@@ -50,6 +50,10 @@ convorel setup --workspace /absolute/path/to/your-project
 
 默认由 Convorel 管理浏览器：在状态目录的 `chrome/` 下创建专用 profile，查找 `PATH` 中的 `google-chrome`、`google-chrome-stable`、`chromium` 或 `chromium-browser`（macOS 为 Google Chrome.app，也可用 `--chrome PATH` 指定），以有头模式打开 ChatGPT，等待你在该窗口登录一次（默认 600 秒，可用 `--login-timeout` 调整）。调试端口只绑定 `127.0.0.1`，默认 9222，被占用时选空闲端口；端口、Chrome 路径和 profile 写入状态目录的 `config.json`。绑定先于登录等待保存，超时后用 `convorel browser start` 继续登录。之后需要浏览器的命令发现端点未运行时会自动拉起这个 profile；端口被其他浏览器占用时拒绝连接，不会误用。Chrome 输出写入状态目录的 `chrome.log`。
 
+托管 profile 的路径可在初始化时指定：`convorel setup --workspace /absolute/path/to/your-project --user-data-dir /absolute/profile`，`init` 接受同一参数；它们写入偏好 `browser.userDataDir`。也可运行 `convorel config set browser.userDataDir "~/browser-profiles/convorel"`（绝对路径，支持 `~` 展开，拒绝相对路径）。生效顺序为偏好、状态 `config.json` 中已保存的 `browser.userDataDir`、状态目录下的 `chrome/`；`convorel config unset browser.userDataDir` 恢复回退值，不会将偏好路径覆盖到原状态值。偏好由使用同一配置目录的托管绑定共享。
+
+修改路径不自动搬移或删除 profile 数据；需要保留登录态时，先停止对应 Chrome，再自行移动目录并设置新路径。同一 CDP 端口仍被另一 profile 使用时，`browser start` 报 `MANAGED_BROWSER_PORT_IN_USE` 并非零退出，不杀旧进程、不另起浏览器。成功输出的 `profile` 是生效路径，`doctor` 和 `doctor --local true` 的 `browser.profile`、`browser.profileSource` 显示路径及来源（`preference` / `state` / `default`）。外部浏览器模式不接受 `--user-data-dir`。
+
 不想让任务标签打断当前工作时，运行 `convorel config set browser.headless true`：之后自动拉起的托管 Chrome 无窗口运行，并沿用同版本有头 Chrome 的 User-Agent，避免被识别为无头浏览器。已打开的窗口不会被强制关闭，关闭后下次按需以无头方式启动。登录必须有窗口：`init` 或 `browser start` 发现无头实例未登录时，会停掉这个托管实例、打开窗口等待登录，完成后再切回无头。[Chrome 136+ 要求使用非默认数据目录](https://developer.chrome.com/blog/remote-debugging-port)，因此不能复用日常 Chrome 的默认 profile。验收侧 browser-harness 的自带 Chromium、session 和 profile 不用于这里。
 
 使用自己启动的 Chrome 时，传入 `--cdp 9222`（外部模式），由你负责启动和登录：
@@ -107,21 +111,22 @@ convorel --config-dir /private/config --state-dir /private/state conversation li
 
 配置只从偏好文件读取，不接受环境覆盖。用 `config path` 查看文件位置，`config list`/`config get KEY` 查看配置，`config set KEY VALUE` 写入，`config unset KEY` 删除。配置键如下：
 
-| 配置键                         | 含义                                                               |
-| ------------------------------ | ------------------------------------------------------------------ |
-| `model`                        | 模型选择；未设置时使用 Latest + Power 末端 Pro                     |
-| `project.url` / `project.name` | 目标项目 URL 与名称，必须成对配置                                  |
-| `tunnel.id`                    | 默认隧道 ID；单次命令可用 `--tunnel-id` 指定                       |
-| `tunnel.apiKey`                | 隧道运行时密钥，配置输出不回显                                     |
-| `mcp.roots`                    | 允许读取的目录 JSON 数组                                           |
-| `browser.executable`           | `init` 保存的 `agent-browser` 绝对路径，不是 Chrome 路径           |
-| `browser.serial`               | `true` 或 `false`。`true` 使用全局浏览器操作锁                     |
-| `browser.headless`             | `true` 或 `false`。`true` 时托管 Chrome 无窗口运行，登录仍打开窗口 |
-| `browser.actionIntervalMs`     | 动作间隔，1–10000 的整数毫秒，默认 400                             |
-| `browser.navigationWaitMs`     | 导航或新建页面后的等待，1–10000 的整数毫秒，默认 1500              |
-| `locks.taskWaitMs`             | 同任务操作锁的最大等待毫秒数，正整数                               |
-| `release.baseUrl`              | HTTP(S) 基址，不能带凭据、query 或 fragment                        |
-| `diagnostics.enabled`          | 未设置或 `true` 时记录诊断；`false` 关闭。其他值或偏好读失败也关闭 |
+| 配置键                         | 含义                                                                              |
+| ------------------------------ | --------------------------------------------------------------------------------- |
+| `model`                        | 模型选择；未设置时使用 Latest + Power 末端 Pro                                    |
+| `project.url` / `project.name` | 目标项目 URL 与名称，必须成对配置                                                 |
+| `tunnel.id`                    | 默认隧道 ID；单次命令可用 `--tunnel-id` 指定                                      |
+| `tunnel.apiKey`                | 隧道运行时密钥，配置输出不回显                                                    |
+| `mcp.roots`                    | 允许读取的目录 JSON 数组                                                          |
+| `browser.executable`           | `init` 保存的 `agent-browser` 绝对路径，不是 Chrome 路径                          |
+| `browser.serial`               | `true` 或 `false`。`true` 使用全局浏览器操作锁                                    |
+| `browser.userDataDir`          | 托管 Chrome profile 绝对路径，支持 `~` 展开；覆盖状态值，unset 后回退，不搬移数据 |
+| `browser.headless`             | `true` 或 `false`。`true` 时托管 Chrome 无窗口运行，登录仍打开窗口                |
+| `browser.actionIntervalMs`     | 动作间隔，1–10000 的整数毫秒，默认 400                                            |
+| `browser.navigationWaitMs`     | 导航或新建页面后的等待，1–10000 的整数毫秒，默认 1500                             |
+| `locks.taskWaitMs`             | 同任务操作锁的最大等待毫秒数，正整数                                              |
+| `release.baseUrl`              | HTTP(S) 基址，不能带凭据、query 或 fragment                                       |
+| `diagnostics.enabled`          | 未设置或 `true` 时记录诊断；`false` 关闭。其他值或偏好读失败也关闭                |
 
 例如 `convorel config set browser.serial true`、`convorel config set locks.taskWaitMs 15000`。配置值不能包含换行或 NUL。`tunnel.id` 是 `tunnel_` 加 32 位十六进制。`mcp.roots` 是 1–16 个绝对路径或 `~/` 路径的 JSON 数组。`tunnel.apiKey` 在配置输出中不回显。新任务读取当前配置并保存 snapshot；已有任务续谈保持原模型、项目等快照，修改配置不会迁移旧任务。
 

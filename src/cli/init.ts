@@ -10,17 +10,25 @@ import {
 import type { State } from "../storage/state.ts";
 import type { Config } from "../config/config.ts";
 import { conversationConfig } from "../config/config.ts";
+import { resolveBrowserProfile } from "../config/browser.ts";
 import {
   agentBrowserExecutable,
   resetAgentBrowserInvocation,
 } from "../runtime.ts";
 import { command, required } from "../command.ts";
-import { writePreference } from "../config/preferences.ts";
+import { browserUserDataPath, writePreference } from "../config/preferences.ts";
 import { installSkill } from "../distribution/skills.ts";
 import { opts, type Printer } from "./args.ts";
 import { loginTimeoutMs, signInManagedBrowser } from "./browser.ts";
 
-const INIT_OPTIONS = ["workspace", "cdp", "browser", "chrome", "login-timeout"];
+const INIT_OPTIONS = [
+  "workspace",
+  "cdp",
+  "browser",
+  "chrome",
+  "user-data-dir",
+  "login-timeout",
+];
 
 export async function runInit(args: string[], store: State, print: Printer) {
   const o = opts(args.slice(1)),
@@ -36,11 +44,18 @@ export async function runInit(args: string[], store: State, print: Printer) {
   const mode = o.browser ?? (o.cdp ? "external" : "managed");
   if (mode !== "managed" && mode !== "external")
     throw new Error("INVALID_VALUE: --browser takes managed or external");
-  if (mode === "external" && (o.chrome || o["login-timeout"]))
+  if (
+    mode === "external" &&
+    (o.chrome || o["user-data-dir"] || o["login-timeout"])
+  )
     throw new Error(
-      "MANAGED_BROWSER_OPTION: --chrome and --login-timeout need --browser managed",
+      "MANAGED_BROWSER_OPTION: --chrome, --user-data-dir and --login-timeout need --browser managed",
     );
   const timeoutMs = loginTimeoutMs(o["login-timeout"]);
+  const userDataDir =
+    o["user-data-dir"] === undefined
+      ? undefined
+      : browserUserDataPath(o["user-data-dir"]);
   const previous = store.has("config")
     ? store.read<Config>("config")
     : undefined;
@@ -78,13 +93,21 @@ export async function runInit(args: string[], store: State, print: Printer) {
     }
     store.write("config", config);
   }, "config");
+  if (userDataDir !== undefined)
+    writePreference("browser.userDataDir", userDataDir);
   // The binding is saved first, so an unfinished sign-in resumes with browser start.
   if (browser) {
     await signInManagedBrowser(config, store, timeoutMs);
   }
   print({
     ...effective,
-    ...(browser && { browser, login: "ready" }),
+    ...(browser && {
+      browser: {
+        ...browser,
+        userDataDir: resolveBrowserProfile(store.root, browser).userDataDir,
+      },
+      login: "ready",
+    }),
     modelPolicy: effective.model || "latest-pro",
     stateDirectory: store.root,
     agentBrowser: recorded.value,

@@ -11,6 +11,15 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import packageInfo from "../../package.json";
 import type { Printer } from "./args.ts";
 import { WorkspaceAccess } from "../workspace/access.ts";
+import { resolveBrowserProfile } from "../config/browser.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { stateDirectory } from "../paths.ts";
+
+function profileReport(stateRoot: string, config?: Config) {
+  const profile = resolveBrowserProfile(stateRoot, config?.browser);
+  return { profile: profile.userDataDir, profileSource: profile.source };
+}
 
 export function assertDoctorMcp(
   tools: { name: string }[],
@@ -41,6 +50,13 @@ export function runDoctorLocal(
   print: Printer,
 ) {
   assertOutsideSharedRoots(stateRoot);
+  let config: Config | undefined;
+  let configError: string | undefined;
+  try {
+    config = JSON.parse(readFileSync(join(stateRoot, "config.json"), "utf8"));
+  } catch (error: any) {
+    if (error.code !== "ENOENT") configError = String(error);
+  }
   const scanned = scanTasks(stateRoot);
   const opened = openArchive(stateRoot, { write: true });
   const coverage = opened.archive
@@ -52,6 +68,10 @@ export function runDoctorLocal(
   const integrity = opened.archive?.integrity();
   print({
     stateDirectory: stateRoot,
+    browser: {
+      ...profileReport(stateRoot, config),
+      ...(configError && { status: "failed", error: configError }),
+    },
     sources: {
       readable: scanned.found.length,
       errors: scanned.errors,
@@ -68,7 +88,8 @@ export function runDoctorLocal(
   opened.archive?.close();
   // A store that fails its own structure or index check is broken rather than merely
   // incomplete, so it exits 1; 2 means the local record is readable but incomplete.
-  return opened.notice?.status === "failed" ||
+  return configError ||
+    opened.notice?.status === "failed" ||
     (integrity &&
       (integrity.integrity_check !== "ok" ||
         integrity.fts_integrity_check !== "ok"))
@@ -85,10 +106,12 @@ export async function runDoctor(
   browser: Browser,
   roots: string[],
   print: Printer,
+  stateRoot = stateDirectory(),
 ) {
+  const profile = profileReport(stateRoot, config);
   const report: any = {
     agentBrowser: null,
-    browser: { status: "not_run" },
+    browser: { ...profile, status: "not_run" },
     localMcp: { status: "not_run" },
     tunnel: { installed: !!Bun.which("tunnel-client"), status: "not_run" },
     chatgptMcp: { status: "not_run" },
@@ -100,6 +123,7 @@ export async function runDoctor(
     const epoch = await browser.epoch();
     const { tabs } = await browser.tabs("list");
     report.browser = {
+      ...profile,
       status: "connected",
       epoch,
       chatgptTabs: tabs.filter((x: any) =>
@@ -123,7 +147,7 @@ export async function runDoctor(
         conversationConfig(config).model || "latest-pro";
     }
   } catch (e) {
-    report.browser = { status: "failed", error: String(e) };
+    report.browser = { ...profile, status: "failed", error: String(e) };
   } finally {
     await browser.release();
   }

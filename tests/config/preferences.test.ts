@@ -1,10 +1,14 @@
 import { test, expect } from "bun:test";
 import { lstatSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { configCommand } from "../../src/cli/config-command.ts";
 import { conversationConfig } from "../../src/config/config.ts";
 import { setRuntimePaths } from "../../src/paths.ts";
+import {
+  effectiveManagedBrowser,
+  resolveBrowserProfile,
+} from "../../src/config/browser.ts";
 import {
   preference,
   preferenceFile,
@@ -12,6 +16,67 @@ import {
 } from "../../src/config/preferences.ts";
 
 const project = "https://chatgpt.com/g/g-p-abc123-demo/project";
+
+test("managed profile preference validates paths and unset restores state then default", () => {
+  const { root, restore } = isolated();
+  try {
+    const browser = { executable: "/chrome", userDataDir: join(root, "saved") };
+    expect(resolveBrowserProfile(root, browser)).toEqual({
+      userDataDir: browser.userDataDir,
+      source: "state",
+    });
+    expect(resolveBrowserProfile(root)).toEqual({
+      userDataDir: join(root, "chrome"),
+      source: "default",
+    });
+    configCommand("set", ["browser.userDataDir", "~/profiles/convorel"]);
+    const expanded = join(homedir(), "profiles/convorel");
+    expect(configCommand("get", ["browser.userDataDir"])).toMatchObject({
+      configured: true,
+      value: expanded,
+    });
+    expect((configCommand("list", []) as any).settings).toContainEqual(
+      expect.objectContaining({ key: "browser.userDataDir", value: expanded }),
+    );
+    expect(resolveBrowserProfile(root, browser)).toEqual({
+      userDataDir: expanded,
+      source: "preference",
+    });
+    expect(
+      effectiveManagedBrowser(
+        { version: 1, workspace: "/repo", cdp: "9222", browser },
+        root,
+      )?.userDataDir,
+    ).toBe(expanded);
+    expect(browser.userDataDir).toBe(join(root, "saved"));
+    for (const value of [
+      "relative/path",
+      "~someone/profile",
+      "/tmp/a\nb",
+      "/tmp/a\0b",
+    ]) {
+      expect(() =>
+        configCommand("set", ["browser.userDataDir", value]),
+      ).toThrow("browser.userDataDir must be an absolute path");
+      expect(preference("browser.userDataDir")).toBe(expanded);
+    }
+    configCommand("set", ["browser.userDataDir", "~"]);
+    expect(preference("browser.userDataDir")).toBe(homedir());
+    configCommand("set", ["browser.userDataDir", join(root, "new profile")]);
+    expect(resolveBrowserProfile(root, browser).userDataDir).toBe(
+      join(root, "new profile"),
+    );
+    configCommand("unset", ["browser.userDataDir"]);
+    expect(configCommand("get", ["browser.userDataDir"])).toMatchObject({
+      configured: false,
+      source: "unset",
+    });
+    expect(resolveBrowserProfile(root, browser).source).toBe("state");
+    expect(resolveBrowserProfile(root).source).toBe("default");
+  } finally {
+    restore();
+  }
+});
 function isolated() {
   const root = mkdtempSync(join(tmpdir(), "convorel-config-"));
   const previous = setRuntimePaths({ configDir: join(root, "config") });

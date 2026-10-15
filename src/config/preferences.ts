@@ -6,6 +6,7 @@ import { withSyncLock } from "../storage/sync-lock.ts";
 import { fullPath } from "../paths.ts";
 import { projectId } from "../browser/chatgpt/organize.ts";
 import { parseMemoryRoots } from "./mcp.ts";
+import { homedir } from "node:os";
 
 /** Config keys are independent of process environment. */
 export const settingKeys = [
@@ -21,6 +22,7 @@ export const settingKeys = [
   "browser.executable",
   "browser.serial",
   "browser.headless",
+  "browser.userDataDir",
   "browser.actionIntervalMs",
   "browser.navigationWaitMs",
   "locks.taskWaitMs",
@@ -31,6 +33,17 @@ export type SettingKey = (typeof settingKeys)[number];
 const secrets: SettingKey[] = ["tunnel.apiKey"];
 const document = "preferences";
 export const MAX_BROWSER_PACING_MS = 10_000;
+
+export function browserUserDataPath(value: string) {
+  try {
+    if (/[\r\n\0]/.test(value)) throw new Error();
+    return fullPath(value === "~" ? homedir() : value);
+  } catch {
+    throw new Error(
+      "INVALID_VALUE: browser.userDataDir must be an absolute path (~/ is supported)",
+    );
+  }
+}
 
 function pacingMilliseconds(key: SettingKey, value: string) {
   if (
@@ -180,6 +193,8 @@ export function preference(key: SettingKey): string | undefined {
 
 /** An empty value removes the preference, since the file has no blank state. */
 export function writePreference(key: SettingKey, value: string) {
+  if (key === "browser.userDataDir" && value)
+    value = browserUserDataPath(value);
   if (["browser.executable", "mcp.memoryExecutable"].includes(key) && value)
     value = fullPath(value);
   return withSyncLock(preferenceFile() + ".mutex.sqlite", () => {

@@ -19,6 +19,7 @@ export const browserPage = page(
       ],
       [
         "A binding to your own Chrome (init --cdp) is refused; start that browser yourself.",
+        "profile reports the effective browser.userDataDir preference, saved profile, or default chrome/ directory. A different profile on the same CDP port is refused without stopping it. Stop Chrome before moving profile data yourself.",
       ],
     ),
   ],

@@ -136,6 +136,9 @@ export async function choosePort() {
 
 export type ProcessLine = { pid: number; line: string };
 
+const hasArgument = (line: string, arg: string) =>
+  (" " + line.trim() + " ").includes(" " + arg + " ");
+
 function processes(): ProcessLine[] {
   if (process.platform === "darwin")
     return execFileSync("/bin/ps", ["-A", "-ww", "-o", "pid=,command="], {
@@ -171,16 +174,30 @@ export function managedBrowserProcess(
   cdp: string,
   list: ProcessLine[] = processes(),
 ) {
-  const has = (line: string, arg: string) =>
-    (" " + line.trim() + " ").includes(" " + arg + " ");
   const found = list.find(
     ({ line }) =>
       !line.includes(" --type=") &&
-      has(line, `--user-data-dir=${browser.userDataDir}`) &&
-      has(line, `--remote-debugging-port=${new URL(cdp).port}`),
+      hasArgument(line, `--user-data-dir=${browser.userDataDir}`) &&
+      hasArgument(line, `--remote-debugging-port=${new URL(cdp).port}`),
   );
   return (
-    found && { pid: found.pid, headless: has(found.line, "--headless=new") }
+    found && {
+      pid: found.pid,
+      headless: hasArgument(found.line, "--headless=new"),
+    }
+  );
+}
+
+/** A Chrome still opening CDP already reserves its requested port. */
+export function managedPortInUse(
+  cdp: string,
+  list: ProcessLine[] = processes(),
+) {
+  return list.some(
+    ({ line }) =>
+      !line.includes(" --type=") &&
+      line.includes(" --user-data-dir=") &&
+      hasArgument(line, `--remote-debugging-port=${new URL(cdp).port}`),
   );
 }
 
@@ -233,6 +250,7 @@ export type StartDependencies = {
   launch?: typeof spawnChrome;
   reachable?: typeof cdpReachable;
   owns?: typeof profileOwnsEndpoint;
+  occupied?: typeof managedPortInUse;
   sleep?: (ms: number) => Promise<unknown>;
   now?: () => number;
   timeoutMs?: number;
@@ -252,17 +270,20 @@ export async function startManagedBrowser(
     launch = spawnChrome,
     reachable = cdpReachable,
     owns = profileOwnsEndpoint,
+    occupied = managedPortInUse,
     sleep = Bun.sleep,
     now = Date.now,
     timeoutMs = 30_000,
     version = (executable: string) =>
       execFileSync(executable, ["--version"], { encoding: "utf8" }),
   } = dependencies;
+  const conflict = () =>
+    new Error(
+      `MANAGED_BROWSER_PORT_IN_USE: ${cdp} belongs to another browser/profile; expected ${browser.userDataDir}; close it or choose another --cdp`,
+    );
+  if (occupied(cdp) && !owns(browser, cdp)) throw conflict();
   if (await reachable(cdp)) {
-    if (!owns(browser, cdp))
-      throw new Error(
-        `MANAGED_BROWSER_PORT_IN_USE: ${cdp} belongs to another browser; close it or choose another --cdp`,
-      );
+    if (!owns(browser, cdp)) throw conflict();
     return { launched: false };
   }
   mkdirSync(browser.userDataDir, { recursive: true, mode: 0o700 });

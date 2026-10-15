@@ -32,7 +32,12 @@ test("doctor verifies the current public MCP server over stdio", async () => {
       },
     };
     const result = await runDoctor(
-      { version: 1, workspace, cdp: "http://127.0.0.1:9222" },
+      {
+        version: 1,
+        workspace,
+        cdp: "http://127.0.0.1:9222",
+        browser: { executable: "/chrome", userDataDir: join(root, "saved") },
+      },
       browser,
       [workspace],
       (value) => {
@@ -51,6 +56,29 @@ test("doctor verifies the current public MCP server over stdio", async () => {
       expect.objectContaining({ path: workspace }),
     ]);
     expect(released).toBe(true);
+    expect(report.browser).toMatchObject({
+      profile: join(root, "saved"),
+      profileSource: "state",
+    });
+    writePreference("browser.userDataDir", join(root, "preferred"));
+    browser.epoch = async () => {
+      throw new Error("CDP unavailable");
+    };
+    expect(
+      await runDoctor(
+        { version: 1, workspace, cdp: "http://127.0.0.1:9222" },
+        browser,
+        [workspace],
+        (value) => {
+          report = value;
+        },
+      ),
+    ).toBe(1);
+    expect(report.browser).toMatchObject({
+      status: "failed",
+      profile: join(root, "preferred"),
+      profileSource: "preference",
+    });
   } finally {
     setRuntimePaths(previous);
     resetAgentBrowserInvocation();

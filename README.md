@@ -80,6 +80,8 @@ convorel setup --workspace /absolute/path/to/your-project --agent codex
 
 Convorel 会在状态目录中创建专用 Chrome profile，以有头模式打开 ChatGPT 并等待你登录一次；端口与 profile 写入配置，之后浏览器未运行时由 Convorel 自动拉起。登录超时可用 `convorel browser start` 继续。需要使用自己启动的 Chrome 时，改为传入 `--cdp PORT`。
 
+托管 profile 可用 `setup`/`init --user-data-dir /absolute/profile` 或 `convorel config set browser.userDataDir /absolute/profile` 指定，支持 `~` 展开。生效顺序为偏好、状态中已保存的 profile、状态目录的 `chrome/`；`config unset browser.userDataDir` 恢复回退值。修改路径不搬移或删除数据：先停止 Chrome，再自行移动目录。同端口仍运行另一 profile 时命令会报冲突，保留原进程；`doctor` 和 `doctor --local true` 显示生效路径与来源。
+
 使用 Claude Code 时，将 `codex` 换成 `claude-code`；同时安装用 `codex,claude-code`。已有同名技能时会停止并提示，不会覆盖个人修改。
 
 技能直接使用 `PATH` 中的 `convorel`。源码方式可显式调用 `bun --no-env-file /absolute/path/to/convorel/src/cli.ts`，不从技能安装目录推断运行时。

@@ -34,6 +34,7 @@ export const configRules = [
   "  browser.executable            Absolute agent-browser path saved by init. It is not Chrome.",
   "  browser.serial                true or false. true uses one global browser lock.",
   "  browser.headless              true or false. true starts the managed Chrome without a window; sign-in still opens one.",
+  "  browser.userDataDir           Absolute managed Chrome profile path (~/ supported). Overrides the saved profile; unset restores it. No data is moved.",
   "  browser.actionIntervalMs      Integer milliseconds from 1 to 10000. Default 400.",
   "  browser.navigationWaitMs      Integer milliseconds from 1 to 10000. Default 1500.",
   "  locks.taskWaitMs              Positive integer. How long one task waits for its own operation lock.",

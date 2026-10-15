@@ -1,5 +1,13 @@
 # 验证记录
 
+## 2026-10-15：托管 Chrome 用户数据目录配置
+
+新增 `browser.userDataDir` 偏好及 `init`/`setup --user-data-dir PATH`；运行时优先级为偏好、已存状态路径、`<state>/chrome`。相对路径被拒绝，支持 `~` 展开；偏好不会覆盖状态中的回退路径，不搬移或删除 profile 数据。两个 doctor 模式输出生效路径及来源。另一 profile 已占用同端口时拒绝启动，包括进程已启动但 CDP 尚未响应的情况。
+
+Bun 行为测试覆盖配置读写/取消/非法路径、三级回退、init/setup 保存偏好且保留 state fallback、外部模式拒绝托管参数、冲突非零且不启动新进程、doctor 成功/失败时的路径来源，以及损坏 config 不阻断本地 archive 检查。项目没有单独 lint 脚本，使用 `format:check` 检查格式。 `bun test` 通过 439 项测试（48 个文件），`bun run typecheck`、`bun run format:check` 与 `git diff --check` 通过。
+
+隔离实测使用 Google Chrome 155.0.8059.79、一次性 HOME/XDG/profile 与 CDP `127.0.0.1:37735`，在 `dev-convorel-profile-config.scope`（MemoryHigh=8G、MemoryMax=10G）内依次启动 preference（含空格路径）、unset 后的 state（含空格路径）、缺省状态路径三个真实 Chrome。每次 `/proc` 命令行的 `--user-data-dir`、CDP 响应与 CLI/本地 doctor 的路径和来源一致。运行期间改为另一 profile 后，`browser start` 退出 1、原 PID 保持、新 profile 未创建、无新增浏览器。登录检查使用测试专属 agent-browser 响应桩；此次未验证真实 ChatGPT 登录、云端页面与消息发送。自有 Chrome/子进程、scope、CDP 端口和一次性 HOME/profile 已释放；真实用户配置、持久 profile、既有 Chrome 和隧道未操作。
+
 ## 2026-10-07：托管 Chrome profile
 
 `init` 不带 `--cdp` 时由 Convorel 管理浏览器：在状态目录 `chrome/` 创建专用 profile，以有头模式在 `127.0.0.1` 打开 CDP（默认 9222，占用时选空闲端口），打开 ChatGPT 并等待用户登录；绑定在等待前写入 `config.json` 的 `browser`（Chrome 路径与 profile）。需要浏览器的命令在端点不可达时于 `browser` 锁内拉起该 profile；端点由其他浏览器进程占用时拒绝。新增 `browser start` 续接登录。带 `--cdp` 的外部模式行为不变，`--browser managed --cdp PORT` 让已有绑定在原端口改为托管。

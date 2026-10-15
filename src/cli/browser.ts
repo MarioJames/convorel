@@ -10,6 +10,7 @@ import {
 } from "../browser/managed.ts";
 import { preference } from "../config/preferences.ts";
 import type { Config } from "../config/config.ts";
+import { effectiveManagedBrowser } from "../config/browser.ts";
 import type { State } from "../storage/state.ts";
 import { opts, rejectUnknown, type Printer } from "./args.ts";
 
@@ -42,11 +43,12 @@ export async function ensureManagedBrowser(
   store: State,
   headless = headlessPreferred(),
 ) {
-  if (!config.browser) return { launched: false };
+  const browser = effectiveManagedBrowser(config, store.root);
+  if (!browser) return { launched: false };
   return store.locked(
     () =>
       startManagedBrowser(
-        config.browser!,
+        browser,
         config.cdp,
         join(store.root, "chrome.log"),
         {},
@@ -63,7 +65,11 @@ async function restartManagedBrowser(
   headless: boolean,
 ) {
   await store.locked(
-    () => stopManagedBrowser(config.browser!, config.cdp),
+    () =>
+      stopManagedBrowser(
+        effectiveManagedBrowser(config, store.root)!,
+        config.cdp,
+      ),
     "browser",
     60_000,
   );
@@ -97,7 +103,12 @@ export async function signInManagedBrowser(
   timeoutMs: number,
 ) {
   let { launched } = await ensureManagedBrowser(config, store);
-  if (managedBrowserProcess(config.browser!, config.cdp)?.headless) {
+  if (
+    managedBrowserProcess(
+      effectiveManagedBrowser(config, store.root)!,
+      config.cdp,
+    )?.headless
+  ) {
     try {
       await waitForChatgptLogin(config, store, HEADLESS_LOGIN_CHECK_MS, true);
       return { launched };
@@ -135,7 +146,7 @@ export async function runBrowser(
   const { launched } = await signInManagedBrowser(config, store, timeoutMs);
   print({
     cdp: config.cdp,
-    profile: config.browser.userDataDir,
+    profile: effectiveManagedBrowser(config, store.root)!.userDataDir,
     launched,
     login: "ready",
   });

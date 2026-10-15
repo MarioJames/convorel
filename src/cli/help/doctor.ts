@@ -11,6 +11,7 @@ export const doctorPage = page(
     ],
   ],
   [
+    "Both modes report browser.profile and browser.profileSource (preference, state or default), including when the browser check fails.",
     "The browser doctor exits 1 when Chrome or the local MCP check failed. doctor --local exits 1 when the archive fails its own integrity check, and 2 when the local record is readable but incomplete.",
   ],
 );

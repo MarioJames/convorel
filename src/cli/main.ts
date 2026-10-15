@@ -130,7 +130,8 @@ export async function main(args = process.argv.slice(2)) {
   access.assertPrivate(preferenceDirectory());
   const roots = access.roots.map((ws) => ws.root);
   if (area !== "tunnel") await ensureManagedBrowser(config, store);
-  if (area === "doctor") return runDoctor(config, browser, roots, print);
+  if (area === "doctor")
+    return runDoctor(config, browser, roots, print, store.root);
   if (area === "tunnel") return runTunnelArea(sub, rest, config, roots, print);
   if (area !== "conversation") throw new Error("UNKNOWN_COMMAND");
   return runConversation(

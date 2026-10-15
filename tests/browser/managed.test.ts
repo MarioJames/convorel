@@ -8,6 +8,7 @@ import {
   chromeArgs,
   headedUserAgent,
   managedBrowserProcess,
+  managedPortInUse,
   managedEndpoint,
   profileOwnsEndpoint,
   startManagedBrowser,
@@ -20,6 +21,7 @@ function fakeClock() {
   let time = 0;
   return {
     now: () => time,
+    occupied: () => false,
     sleep: async (ms: number) => {
       time += ms;
     },
@@ -156,6 +158,7 @@ test("a running managed browser is reused, and a foreign one on its port is refu
   expect(
     await startManagedBrowser(browser, "http://127.0.0.1:9222", "/log", {
       reachable,
+      occupied: () => false,
       launch,
       owns: () => true,
     }),
@@ -163,11 +166,45 @@ test("a running managed browser is reused, and a foreign one on its port is refu
   await expect(
     startManagedBrowser(browser, "http://127.0.0.1:9222", "/log", {
       reachable,
+      occupied: () => false,
       launch,
       owns: () => false,
     }),
   ).rejects.toThrow("MANAGED_BROWSER_PORT_IN_USE");
   expect(launches).toEqual([]);
+});
+
+test("another profile reserving a port is refused before CDP is ready without launching", async () => {
+  const list = [
+    {
+      pid: 123,
+      line: "/chrome --user-data-dir=/old profile --remote-debugging-port=9444",
+    },
+  ];
+  expect(managedPortInUse("http://127.0.0.1:9444", list)).toBe(true);
+  expect(managedPortInUse("http://127.0.0.1:944", list)).toBe(false);
+  let launched = false;
+  await expect(
+    startManagedBrowser(
+      { executable: "/chrome", userDataDir: "/new profile" },
+      "http://127.0.0.1:9444",
+      "/log",
+      {
+        reachable: async () => false,
+        occupied: (cdp) => managedPortInUse(cdp, list),
+        owns: (browser, cdp) =>
+          profileOwnsEndpoint(
+            browser,
+            cdp,
+            list.map((p) => p.line),
+          ),
+        launch: () => {
+          launched = true;
+        },
+      },
+    ),
+  ).rejects.toThrow(/MANAGED_BROWSER_PORT_IN_USE.*expected \/new profile/);
+  expect(launched).toBe(false);
 });
 
 test("a stopped managed browser is launched once and awaited until CDP answers", async () => {
