@@ -23,6 +23,14 @@ import { composePrompt, promptContext, validPrompt } from "./prompt.ts";
 class RunMessagePresent extends Error {}
 class ComposerRecovered extends Error {}
 
+// Compact triggers expose effort only, not a model family/version.
+function observedModelIdentity(value?: string) {
+  const model = value?.trim();
+  return model && !/^(Light|Standard|High|Extra High|Pro)$/i.test(model)
+    ? model
+    : "";
+}
+
 export interface SubmissionContext {
   readonly store: State;
   readonly verify: (
@@ -373,18 +381,19 @@ export function createSubmission(ctx: SubmissionContext) {
       checkDraft(p);
       if (!t.url && t.config.projectUrl)
         await verifyProjectComposer(b, t.config.projectUrl);
-      // Retries retain this run's verified model (including rejected sends).
+      // Retries retain this run's full verified model (including rejected sends).
       // Otherwise honor the task's explicit preference before inheriting the
       // latest completed observation. New tasks still resolve Latest Pro.
       const model =
-        r.observedModel?.trim() ||
+        observedModelIdentity(r.observedModel) ||
         t.config.model?.trim() ||
-        t.runs
-          .slice(0, t.runs.indexOf(r))
-          .findLast(
-            (run) => run.state === "complete" && run.observedModel?.trim(),
-          )
-          ?.observedModel?.trim() ||
+        observedModelIdentity(
+          t.runs
+            .slice(0, t.runs.indexOf(r))
+            .findLast(
+              (run) => run.state === "complete" && run.observedModel?.trim(),
+            )?.observedModel,
+        ) ||
         "";
       ctx.setStep("model");
       const observed = await ctx.verify(b, {

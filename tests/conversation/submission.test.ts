@@ -9,9 +9,59 @@ import { conversationStatus } from "../../src/conversation/status.ts";
 import { conversationHarness } from "../support/conversation.ts";
 import { composePrompt } from "../../src/conversation/prompt.ts";
 import { sha } from "../../src/hash.ts";
+import { ensureModel } from "../../src/browser/chatgpt/model.ts";
+import { effortModelFixture } from "../support/effort-model.ts";
 
 const { setup, start, home, ws, completedWithClaimedTab } =
   conversationHarness();
+
+test("effort-only quota diagnosis leaves the run unsent without filling a draft", async () => {
+  const { state, browser } = setup();
+  const model = effortModelFixture({
+    max: 3,
+    endpoint: "Extra High",
+    proDisabled: true,
+    hoverReason: "Limit reached. Try again after Oct 20, 2026.",
+  });
+  const conversation = new Conversation(
+    state,
+    browser as any,
+    async (_b, opts) => ensureModel(model, opts),
+  );
+  const t = await start(conversation, "quota-model", "Current prompt");
+  expect(t.runs[0]).toMatchObject({ state: "prepared" });
+  expect(t.runs[0].error).toContain(
+    "MODEL_UNAVAILABLE: Pro disabled; Limit reached. Try again after Oct 20, 2026.",
+  );
+  expect(t.runs[0].observedModel).toBeUndefined();
+  expect(browser.sends).toBe(0);
+  expect([...browser.pages.values()][0].draft).toBe("");
+});
+
+for (const effort of ["Light", "Standard", "High", "Extra High"]) {
+  test(`effort-only historical ${effort} is not inherited as a model identity`, async () => {
+    const { state, browser, conversation } = setup();
+    const first = await start(conversation, "effort-history", "First");
+    browser.complete();
+    const completed = await conversation.poll(first.id, first.currentRun);
+    completed.config.model = undefined;
+    completed.runs[0].observedModel = effort;
+    state.write("task-" + first.id, completed);
+    const checks: string[] = [];
+    const continuation = new Conversation(
+      state,
+      browser as any,
+      async (_b, opts) => {
+        checks.push(opts.model);
+        return { observedModel: opts.model || "6 Pro" };
+      },
+    );
+    const result = await start(continuation, first.id, "Next", "second", true);
+    expect(checks).toEqual(["", "6 Pro"]);
+    expect(result.runs[1].state).toBe("waiting");
+    expect(result.runs[0].observedModel).toBe(effort);
+  });
+}
 
 test("model drift after filling the draft stops before sending", async () => {
   const { state, browser } = setup();
@@ -797,6 +847,69 @@ for (const mode of [
       });
       expect(browser.sends).toBe(2);
     }
+  });
+}
+
+for (const mode of [
+  "history",
+  "history-over-older-full-model",
+  "history-with-config",
+  "retry",
+  "retry-with-config",
+]) {
+  test(`bare Pro observations do not pin a model version: ${mode}`, async () => {
+    const { state, browser, conversation } = setup();
+    const first = await start(conversation, "compact-history", "First");
+    browser.complete();
+    const completed = await conversation.poll(first.id, first.currentRun);
+    completed.config.model = mode.endsWith("with-config") ? "7 Pro" : undefined;
+    completed.runs[0].observedModel = " Pro ";
+    if (mode === "history-over-older-full-model")
+      completed.runs.unshift({
+        ...structuredClone(completed.runs[0]),
+        id: "older",
+        requestId: "older",
+        observedModel: "5.6 Pro",
+      });
+    state.write("task-" + first.id, completed);
+    const queued = await conversation.create(
+      first.id,
+      "Followup",
+      "second",
+      true,
+    );
+    if (mode.startsWith("retry")) {
+      queued.runs.at(-1)!.observedModel = "Pro";
+      state.write("task-" + first.id, queued);
+    }
+    const checks: Record<string, string>[] = [];
+    const continuation = new Conversation(
+      state,
+      browser as any,
+      async (_b, opts) => {
+        checks.push(opts);
+        return { observedModel: opts.model || "8 Pro" };
+      },
+    );
+    const result = mode.startsWith("retry")
+      ? await continuation.retry(queued.id, queued.currentRun)
+      : await continuation.start(queued.id, queued.currentRun);
+    const expected = completed.config.model || "";
+    expect(checks).toEqual([
+      { url: first.url!, target: first.binding!.target, model: expected },
+      {
+        url: first.url!,
+        target: first.binding!.target,
+        model: expected || "8 Pro",
+        "verify-only": "true",
+      },
+    ]);
+    expect(result.runs.at(-1)).toMatchObject({
+      state: "waiting",
+      observedModel: expected || "8 Pro",
+    });
+    expect(result.runs.slice(0, -1)).toEqual(completed.runs);
+    expect(browser.sends).toBe(2);
   });
 }
 

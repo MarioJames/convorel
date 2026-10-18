@@ -9,6 +9,7 @@ import {
   ensureModel,
   type ModelState,
 } from "../../src/browser/chatgpt/model.ts";
+import { effortModelFixture } from "../support/effort-model.ts";
 
 const opts = { url: "https://chatgpt.com/", target: "TASK-TAB" };
 // Simulate only the external browser UI. The production selection algorithm runs unchanged.
@@ -29,6 +30,7 @@ function fixture(
     ignoreLatest?: boolean;
     controlDelay?: number;
     minPower?: number | null;
+    compact?: boolean;
   } = {},
 ) {
   let version = initial.version ?? "5.6";
@@ -42,7 +44,7 @@ function fixture(
   const max = initial.maxPower ?? 4;
   const label = () =>
     effort === max
-      ? `${version} ${initial.maxLabel ?? "Pro"}`
+      ? `${version} ${initial.maxLabel ?? "Pro"}`.trim()
       : `${version} ${["Light", "Standard", "High", "Extra High"][effort]}`;
   const state = (): ModelState => ({
     url,
@@ -51,7 +53,12 @@ function fixture(
     hasComposer: true,
     control: {
       selector: "#model",
-      label: expanded ? "Thinking effort" : label(),
+      label: expanded
+        ? "Thinking effort"
+        : initial.compact
+          ? (initial.maxLabel ?? "Pro")
+          : label(),
+      compact: initial.compact,
       disabled: false,
       expanded,
     },
@@ -115,6 +122,244 @@ function fixture(
 }
 
 describe("pre-send Pro selection", () => {
+  test("effort-only UI proves the selected family and Pro Power independently", async () => {
+    const b = effortModelFixture({ latest: true, value: 2 });
+    const selected = await ensureModel(b, opts);
+    expect(selected).toMatchObject({
+      observedModel: "6 Pro",
+      expectedModel: "latest-pro",
+      evidence: { family: "GPT-6", power: 4, latest: true },
+    });
+    b.mutations.length = 0;
+    expect(
+      await ensureModel(b, {
+        ...opts,
+        model: "GPT-6 Pro",
+        "verify-only": "true",
+      }),
+    ).toMatchObject({ observedModel: "6 Pro", changed: false });
+    expect(
+      b.mutations.some((a) =>
+        ["focus", "ArrowRight"].some((x) => a.includes(x)),
+      ),
+    ).toBe(false);
+  });
+  test("effort-only explicit identity does not require or invent a Latest marker", async () => {
+    expect(
+      await ensureModel(effortModelFixture(), { ...opts, model: "6 Pro" }),
+    ).toMatchObject({
+      observedModel: "6 Pro",
+      evidence: { family: "GPT-6", latest: false },
+    });
+  });
+  test("effort-only default rechecks a named Latest selection before accepting its family", async () => {
+    const b = effortModelFixture({
+      latest: true,
+      latestChecked: false,
+      family: "GPT-5.6 Sol",
+    });
+    expect(await ensureModel(b, opts)).toMatchObject({
+      observedModel: "6 Pro",
+      changed: true,
+      evidence: { family: "GPT-6", latest: true },
+    });
+    const ignored = effortModelFixture({
+      latest: true,
+      latestChecked: false,
+      ignoreLatest: true,
+    });
+    await expect(ensureModel(ignored, opts)).rejects.toThrow(
+      "Latest selection did not persist",
+    );
+    expect(ignored.mutations.filter((a) => a[1] === MODEL_LATEST)).toHaveLength(
+      1,
+    );
+  });
+  test("effort-only first GPT-6 radio is insufficient to prove the rolling default", async () => {
+    const b = effortModelFixture();
+    await expect(ensureModel(b, opts)).rejects.toThrow(
+      /MODEL_UNVERIFIED:.*Latest/,
+    );
+    expect(
+      b.mutations.some((a) => a[1] === MODEL_LATEST || a[1] === "ArrowRight"),
+    ).toBe(false);
+  });
+  for (const family of ["GPT-7", "Unrecognized", null]) {
+    test(`effort-only Pro cannot substitute for a requested full family: ${family}`, async () => {
+      await expect(
+        ensureModel(effortModelFixture({ family }), {
+          ...opts,
+          model: "6 Pro",
+        }),
+      ).rejects.toThrow(/MODEL_UNVERIFIED|expected model 6 Pro/);
+    });
+  }
+  test("effort-only family drift while increasing Power is rejected", async () => {
+    await expect(
+      ensureModel(effortModelFixture({ value: 2, driftFamily: "GPT-7" }), {
+        ...opts,
+        model: "6 Pro",
+      }),
+    ).rejects.toThrow(/MODEL_UNVERIFIED|expected model 6 Pro/);
+  });
+  for (const verifyOnly of [false, true]) {
+    test(`effort-only rejects a changed family after returning to unchanged Pro Power: verify-only=${verifyOnly}`, async () => {
+      const b = effortModelFixture({ driftOnReopen: verifyOnly ? 2 : 3 });
+      const verification = ensureModel(b, {
+        ...opts,
+        model: "6 Pro",
+        ...(verifyOnly ? { "verify-only": "true" } : {}),
+      });
+      if (verifyOnly)
+        await expect(verification).rejects.toThrow(
+          /MODEL_UNVERIFIED|expected model 6 Pro/,
+        );
+      else {
+        // A final inspection can avoid reopening Power altogether. If it
+        // succeeds, the fixture's actual family must still match the result.
+        let result;
+        try {
+          result = await verification;
+        } catch (error) {
+          expect(String(error)).toMatch(
+            /MODEL_UNVERIFIED|expected model 6 Pro/,
+          );
+        }
+        if (result) {
+          expect(b.selectedFamily()).toBe("GPT-6");
+          expect(result.observedModel).toBe("6 Pro");
+        }
+      }
+      expect(
+        b.mutations.filter(
+          (a) => a[0] === "click" && [MODEL_LATEST, "#pro"].includes(a[1]!),
+        ),
+      ).toEqual([]);
+      expect(
+        b.mutations.some((a) => a[0] === "focus" || a[1] === "ArrowRight"),
+      ).toBe(false);
+    });
+  }
+  test("effort-only four-level UI reports only the disabled Pro's associated limit date", async () => {
+    const b = effortModelFixture({
+      max: 3,
+      endpoint: "Extra High",
+      proDisabled: true,
+      hoverReason: "Limit reached. Try again after Oct 20, 2026.",
+    });
+    await expect(ensureModel(b, opts)).rejects.toThrow(
+      "MODEL_UNAVAILABLE: Pro disabled; Limit reached. Try again after Oct 20, 2026.",
+    );
+    expect(b.mutations).toContainEqual(["hover", "#pro"]);
+    expect(
+      b.mutations.filter(
+        (a) =>
+          a[0] === "focus" ||
+          a[0] === "fill" ||
+          a[1] === "ArrowRight" ||
+          (a[0] === "click" && a[1] === "#pro"),
+      ),
+    ).toEqual([]);
+  });
+  test("effort-only disabled Pro without a bound reason never guesses quota", async () => {
+    const b = effortModelFixture({
+      max: 3,
+      endpoint: "Extra High",
+      proDisabled: true,
+    });
+    let error: unknown;
+    try {
+      await ensureModel(b, opts);
+    } catch (e) {
+      error = e;
+    }
+    expect(String(error)).toContain("MODEL_UNAVAILABLE: Pro disabled");
+    expect(String(error)).not.toMatch(/limit reached|quota|Oct 20/i);
+  });
+  test("effort-only maximum Extra High without disabled reason reports unavailable Power", async () => {
+    await expect(
+      ensureModel(
+        effortModelFixture({ max: 3, endpoint: "Extra High", latest: true }),
+        opts,
+      ),
+    ).rejects.toThrow(/MODEL_UNAVAILABLE:.*Extra High/);
+  });
+  test("effort-only hover still rechecks the page binding before reading its reason", async () => {
+    const b = effortModelFixture({ proDisabled: true, driftUrl: true });
+    await expect(ensureModel(b, opts)).rejects.toThrow("URL changed");
+  });
+  test("effort-only verify-only refuses a lowered effort when the final family menu closes", async () => {
+    await expect(
+      ensureModel(effortModelFixture({ dropPowerOnFinalClose: true }), {
+        ...opts,
+        model: "6 Pro",
+        "verify-only": "true",
+      }),
+    ).rejects.toThrow("MODEL_UNVERIFIED");
+  });
+  test("effort-only Latest disabled is never selected", async () => {
+    const b = effortModelFixture({ latest: true, latestDisabled: true });
+    await expect(ensureModel(b, opts)).rejects.toThrow(
+      "Latest model option disabled",
+    );
+    expect(b.mutations.some((a) => a[1] === MODEL_LATEST)).toBe(false);
+  });
+  test("compact Pro resolves Latest and reads back the full identity for the final check", async () => {
+    const b = fixture({ version: "5.6", effort: 4, compact: true });
+    const selected = await ensureModel(b, opts);
+    expect(selected).toMatchObject({
+      before: "Pro",
+      expectedModel: "latest-pro",
+      observedModel: "6 Pro",
+      evidence: { latest: true, power: 4, menuLabel: "6 Pro" },
+    });
+    expect(b.state().control).toMatchObject({ label: "Pro", expanded: false });
+    b.mutations.length = 0;
+    expect(
+      await ensureModel(b, {
+        ...opts,
+        model: selected.observedModel,
+        "verify-only": "true",
+      }),
+    ).toMatchObject({ observedModel: "6 Pro", changed: false });
+    expect(b.mutations).toEqual([
+      ["click", "#model"],
+      ["press", "Escape"],
+    ]);
+  });
+  test("a compact Pro label cannot hide a different full model identity", async () => {
+    const b = fixture({
+      version: "7",
+      latestVersion: "7",
+      effort: 4,
+      compact: true,
+    });
+    await expect(
+      ensureModel(b, { ...opts, model: "6 Pro", "verify-only": "true" }),
+    ).rejects.toThrow("MODEL_UNVERIFIED");
+    expect(b.mutations).toEqual([
+      ["click", "#model"],
+      ["press", "Escape"],
+    ]);
+    await expect(ensureModel(b, { ...opts, model: "6 Pro" })).rejects.toThrow(
+      "expected model 6 Pro",
+    );
+  });
+  test("Latest and maximum Power cannot certify a bare Pro menu identity", async () => {
+    await expect(
+      ensureModel(
+        fixture({ version: "", latestVersion: "", effort: 4, compact: true }),
+        opts,
+      ),
+    ).rejects.toThrow("Pro");
+  });
+  test("read-only confirmation requires a full identity even when the closed label is Pro", async () => {
+    const b = fixture({ version: "", effort: 4 });
+    await expect(
+      ensureModel(b, { ...opts, model: "Pro", "verify-only": "true" }),
+    ).rejects.toThrow("MODEL_UNVERIFIED");
+    expect(b.mutations).toHaveLength(0);
+  });
   test("read-only pre-send confirmation rejects a changed model without selecting a fallback", async () => {
     const b = fixture({ version: "7", effort: 4 });
     await expect(

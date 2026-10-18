@@ -51,7 +51,8 @@ export const MODEL_PICKER =
   ':is([data-testid="composer-intelligence-picker-content"], [data-model-picker-view])';
 export const MODEL_SELECT = `${MODEL_PICKER} :is([role="menuitem"][aria-expanded], [data-model-picker-view-toggle="true"])`;
 export const MODEL_POWER = `${MODEL_PICKER} :is([data-testid="composer-model-picker-slider-simple-view"] [role="menuitem"]:has([data-model-reasoning-effort-slider]), [data-reasoning-slider="true"])`;
-// The picker places its rolling default before the explicitly versioned models.
+// Legacy fallback only. Position never proves Latest: MODEL_SCRIPT must first
+// identify the rolling option by its accessible name and returns its selector.
 export const MODEL_LATEST = `${MODEL_PICKER} :is([data-testid="composer-model-picker-slider-advanced-view"] [role="group"], [data-active="true"] [data-active="true"] > div) > [role="menuitemradio"]:first-of-type`;
 
 // Rename has no semantic test id. Match its observed icon only inside the target

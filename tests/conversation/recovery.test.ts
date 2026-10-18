@@ -527,18 +527,27 @@ for (const mode of [
   "history-fallback",
   "config-fallback",
   "default-fallback",
+  "bare-history",
+  "bare-observed",
+  "bare-observed-over-history",
+  "bare-observed-over-config",
 ]) {
   test(`recovery retains its observed model and both verifications: ${mode}`, async () => {
     const { state, browser, t, options } = await missingDelivery();
     t.config.model = mode.includes("config") ? "5.6 Pro" : undefined;
     t.runs[1].observedModel = mode.startsWith("observed") ? "6 Pro" : undefined;
     if (mode === "default-fallback") delete t.runs[0].observedModel;
+    if (mode === "bare-history" || mode === "bare-observed")
+      t.runs[0].observedModel = "Pro";
+    if (mode.startsWith("bare-observed")) t.runs[1].observedModel = "Pro";
     state.write("task-" + t.id, t);
     const checks: Record<string, string>[] = [];
     const expected =
-      mode === "default-fallback"
+      mode === "default-fallback" ||
+      mode === "bare-history" ||
+      mode === "bare-observed"
         ? ""
-        : mode === "config-fallback"
+        : mode === "config-fallback" || mode === "bare-observed-over-config"
           ? "5.6 Pro"
           : "6 Pro";
     const selected = expected || "7 Pro";
