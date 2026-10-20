@@ -184,6 +184,83 @@ describe("pre-send Pro selection", () => {
       b.mutations.some((a) => a[1] === MODEL_LATEST || a[1] === "ArrowRight"),
     ).toBe(false);
   });
+  test("effort-only without a Latest option accepts the unpinned rolling default and raises Power to Pro", async () => {
+    const b = effortModelFixture({ explicit: false, value: 2 });
+    expect(await ensureModel(b, opts)).toMatchObject({
+      observedModel: "6 Pro",
+      expectedModel: "latest-pro",
+      evidence: {
+        family: "GPT-6",
+        power: 4,
+        latest: true,
+        latestSource: "rolling-default",
+      },
+    });
+    expect(b.selectedFamily()).toBe("GPT-6");
+    // Only the trigger, the model-view toggle, Power and Escape were touched.
+    expect(
+      b.mutations.every(
+        (a) =>
+          (a[0] === "click" && (a[1] === "#model" || a[1] === MODEL_SELECT)) ||
+          (a[0] === "focus" && a[1] === MODEL_POWER) ||
+          (a[0] === "press" && (a[1] === "ArrowRight" || a[1] === "Escape")),
+      ),
+    ).toBe(true);
+    expect(b.mutations.filter((a) => a[1] === "ArrowRight")).toHaveLength(2);
+  });
+  test("a Latest option keeps option evidence even when the explicit marker says unpinned", async () => {
+    expect(
+      await ensureModel(
+        effortModelFixture({ latest: true, explicit: false }),
+        opts,
+      ),
+    ).toMatchObject({ evidence: { latest: true, latestSource: "option" } });
+  });
+  for (const explicit of [true, undefined]) {
+    test(`effort-only without a Latest option fails closed when the explicit marker is ${explicit ?? "missing"}`, async () => {
+      const b = effortModelFixture({ explicit, value: 2 });
+      await expect(ensureModel(b, opts)).rejects.toThrow(
+        explicit
+          ? /MODEL_UNVERIFIED: no Latest option and an explicit model is pinned/
+          : /MODEL_UNVERIFIED: no Latest option and rolling-default marker missing/,
+      );
+      expect(
+        b.mutations.some(
+          (a) =>
+            a[1] === MODEL_LATEST ||
+            a[1] === "ArrowRight" ||
+            (a[0] === "click" && a[1] !== "#model" && a[1] !== MODEL_SELECT),
+        ),
+      ).toBe(false);
+      expect(b.selectedFamily()).toBe("GPT-6");
+    });
+  }
+  test("rolling-default evidence still requires one valid selected family and Pro Power", async () => {
+    for (const family of ["Unrecognized", null])
+      await expect(
+        ensureModel(effortModelFixture({ explicit: false, family }), opts),
+      ).rejects.toThrow(/MODEL_UNVERIFIED/);
+    await expect(
+      ensureModel(
+        effortModelFixture({ explicit: false, max: 3, endpoint: "Extra High" }),
+        opts,
+      ),
+    ).rejects.toThrow(/MODEL_UNAVAILABLE/);
+    await expect(
+      ensureModel(
+        effortModelFixture({ explicit: false, proDisabled: true }),
+        opts,
+      ),
+    ).rejects.toThrow(/MODEL_UNAVAILABLE: Pro disabled/);
+  });
+  test("rolling-default family drift after Power verification is rejected", async () => {
+    await expect(
+      ensureModel(
+        effortModelFixture({ explicit: false, value: 2, driftFamily: "GPT-7" }),
+        opts,
+      ),
+    ).rejects.toThrow(/MODEL_UNVERIFIED/);
+  });
   for (const family of ["GPT-7", "Unrecognized", null]) {
     test(`effort-only Pro cannot substitute for a requested full family: ${family}`, async () => {
       await expect(

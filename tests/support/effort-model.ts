@@ -14,6 +14,8 @@ export function effortModelFixture(
     latestDisabled?: boolean;
     latestChecked?: boolean;
     ignoreLatest?: boolean;
+    // Value of data-explicit-model; omitted means the marker is missing (null).
+    explicit?: boolean;
     proDisabled?: boolean;
     reason?: string;
     hoverReason?: string;
@@ -54,6 +56,7 @@ export function effortModelFixture(
     menuLabel: expanded && !advanced ? effort() : null,
     menuScope: '[role="menu"][aria-labelledby="model"]',
     effortOnly: true,
+    explicitModel: initial.explicit ?? null,
     modelOptions: expanded && advanced,
     family: expanded && advanced ? family : null,
     pro:

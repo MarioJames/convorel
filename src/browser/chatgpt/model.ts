@@ -39,6 +39,9 @@ export interface ModelState {
   power: Power | null;
   latest: { checked: boolean; disabled: boolean; selector?: string } | null;
   effortOnly?: boolean;
+  // data-explicit-model on the bound menu: false = unpinned rolling default,
+  // true = a model is pinned, null = marker missing or inconsistent.
+  explicitModel?: boolean | null;
   modelOptions?: boolean;
   family?: string | null;
   pro?: { selector: string; disabled: boolean; description: string } | null;
@@ -92,6 +95,10 @@ export const MODEL_SCRIPT = `(() => {
   const description = e => [e?.getAttribute('aria-description'), e?.getAttribute('title'),
     ...(e?.getAttribute('aria-describedby') || '').split(/\\s+/).filter(Boolean)
       .map(id => label(document.getElementById(id)))].filter(Boolean).join(' ').slice(0, 400);
+  const explicitValues = Array.from(menu?.querySelectorAll('[data-explicit-model]') || [])
+    .map(e => e.getAttribute('data-explicit-model'));
+  const explicitModel = explicitValues.length > 0 && explicitValues.every(v => v === 'false') ? false
+    : explicitValues.includes('true') ? true : null;
   const buttons = Array.from(document.querySelectorAll('button')).filter(visible);
   const buttonLabel = e => e.getAttribute('aria-label') || label(e);
   const login = location.hostname === 'auth.openai.com' || buttons.some(e => /^(Log in|登录)$/.test(buttonLabel(e)));
@@ -105,6 +112,7 @@ export const MODEL_SCRIPT = `(() => {
     menuLabel: select ? label(select) : null,
     menuScope,
     effortOnly: !!select?.querySelector('[data-effort-only="true"]'),
+    explicitModel,
     modelOptions: radios.length > 0,
     family: selected.length === 1 ? label(selected[0]) : null,
     pro: pro ? { selector: selector(pro), disabled: disabled(pro), description: description(pro) } : null,
@@ -242,14 +250,24 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
           `MODEL_UNAVAILABLE: Pro disabled; ${current.pro!.description || "associated reason unavailable"}`,
         );
       }
+      // Without a Latest option, the unpinned rolling default is the evidence:
+      // the menu declares no explicit model and exactly one family is selected.
+      const rollingDefault =
+        !current.latest &&
+        current.explicitModel === false &&
+        !!familyIdentity(current.family);
       if (selectLatest) {
-        if (!current.latest)
+        if (!current.latest && !rollingDefault)
           throw new Error(
-            "MODEL_UNVERIFIED: Latest identity unavailable; no rolling-default evidence",
+            current.explicitModel === true
+              ? "MODEL_UNVERIFIED: no Latest option and an explicit model is pinned; select the rolling default (Latest) in this tab"
+              : current.explicitModel === false
+                ? "MODEL_UNVERIFIED: no Latest option and the selected model family is unavailable or ambiguous; no rolling-default evidence"
+                : "MODEL_UNVERIFIED: no Latest option and rolling-default marker missing; Latest identity unavailable",
           );
-        if (current.latest.disabled)
+        if (current.latest?.disabled)
           throw new Error("Latest model option disabled");
-        if (!current.latest.checked) {
+        if (current.latest && !current.latest.checked) {
           if (attempt) throw new Error("Latest selection did not persist");
           await act("click", MODEL_LATEST);
           current = await wait(
@@ -265,11 +283,17 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
           "MODEL_UNVERIFIED: selected model family unavailable or ambiguous",
         );
       const latest = !!current.latest?.checked && !current.latest.disabled;
+      const latestSource: "option" | "rolling-default" | null = latest
+        ? "option"
+        : rollingDefault
+          ? "rolling-default"
+          : null;
       if (!returnToPower)
         return {
           state: current,
           family: family!,
           latest,
+          latestSource,
           changed: attempt > 0,
         };
       // Reopening the bound trigger returns to its simple view. Never select a
@@ -284,7 +308,13 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
         (s) => !!s.power && s.menuLabel !== null,
         "Power menu unavailable after family verification",
       );
-      return { state: current, family: family!, latest, changed: attempt > 0 };
+      return {
+        state: current,
+        family: family!,
+        latest,
+        latestSource,
+        changed: attempt > 0,
+      };
     }
     throw new Error("Latest selection did not persist");
   };
@@ -430,12 +460,14 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     "Power menu unavailable",
   );
   let latestVerified = false;
+  let latestSource: "option" | "rolling-default" | null = null;
   let family: string | null = null;
   if (effortOnly(state)) {
     const inspected = await inspectFamily(state, !expectedModel);
     state = inspected.state;
     family = inspected.family;
-    latestVerified = !expectedModel && inspected.latest;
+    latestSource = expectedModel ? null : inspected.latestSource;
+    latestVerified = latestSource !== null;
     changed = inspected.changed;
     if (
       expectedModel &&
@@ -462,6 +494,7 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
         throw new Error("Latest selection did not persist");
     }
     latestVerified = true;
+    latestSource = "option";
     await act("click", MODEL_LATEST);
     state = await wait(
       (s) => !!s.power && s.menuLabel !== null,
@@ -521,7 +554,7 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
       throw new Error(
         "MODEL_UNVERIFIED: model family changed after Power verification",
       );
-    if (latestVerified && !inspected.latest)
+    if (latestVerified && inspected.latestSource !== latestSource)
       throw new Error("MODEL_UNVERIFIED: Latest selection did not persist");
   }
   const selectedModel = family ? familyIdentity(family)! : selectedMenuLabel;
@@ -541,6 +574,7 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
     power: selectedPower.value,
     maximum: selectedPower.max,
     latest: latestVerified,
+    ...(latestSource ? { latestSource } : {}),
     description: selectedPower.description,
     ...(family ? { family } : {}),
   };

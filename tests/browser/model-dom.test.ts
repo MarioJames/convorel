@@ -45,6 +45,10 @@ function domFixture() {
   });
   form.queries.set('button[aria-haspopup="menu"]', [trigger]);
   const menu = element("", { "aria-labelledby": "model" });
+  const header = element("", {
+    "data-explicit-model": "false",
+    "data-effort-header": "true",
+  });
   const select = element("Extra High", { "aria-label": "Select model" });
   select.queries.set('[data-effort-only="true"]', [element("Extra High")]);
   const power = element("", { "aria-describedby": "power-status power-help" });
@@ -73,6 +77,7 @@ function domFixture() {
   menu.queries.set(MODEL_POWER, [power]);
   menu.queries.set(MODEL_LATEST, [family]); // Old positional locator would misidentify this as Latest.
   menu.queries.set('[role="menuitemradio"]', [family, older, pro]);
+  menu.queries.set("[data-explicit-model]", [header]);
   const ids = new Map<string, any>([
     ["power-status", element("Extra High, 4 of 4.")],
     ["power-help", element("Use Left and Right arrow keys to adjust power")],
@@ -110,7 +115,7 @@ function domFixture() {
       () => ({ visibility: "visible" }),
       { escape: (s: string) => s },
     );
-  return { read, showAdvanced, pro, family, older, menu, document };
+  return { read, showAdvanced, pro, family, older, menu, header, document };
 }
 
 test("model DOM binds family and hidden slider to the composer menu without assuming first means Latest", () => {
@@ -151,4 +156,27 @@ test("model DOM reads limit text only after disabled Pro explicitly references i
     description: "Limit reached. Try again after Oct 20, 2026.",
     selector: '[role="menu"][aria-labelledby="model"] > :nth-child(5)',
   });
+});
+
+test("model DOM reports the unpinned rolling default of the 2026-10-20 menu without a Latest option", () => {
+  const f = domFixture();
+  f.showAdvanced();
+  expect(f.read()).toMatchObject({
+    explicitModel: false,
+    family: "GPT-6",
+    latest: null,
+    modelOptions: true,
+  });
+  f.showAdvanced(false);
+  expect(f.read()).toMatchObject({ explicitModel: false, effortOnly: true });
+});
+
+test("model DOM never reports an unpinned model unless every marker says so", () => {
+  const f = domFixture();
+  f.header.setAttribute("data-explicit-model", "true");
+  expect(f.read().explicitModel).toBe(true);
+  f.header.setAttribute("data-explicit-model", "maybe");
+  expect(f.read().explicitModel).toBeNull();
+  f.menu.queries.delete("[data-explicit-model]");
+  expect(f.read().explicitModel).toBeNull();
 });
