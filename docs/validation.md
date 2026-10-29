@@ -1,5 +1,12 @@
 # 验证记录
 
+## 2026-10-29：新版 Pro 模型控件标记
+
+真实项目页的模型按钮使用 `data-composer-navigation-target="reasoning"`，关闭菜单后仅显示 `Pro`，不再带旧的 intelligence 标记。新增该公开 DOM 标记识别；仍要求展开菜单核实完整模型身份、Latest 与 Power，保留关闭后的两次确认，不以裸 `Pro` 标签替代完整模型校验。
+
+- 模型 DOM、模型选择、登录与 CLI profile 的 61 项针对性测试通过，类型检查通过；新 DOM 回归在修复前因未识别新标记失败。
+- 同一真实 Chrome/agent-browser 版本上，原先在发送前被拒绝的已准备审查轮次通过模型确认并取得 `delivery: confirmed`。没有新建轮次或在投递不明时重发；此处仅证明投递，审查回复由原任务继续验收。
+
 ## 2026-10-29：登录命令与真实会话判定
 
 新增 `convorel login [--login-timeout SECONDS]`，与 `browser start` 共用托管 Chrome 登录流程、profile 归属检查和超时校验；超时提示与使用指南指向新入口。登录轮询改为核实 `/api/auth/session` 的认证结果，匿名页面即使有输入框也不能返回 `ready`。

@@ -24,6 +24,9 @@ function domFixture() {
       setAttribute: (key: string, value: string) => {
         attrs[key] = value;
       },
+      removeAttribute: (key: string) => {
+        delete attrs[key];
+      },
       getClientRects: () => (e.visible ? [{}] : []),
       closest: () => null,
       contains: (child: any) => e.children.includes(child),
@@ -115,8 +118,27 @@ function domFixture() {
       () => ({ visibility: "visible" }),
       { escape: (s: string) => s },
     );
-  return { read, showAdvanced, pro, family, older, menu, header, document };
+  return {
+    read,
+    showAdvanced,
+    pro,
+    family,
+    older,
+    menu,
+    header,
+    document,
+    trigger,
+  };
 }
+
+test("the reasoning composer trigger uses a compact model label", () => {
+  const f = domFixture();
+  f.trigger.innerText = "Pro";
+  f.trigger.removeAttribute("data-codex-intelligence-trigger");
+  expect(f.read().control.compact).toBe(false);
+  f.trigger.setAttribute("data-composer-navigation-target", "reasoning");
+  expect(f.read().control).toMatchObject({ label: "Pro", compact: true });
+});
 
 test("model DOM binds family and hidden slider to the composer menu without assuming first means Latest", () => {
   const f = domFixture();

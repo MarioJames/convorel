@@ -108,7 +108,8 @@ export const MODEL_SCRIPT = `(() => {
     generating: buttons.some(e => e.matches(${JSON.stringify(STOP_SELECTOR)}) || (form?.contains(e) && ${JSON.stringify(STOP_NAMES)}.includes(controlName(e)))),
     hasComposer: visible(composer),
     control: control ? { selector: '#' + CSS.escape(control.id), label: label(control),
-      disabled: disabled(control), compact: control.hasAttribute('data-codex-intelligence-trigger'), expanded: control.getAttribute('aria-expanded') === 'true' } : null,
+      disabled: disabled(control), compact: control.hasAttribute('data-codex-intelligence-trigger')
+        || control.getAttribute('data-composer-navigation-target') === 'reasoning', expanded: control.getAttribute('aria-expanded') === 'true' } : null,
     menuLabel: select ? label(select) : null,
     menuScope,
     effortOnly: !!select?.querySelector('[data-effort-only="true"]'),
