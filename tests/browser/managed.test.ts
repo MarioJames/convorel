@@ -340,3 +340,18 @@ test("login polling binds the ChatGPT tab once and leaves the sign-in tab in fro
   expect(await probe()).toBe("loading");
   expect(opened).toEqual([CHATGPT_URL, CHATGPT_URL]);
 });
+
+test("a composer alone does not prove the ChatGPT account is signed in", async () => {
+  let authenticated = false;
+  const browser = {
+    tabs: async () => ({ tabs: [{ targetId: "T1", url: CHATGPT_URL }] }),
+    page: async () => ({
+      read: async () => ({ url: CHATGPT_URL, hasComposer: true }),
+      run: async () => ({ result: authenticated }),
+    }),
+  } as any;
+  const probe = chatgptLoginProbe(browser);
+  expect(await probe()).toBe("login");
+  authenticated = true;
+  expect(await probe()).toBe("ready");
+});

@@ -135,8 +135,17 @@ export async function runBrowser(
   print: Printer,
 ) {
   if (sub !== "start") throw new Error("UNKNOWN_BROWSER_COMMAND");
+  return runLogin(rest, store, print, "browser start");
+}
+
+export async function runLogin(
+  rest: string[],
+  store: State,
+  print: Printer,
+  command = "login",
+) {
   const o = opts(rest);
-  rejectUnknown("browser start", Object.keys(o), ["login-timeout"]);
+  rejectUnknown(command, Object.keys(o), ["login-timeout"]);
   const timeoutMs = loginTimeoutMs(o["login-timeout"]);
   const config = store.read<Config>("config");
   if (!config.browser)

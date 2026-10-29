@@ -1,5 +1,13 @@
 # 验证记录
 
+## 2026-10-29：登录命令与真实会话判定
+
+新增 `convorel login [--login-timeout SECONDS]`，与 `browser start` 共用托管 Chrome 登录流程、profile 归属检查和超时校验；超时提示与使用指南指向新入口。登录轮询改为核实 `/api/auth/session` 的认证结果，匿名页面即使有输入框也不能返回 `ready`。
+
+- `bun run check`：类型检查与 484 项测试通过；CLI 覆盖新入口复用 profile、外部绑定拒绝、profile 冲突及无副作用帮助；新增回归证明输入框不能替代认证会话。
+- Linux x64、Google Chrome 156.0.8078.73、agent-browser 0.34.0：用户在专用有头窗口手动登录后，源码 `login` 通过真实认证检查并返回 `login: ready`。独立可执行文件构建、帮助和非法超时拒绝通过。
+- 首次有头登录后自动回切无头时仍返回未登录；此次未证明该切换能保留会话。最终复验保持已有窗口，未更改无头偏好。用户要求保留的浏览器、profile 与隧道继续运行；未发布 Release 或替换本机安装版。
+
 ## 2026-10-15：托管 Chrome 用户数据目录配置
 
 新增 `browser.userDataDir` 偏好及 `init`/`setup --user-data-dir PATH`；运行时优先级为偏好、已存状态路径、`<state>/chrome`。相对路径被拒绝，支持 `~` 展开；偏好不会覆盖状态中的回退路径，不搬移或删除 profile 数据。两个 doctor 模式输出生效路径及来源。另一 profile 已占用同端口时拒绝启动，包括进程已启动但 CDP 尚未响应的情况。

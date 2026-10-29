@@ -2,7 +2,7 @@ import { COMPILED } from "../../runtime.ts";
 import packageInfo from "../../../package.json";
 import { footer, type Page } from "./shared.ts";
 import { initPage, setupPage } from "./setup.ts";
-import { browserPage } from "./browser.ts";
+import { browserPage, loginPage } from "./browser.ts";
 import { skillsPage } from "./skills.ts";
 import { servicePages } from "./service.ts";
 import { diagnosticsPage } from "./diagnostics.ts";
@@ -17,6 +17,7 @@ import { recoverLockPage } from "./locks.ts";
 const pages: Page[] = [
   setupPage,
   initPage,
+  loginPage,
   browserPage,
   skillsPage,
   ...servicePages,

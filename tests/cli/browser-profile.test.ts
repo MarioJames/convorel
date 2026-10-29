@@ -23,6 +23,8 @@ test("init/setup save the profile preference while preserving the binding fallba
 if (process.argv.includes('--version')) { console.log('agent-browser fixture'); process.exit(0); }
 const data = process.argv.includes('tab') && process.argv.includes('list')
   ? { tabs: [{ targetId: 'fixture', url: 'https://chatgpt.com/' }] }
+  : process.argv.some(arg => arg.includes('/api/auth/session'))
+  ? { result: true }
   : { result: { url: 'https://chatgpt.com/', messages: [], hasComposer: true, blocked: null } };
 console.log(JSON.stringify({ success: true, data }));
 `,
@@ -118,6 +120,13 @@ console.log(JSON.stringify({ success: true, data }));
         profile: preferred,
         launched: false,
       });
+      const login = await run(store.root, "login", "--login-timeout", "1");
+      expect(login.exitCode, login.stderr).toBe(0);
+      expect(JSON.parse(login.stdout)).toMatchObject({
+        profile: preferred,
+        launched: false,
+        login: "ready",
+      });
       const doctor = await run(store.root, "doctor", "--local", "true");
       expect(doctor.exitCode, doctor.stderr.toString()).toBe(0);
       expect(JSON.parse(doctor.stdout.toString()).browser).toEqual({
@@ -136,13 +145,7 @@ console.log(JSON.stringify({ success: true, data }));
         profile: join(store.root, "chrome"),
         profileSource: "state",
       });
-      const conflict = await run(
-        store.root,
-        "browser",
-        "start",
-        "--login-timeout",
-        "1",
-      );
+      const conflict = await run(store.root, "login", "--login-timeout", "1");
       expect(conflict.exitCode).toBe(1);
       expect(conflict.stderr.toString()).toContain(
         "MANAGED_BROWSER_PORT_IN_USE",

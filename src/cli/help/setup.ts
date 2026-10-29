@@ -63,6 +63,6 @@ export const initPage = page(
   [
     "The state directory must be outside the workspace. Use another --state-dir for a second binding. Set model, project, and other preferences with config set.",
     "If browser.executable is already set, init checks that saved path instead of searching PATH again. A missing or unidentified agent-browser stops init before the workspace binding is written.",
-    "The profile uses browser.userDataDir, then the saved binding profile, then chrome/ under the state directory. Stop Chrome before moving profile data yourself. Chrome output lives in chrome.log. The binding is saved before sign-in, so a timed-out sign-in continues with browser start. Another profile on the same port is refused without stopping it.",
+    "The profile uses browser.userDataDir, then the saved binding profile, then chrome/ under the state directory. Stop Chrome before moving profile data yourself. Chrome output lives in chrome.log. The binding is saved before sign-in, so a timed-out sign-in continues with convorel login. Another profile on the same port is refused without stopping it.",
   ],
 );

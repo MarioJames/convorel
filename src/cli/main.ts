@@ -20,7 +20,7 @@ import { runUpgrade, runVersion } from "./release.ts";
 import { isServiceCommand, runService } from "./service.ts";
 import { runMcp } from "./mcp.ts";
 import { runInit, runSetup } from "./init.ts";
-import { ensureManagedBrowser, runBrowser } from "./browser.ts";
+import { ensureManagedBrowser, runBrowser, runLogin } from "./browser.ts";
 import { runSkills } from "./skills.ts";
 import { runConfig } from "./config.ts";
 import { runRecoverLock } from "./locks.ts";
@@ -82,6 +82,7 @@ export async function main(args = process.argv.slice(2)) {
   const store = getStore();
   if (area === "recover-lock") return runRecoverLock(args, store, print);
   if (area === "init") return runInit(args, store, print);
+  if (area === "login") return runLogin(args.slice(1), store, print);
   if (area === "browser") return runBrowser(sub, rest, store, print);
   if (
     area === "conversation" &&

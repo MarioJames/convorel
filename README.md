@@ -72,6 +72,8 @@ convorel setup --workspace /absolute/path/to/your-project --agent codex
 
 Convorel 会创建专用的 Chrome profile，打开 ChatGPT 等你登录一次；之后浏览器没在运行时，会自动拉起。使用 Claude Code 时把 `codex` 换成 `claude-code`，两个都装用 `codex,claude-code`；已有同名技能时会停下提示，不会覆盖你的修改。
 
+登录过期或初始化登录超时后，运行 `convorel login` 重新打开专用浏览器并等待登录；默认等待 600 秒，可用 `--login-timeout SECONDS` 调整。
+
 几个常用选项：
 
 - 不想让浏览器窗口打断工作：`convorel config set browser.headless true`。托管 Chrome 改为无窗口运行，需要登录时仍会打开窗口。

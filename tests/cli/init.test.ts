@@ -163,6 +163,9 @@ test("browser ownership options are validated before any binding is written", ()
     const start = run("browser", "start");
     expect(start.exitCode).toBe(1);
     expect(start.stderr.toString()).toContain("BROWSER_NOT_MANAGED");
+    const login = run("login");
+    expect(login.exitCode).toBe(1);
+    expect(login.stderr.toString()).toContain("BROWSER_NOT_MANAGED");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

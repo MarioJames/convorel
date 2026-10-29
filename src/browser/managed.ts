@@ -386,11 +386,15 @@ export function chatgptLoginProbe(
     const state = await page.read();
     if (state.blocked === "Login required") return "login";
     if (state.blocked === "Human verification required") return "verification";
-    if (state.hasComposer && !state.blocked) return "ready";
-    // Settings and other signed-in pages have no composer.
+    // Anonymous ChatGPT can also show a composer. Only an authenticated
+    // session proves sign-in, including on settings pages without a composer.
     if (!state.url.startsWith(CHATGPT_URL)) return "loading";
     const session = await page.run("eval", SESSION_SCRIPT);
-    return session.result === true ? "ready" : "loading";
+    return session.result === true
+      ? "ready"
+      : state.hasComposer
+        ? "login"
+        : "loading";
   };
 }
 
@@ -415,7 +419,7 @@ export async function waitForLogin(
     last = status;
     if (now() >= deadline)
       throw new Error(
-        `CHATGPT_LOGIN_TIMEOUT: still ${status} after ${Math.round(options.timeoutMs / 1000)}s; run convorel browser start to continue`,
+        `CHATGPT_LOGIN_TIMEOUT: still ${status} after ${Math.round(options.timeoutMs / 1000)}s; run convorel login to continue`,
       );
     await sleep(intervalMs);
   }

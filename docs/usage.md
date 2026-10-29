@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/MarioJames/convorel/main/install.sh
 convorel setup --workspace /absolute/path/to/your-project
 ```
 
-默认由 Convorel 管理浏览器：在状态目录的 `chrome/` 下创建专用 profile，查找 `PATH` 中的 `google-chrome`、`google-chrome-stable`、`chromium` 或 `chromium-browser`（macOS 为 Google Chrome.app，也可用 `--chrome PATH` 指定），以有头模式打开 ChatGPT，等待你在该窗口登录一次（默认 600 秒，可用 `--login-timeout` 调整）。调试端口只绑定 `127.0.0.1`，默认 9222，被占用时选空闲端口；端口、Chrome 路径和 profile 写入状态目录的 `config.json`。绑定先于登录等待保存，超时后用 `convorel browser start` 继续登录。之后需要浏览器的命令发现端点未运行时会自动拉起这个 profile；端口被其他浏览器占用时拒绝连接，不会误用。Chrome 输出写入状态目录的 `chrome.log`。
+默认由 Convorel 管理浏览器：在状态目录的 `chrome/` 下创建专用 profile，查找 `PATH` 中的 `google-chrome`、`google-chrome-stable`、`chromium` 或 `chromium-browser`（macOS 为 Google Chrome.app，也可用 `--chrome PATH` 指定），以有头模式打开 ChatGPT，等待你在该窗口登录一次（默认 600 秒，可用 `--login-timeout` 调整）。调试端口只绑定 `127.0.0.1`，默认 9222，被占用时选空闲端口；端口、Chrome 路径和 profile 写入状态目录的 `config.json`。绑定先于登录等待保存，超时或登录失效后用 `convorel login` 继续登录（也可沿用 `convorel browser start`），支持 `--login-timeout SECONDS`（1–3600 秒，默认 600 秒）。之后需要浏览器的命令发现端点未运行时会自动拉起这个 profile；端口被其他浏览器占用时拒绝连接，不会误用。Chrome 输出写入状态目录的 `chrome.log`。
 
 托管 profile 的路径可在初始化时指定：`convorel setup --workspace /absolute/path/to/your-project --user-data-dir /absolute/profile`，`init` 接受同一参数；它们写入偏好 `browser.userDataDir`。也可运行 `convorel config set browser.userDataDir "~/browser-profiles/convorel"`（绝对路径，支持 `~` 展开，拒绝相对路径）。生效顺序为偏好、状态 `config.json` 中已保存的 `browser.userDataDir`、状态目录下的 `chrome/`；`convorel config unset browser.userDataDir` 恢复回退值，不会将偏好路径覆盖到原状态值。偏好由使用同一配置目录的托管绑定共享。
 

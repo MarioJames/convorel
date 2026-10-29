@@ -95,7 +95,7 @@ export async function runInit(args: string[], store: State, print: Printer) {
   }, "config");
   if (userDataDir !== undefined)
     writePreference("browser.userDataDir", userDataDir);
-  // The binding is saved first, so an unfinished sign-in resumes with browser start.
+  // The binding is saved first, so an unfinished sign-in resumes with login.
   if (browser) {
     await signInManagedBrowser(config, store, timeoutMs);
   }

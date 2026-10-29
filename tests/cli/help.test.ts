@@ -59,6 +59,7 @@ test("each command help explains that command and does not create private direct
   expect(rootHelp).toContain("conversation start --id ID --run UUID");
   expect(rootHelp).toContain("convorel <command> --help");
   expect(rootHelp).toContain("diagnostics.enabled");
+  expect(rootHelp).toContain("login [--login-timeout SECONDS]");
   for (const topic of helpTopics()) {
     const text = renderHelp(topic.args);
     expect(text, topic.args.join(" ")).toContain(topic.usage);
@@ -92,6 +93,7 @@ test("each command help explains that command and does not create private direct
     ["version", "--check", "--help"],
     ["setup", "--workspace", project, "--cdp", "1", "--help"],
     ["doctor", "--help"],
+    ["login", "--help"],
     ["mcp", "serve", "--help"],
     ["skills", "install", "--help"],
     ["tunnel", "doctor", "--help"],
