@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
@@ -7,13 +7,16 @@ import {
   existsSync,
   readlinkSync,
   symlinkSync,
+  rmSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
-const task =
-  process.env.CONVOREL_RUNTIME_TEST_DIR ?? "/tmp/convorel-runtime-tests";
-mkdirSync(task, { recursive: true });
+const taskRoot = process.env.CONVOREL_RUNTIME_TEST_DIR ?? tmpdir();
+mkdirSync(taskRoot, { recursive: true });
+const task = mkdtempSync(join(taskRoot, "convorel-install-suite-"));
+afterAll(() => rmSync(task, { recursive: true, force: true }));
 async function setup() {
   const root = mkdtempSync(join(task, "install-"));
   const prefix = join(root, "prefix"),

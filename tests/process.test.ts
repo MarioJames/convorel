@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import {
   mkdirSync,
   mkdtempSync,
@@ -6,7 +6,9 @@ import {
   realpathSync,
   writeFileSync,
   existsSync,
+  rmSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { runProcess, childEnv } from "../src/process.ts";
@@ -14,10 +16,12 @@ import { inspectProcess } from "../src/process-info.ts";
 import { MemoryAccess } from "../src/mcp/memory.ts";
 import { processIdentity, State } from "../src/storage/state.ts";
 
-const taskRoot =
-  process.env.CONVOREL_RUNTIME_TEST_DIR ?? "/tmp/convorel-runtime-tests";
+const taskRoot = process.env.CONVOREL_RUNTIME_TEST_DIR ?? tmpdir();
 mkdirSync(taskRoot, { recursive: true });
-const task = realpathSync(taskRoot);
+const task = mkdtempSync(
+  join(realpathSync(taskRoot), "convorel-process-suite-"),
+);
+afterAll(() => rmSync(task, { recursive: true, force: true }));
 function live(pid: number) {
   return !!inspectProcess(pid)?.live;
 }
