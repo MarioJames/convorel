@@ -381,7 +381,7 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
             `MODEL_UNAVAILABLE: Pro power unavailable; ${evidence.description}`,
           );
         if (
-          state.control!.label !== "Pro" &&
+          !["Pro", "Thinking effort Pro"].includes(state.control!.label) &&
           state.control!.label !== observedModel
         )
           throw new Error("MODEL_UNVERIFIED: Pro Power did not persist");
@@ -581,7 +581,8 @@ export async function ensureModel(b: Browser, opts: Record<string, string>) {
   };
   const confirmedLabel = (s: ModelState) =>
     s.control!.label === selectedModel ||
-    (s.control!.compact === true && s.control!.label === "Pro");
+    (s.control!.compact === true &&
+      /^(?:Thinking effort )?Pro$/.test(s.control!.label));
   await act("press", "Escape");
   state = await wait(
     (s) => !s.control!.expanded && confirmedLabel(s),

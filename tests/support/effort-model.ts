@@ -22,6 +22,7 @@ export function effortModelFixture(
     max?: number;
     value?: number;
     endpoint?: string;
+    closedLabel?: string;
     driftFamily?: string;
     driftOnReopen?: number;
     dropPowerOnFinalClose?: boolean;
@@ -48,7 +49,7 @@ export function effortModelFixture(
     hasComposer: true,
     control: {
       selector: "#model",
-      label: effort(),
+      label: !expanded && initial.closedLabel ? initial.closedLabel : effort(),
       disabled: false,
       expanded,
       compact: true,

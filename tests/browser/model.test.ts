@@ -122,6 +122,29 @@ function fixture(
 }
 
 describe("pre-send Pro selection", () => {
+  test("compact Thinking effort Pro preserves family and Power verification before sending", async () => {
+    const b = effortModelFixture({
+      closedLabel: "Thinking effort Pro",
+      explicit: false,
+    });
+    const result = await ensureModel(b, opts);
+    expect(result.observedModel).toBe("6 Pro");
+    expect(result.evidence).toMatchObject({ power: 4, maximum: 4 });
+    await expect(
+      ensureModel(b, { ...opts, model: "6 Pro", "verify-only": "true" }),
+    ).resolves.toMatchObject({ observedModel: "6 Pro", changed: false });
+  });
+
+  test("compact Thinking effort Pro cannot conceal a different model family", async () => {
+    const b = effortModelFixture({
+      family: "GPT-7",
+      closedLabel: "Thinking effort Pro",
+    });
+    await expect(
+      ensureModel(b, { ...opts, model: "6 Pro", "verify-only": "true" }),
+    ).rejects.toThrow("MODEL_UNVERIFIED");
+  });
+
   test("effort-only UI proves the selected family and Pro Power independently", async () => {
     const b = effortModelFixture({ latest: true, value: 2 });
     const selected = await ensureModel(b, opts);
