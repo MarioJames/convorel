@@ -16,6 +16,7 @@ import {
   GitHistory,
   type HistoryAccess,
 } from "../../src/workspace/git-history.ts";
+import { Observation } from "../../src/workspace/git-observation.ts";
 import {
   gitHistoryInputs,
   gitHistoryOutputs,
@@ -473,4 +474,31 @@ test("history commands never execute external diff or textconv drivers", async (
   expect(result.patch?.text).toContain("+after");
   expect(await Bun.file(join(dir, "external-marker")).exists()).toBe(false);
   expect(await Bun.file(join(dir, "textconv-marker")).exists()).toBe(false);
+});
+
+test.each([20001, 30000])(
+  "fixed-revision trees with %i files remain readable",
+  (count) => {
+    const sha = "a".repeat(40);
+    const output = Buffer.from(
+      Array.from(
+        { length: count },
+        (_, i) => `100644 blob ${sha} 1\tcode-${i}.ts\0`,
+      ).join(""),
+    );
+    const observed = new Observation({ ...access, git: () => output });
+    expect(observed.tree(sha).size).toBe(count);
+  },
+);
+
+test("fixed-revision trees beyond the bounded inventory are rejected", () => {
+  const sha = "a".repeat(40);
+  const output = Buffer.from(
+    Array.from(
+      { length: 30001 },
+      (_, i) => `100644 blob ${sha} 1\tcode-${i}.ts\0`,
+    ).join(""),
+  );
+  const observed = new Observation({ ...access, git: () => output });
+  expect(() => observed.tree(sha)).toThrow("GIT_HISTORY_TREE_LIMIT");
 });

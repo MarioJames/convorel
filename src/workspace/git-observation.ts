@@ -29,7 +29,7 @@ type Page = {
 };
 
 const INVENTORY_LIMIT = 10000;
-const TREE_LIMIT = 20000;
+const TREE_LIMIT = 30000;
 // All caches and budgets belong to one observation, never to the workspace lifetime.
 export class Observation {
   private started = Date.now();
