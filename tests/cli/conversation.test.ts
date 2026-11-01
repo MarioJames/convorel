@@ -163,6 +163,21 @@ test("CLI distinguishes saved status, interrupted observation, and a durable com
     expect(unsafeRecovery.code).toBe(1);
     expect(unsafeRecovery.err).toContain("RECOVERY_REQUIRES_BLOCKED_DELIVERY");
     expect(store.read<any>("task-task")).toEqual(task);
+    const incompleteLost = await run("mark-lost", "r1", [
+      "--expected-user-message",
+      "u1",
+    ]);
+    expect(incompleteLost.code).toBe(1);
+    expect(incompleteLost.err).toContain("expected-url");
+    const unsafeLost = await run("mark-lost", "r1", [
+      "--expected-user-message",
+      "u1",
+      "--expected-url",
+      task.url,
+    ]);
+    expect(unsafeLost.code).toBe(1);
+    expect(unsafeLost.err).toContain("LOST_REQUIRES_UNMOUNTED_DELIVERY");
+    expect(store.read<any>("task-task")).toEqual(task);
     const otherWorkspace = join(root, "other-code");
     mkdirSync(otherWorkspace);
     const mismatch = await run("status", "r1", ["--workspace", otherWorkspace]);

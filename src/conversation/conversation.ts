@@ -13,6 +13,7 @@ import { Diagnostics, type DiagnosticStep } from "../storage/diagnostics.ts";
 import {
   createObservation,
   type ObservationContext,
+  previousTurn,
   same,
 } from "./observation.ts";
 import { createSubmission, type SubmissionContext } from "./submission.ts";
@@ -23,7 +24,14 @@ import {
 import { createCapture, type CaptureContext } from "./capture.ts";
 import { createRelease, type ReleaseContext } from "./release.ts";
 import { createRecovery, type RecoveryContext } from "./recovery.ts";
-import type { Naming, Page, RejectedSendRecovery, Task } from "./types.ts";
+import { createLostDelivery } from "./lost.ts";
+import type {
+  LostDeliveryCheck,
+  Naming,
+  Page,
+  RejectedSendRecovery,
+  Task,
+} from "./types.ts";
 
 const REGISTRY_WAIT_MS = 10_000;
 const TABS_WAIT_MS = 15_000;
@@ -41,6 +49,7 @@ export class Conversation {
   private readonly submission: ReturnType<typeof createSubmission>;
   private readonly release: ReturnType<typeof createRelease>;
   private readonly recovery: ReturnType<typeof createRecovery>;
+  private readonly lost: ReturnType<typeof createLostDelivery>;
   constructor(
     public store: State,
     public browser: Browser,
@@ -57,6 +66,14 @@ export class Conversation {
     this.submission = createSubmission(this.submissionContext());
     this.release = createRelease(this.releaseContext());
     this.recovery = createRecovery(this.recoveryContext());
+    this.lost = createLostDelivery({
+      get: (id) => this.get(id),
+      current: (t, run) => this.current(t, run),
+      checkWorkspace: (t, expected) => this.checkWorkspace(t, expected),
+      guard: (t) => this.guard(t),
+      save: (t) => this.save(t),
+      browser: this.browser,
+    });
   }
   private observationContext(): ObservationContext {
     return {
@@ -383,7 +400,7 @@ export class Conversation {
     // Only read while loading; changed URLs and blocked pages still fail closed.
     if (t.url) {
       const current = this.current(t);
-      const anchor = current.userMessageId ? current : t.runs.at(-2);
+      const anchor = current.userMessageId ? current : previousTurn(t, current);
       const userId = anchor?.userMessageId;
       const replyId = anchor?.reply?.id;
       let last: PageState | undefined;
@@ -470,6 +487,17 @@ export class Conversation {
       this.recovery.recoverSend(id, run, options, workspace),
     );
   }
+  /** Settles a followup the server never stored; the old prompt is never resent. */
+  async markLost(
+    id: string,
+    run: string,
+    options: LostDeliveryCheck,
+    workspace?: string,
+  ) {
+    return this.exclusive(id, () =>
+      this.lost.markLost(id, run, options, workspace),
+    );
+  }
   async rebindWorkspace(id: string, run: string, from: string, path: string) {
     return this.exclusive(id, () =>
       this.submission.rebindWorkspace(id, run, from, path),
@@ -503,6 +531,8 @@ export class Conversation {
         }
         return this.archiveCompleted(t);
       }
+      // A lost run left nothing to observe; only a new followup continues.
+      if (this.current(t, run).state === "lost") return t;
       try {
         // Recover a previously saved initial URL without guessing another tab or resending.
         if (t.url === (t.config.projectUrl || "https://chatgpt.com/")) {

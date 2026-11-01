@@ -5,11 +5,13 @@ import type { Task } from "./types.ts";
 export function conversationStatus(task: Task) {
   const run = task.runs.find((r) => r.id === task.currentRun);
   if (!run) throw new Error("RUN_MISSING");
-  const delivery = run.userMessageId
-    ? "confirmed"
-    : run.state === "prepared"
-      ? "not_attempted"
-      : "unknown";
+  const delivery = run.lost
+    ? "lost"
+    : run.userMessageId
+      ? "confirmed"
+      : run.state === "prepared"
+        ? "not_attempted"
+        : "unknown";
   const organization = organizationRecovery(task);
   let phase: string, nextAction: string;
   if (run.state === "complete") {
@@ -34,6 +36,9 @@ export function conversationStatus(task: Task) {
       phase = "cleanup_pending";
       nextAction = "finish";
     }
+  } else if (run.state === "lost") {
+    phase = "delivery_lost";
+    nextAction = "followup";
   } else if (run.observationError) {
     phase = run.observationError.retryable
       ? "observation_interrupted"

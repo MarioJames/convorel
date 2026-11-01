@@ -93,6 +93,8 @@ Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何�
 
 `resume` 只观察和核对，不发送消息或命名；URL 延迟时继续追踪原提交。只有状态为 `prepared` 时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。项目首轮的任务自有页会导航回项目入口并替换当前页内容，随后重新核验模型、页面和提示词；借用页仍需遵守草稿核验。不得重试 `submitting`/`delivery_unknown`；未知发送或等待超时不能用新 ID 再发。
 
+后续轮次显示 `delivery: confirmed`，但发送 10 分钟后刷新仍报可重试的 `HISTORY_HYDRATING`、页面一直没有本轮消息时，可以用 `conversation mark-lost --id ID --run RUN_ID --expected-user-message OLD_USER_ID --expected-url URL` 结算。这种情况不能靠等待解决，也不能新建会话绕过。它只刷新一次自有页面，读取服务端渲染进文档的会话数据：上一轮的 user 和回复都在、本轮 user ID 和 marker 都不在，才把本轮记为 `lost`（`nextAction: followup`）。之后在同一任务里用新 request-id 发 followup，旧 prompt 不会重发。核对失败时保留原状态，按错误码处理。
+
 项目首轮任务自有页上的旧草稿由显式 `retry` 导航项目入口时替换。若需要保留草稿，先读取并备份完整原文；若要在原页单独清空草稿，仅在用户明确授权删除该副本后使用 `conversation clear-draft --id ID --run RUN_ID --expected-draft-file /private/approved-draft.txt`。该命令只处理任务自有、无历史消息的新建页和未发送首轮；逐字核对草稿，持久保存备份，删除后实际读回确认。草稿已变、附件存在、页面身份不同或投递未知都会停止，不扩大到其他标签页。成功后再显式 retry 同一 run；命令成功回执不能代替空草稿、模型、页面和投递状态核验。
 
 `status` 的 `summary` 区分已确认投递、发送结果未知和未尝试发送，并返回当前阶段、最近观察时间、观察错误和下一步动作。`status` 退出 0 只表示本地状态读取成功；`start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅回复完成且要求的命名已核验时退出 0，未完成或需处理时退出 2，参数/基础设施等异常可退出 1。不要仅凭退出码取代精确轮次的 `result`。`wait` 仅对观察失败做最多三次连续尝试，不自动重发；登录、页面身份或草稿等需处理的问题不会被当作临时读取失败反复尝试。

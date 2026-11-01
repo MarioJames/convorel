@@ -100,6 +100,7 @@ export async function main(args = process.argv.slice(2)) {
       "start",
       "retry",
       "recover-send",
+      "mark-lost",
       "clear-draft",
       "resume",
       "wait",

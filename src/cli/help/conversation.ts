@@ -217,6 +217,30 @@ const conversation = [
     ],
   ),
   page(
+    ["conversation", "mark-lost"],
+    [
+      "conversation mark-lost --id ID --run UUID --expected-user-message ID --expected-url URL [--workspace PATH]",
+    ],
+    "Settle a followup whose confirmed user message the server never stored, so the same conversation can take a new followup. The old prompt is never resent.",
+    [
+      taskId,
+      runOpt(true),
+      [
+        "--expected-user-message ID",
+        "User message id recorded for the missing attempt.",
+      ],
+      ["--expected-url URL", "Saved conversation URL."],
+      [
+        "--workspace PATH",
+        "Checked against the task binding before the settlement.",
+      ],
+      fields,
+    ],
+    [
+      "Only the last run, waiting or delivery_unknown with a retryable HISTORY_HYDRATING observation, at least 10 minutes after its send, is eligible. The task's own tab is reloaded once. The conversation that the server renders into the document must contain the previous completed turn and lack this run's user id and marker. The run becomes lost; status then reports nextAction followup.",
+    ],
+  ),
+  page(
     ["conversation", "clear-draft"],
     ["conversation clear-draft --id ID --run UUID --expected-draft-file FILE"],
     "Delete the draft in this task's own new page after the operator has saved the exact draft text. It does not send and does not call retry.",

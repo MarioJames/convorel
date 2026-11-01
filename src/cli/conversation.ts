@@ -54,6 +54,14 @@ export const conversationFlags: Record<string, string[]> = {
     "workspace",
     "fields",
   ],
+  "mark-lost": [
+    "id",
+    "run",
+    "expected-user-message",
+    "expected-url",
+    "workspace",
+    "fields",
+  ],
   "clear-draft": ["id", "run", "expected-draft-file", "fields"],
   "rebind-workspace": ["id", "run", "from-workspace", "workspace", "fields"],
   finish: ["id", "run", "fields"],
@@ -171,6 +179,19 @@ export async function runConversation(
     );
     print({ ...t, summary: conversationStatus(t) });
     return conversationExitCode(t, "start");
+  }
+  if (sub === "mark-lost") {
+    const t = await conversation.markLost(
+      id,
+      required(o, "run"),
+      {
+        expectedUserMessageId: required(o, "expected-user-message"),
+        expectedUrl: required(o, "expected-url"),
+      },
+      o.workspace,
+    );
+    print({ ...t, summary: conversationStatus(t) });
+    return 0;
   }
   if (sub === "rebind-workspace") {
     const t = await conversation.rebindWorkspace(

@@ -56,6 +56,11 @@ export function completedPage(t: Task, p: PageState, r: Run) {
   return { out, branch };
 }
 
+/** The turn a followup continues from; lost runs left nothing in the conversation. */
+export function previousTurn(t: Task, r: Run) {
+  return t.runs.slice(0, t.runs.indexOf(r)).findLast((x) => x.state !== "lost");
+}
+
 export function replyChanged(t: Task, p: PageState, r: Run) {
   const { out, branch } = completedPage(t, p, r);
   return (

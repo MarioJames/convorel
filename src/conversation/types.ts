@@ -26,6 +26,10 @@ export interface RejectedSendRecovery {
   rejectedAt: number;
   confirmCloudflareChallenge: boolean;
 }
+export interface LostDeliveryCheck {
+  expectedUserMessageId: string;
+  expectedUrl: string;
+}
 export interface Run {
   id: string;
   requestId: string;
@@ -54,6 +58,13 @@ export interface Run {
     refreshes: number;
     failures: number;
     error?: string;
+  };
+  /** The server never stored this run's confirmed user message. */
+  lost?: {
+    at: string;
+    priorUserMessageId: string;
+    anchorReply: string;
+    target: string;
   };
   sendRecoveries?: {
     at: string;

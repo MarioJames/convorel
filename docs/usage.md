@@ -442,6 +442,32 @@ bun --no-env-file src/cli.ts conversation recover-send \
 
 当前浏览器适配器没有与发送动作绑定的响应元数据观察，仍可能把新的乐观 DOM 消息标成 `confirmed`。恢复后必须由同一 run 的 `resume`/`result` 确认完整回复；不能把命令退出 0 当作业务审查已完成。
 
+### 结算服务端从未保存的后续轮次
+
+另一种情况：后续轮次被识别为 `confirmed`，但没有可用的 403 证据，刷新后 user 和 marker 也一直不出现（`waiting` 加可重试的 `HISTORY_HYDRATING`）。这时可以把这一轮记为未送达，然后在同一会话里发新的 followup。旧 prompt 不会重发：
+
+```bash
+bun --no-env-file src/cli.ts conversation mark-lost \
+  --id TASK_ID --run RUN_ID \
+  --expected-user-message OLD_USER_ID --expected-url SAVED_CONVERSATION_URL
+```
+
+前提条件：
+
+- 这一轮必须是最后一轮，状态为 `waiting` 或 `delivery_unknown`，记录过 user ID，没有回复。
+- 最近一次观察是可重试的 `HISTORY_HYDRATING`。
+- 距发送已满 10 分钟。
+- 上一个未丢失的轮次已完成。
+- 自有 target 仍停在原 URL，页面空闲、无草稿。
+
+命令只刷新一次自有页面。完整加载时，ChatGPT 把会话数据由服务端渲染进文档的内联脚本，不另发会话请求。命令只在页内统计几个 ID 和 marker 的出现次数，自身不发请求，也不带出页面内容。满足以下全部条件才结算：
+
+- 内联数据包含本会话 ID，以及上一轮的 user ID 和回复 ID。这是正对照，证明读到的是这次加载的服务端会话。
+- 内联数据里没有旧 user ID，也没有本轮 marker。
+- 刷新后的 DOM 也没有本轮消息。
+
+格式变化导致正对照缺失时，命令报 `CONVERSATION_HISTORY_UNAVAILABLE`，不结算。结算后这一轮记为 `lost`，`lost` 字段保存旧 user ID、上一轮回复 ID、target 和时间，user ID 被清空。状态投影为 `delivery: lost`、`phase: delivery_lost`、`nextAction: followup`。`resume` 对 `lost` 轮次不做任何操作。新的 followup 以上一个已完成轮次为锚点，跳过 `lost` 轮次。任一条件不满足都会失败，并保留原状态。
+
 命名重新验证失败时，`organization.lastVerified` 保留上次成功的主题、标题和核验时间；相同命名请求的状态为 `revalidation_failed`，当前 `verified` 仍为 false，不把历史成功当成本次核验通过。改成新主题后，历史记录仍保留，但不代表新主题已验证。
 
 停滞回复刷新后，只要重新识别到原提交消息，就继续按回复内容判断等待或完成，不要求输入框同时恢复。`REFRESH_HISTORY_UNAVAILABLE` 专指未识别到原提交消息；输入框缺失仍可能阻止后续发送、整理或关闭，不触发重发。

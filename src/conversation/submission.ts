@@ -14,7 +14,7 @@ import { conversationConfig, type Config } from "../config/config.ts";
 import { withTaskStateLock } from "../storage/task-lock.ts";
 import type { State } from "../storage/state.ts";
 import type { Workspace as WorkspaceType } from "../workspace/workspace.ts";
-import { safeCompleted } from "./observation.ts";
+import { previousTurn, safeCompleted } from "./observation.ts";
 import { validateNaming } from "./organization.ts";
 import type { Naming, Page, Run, Task } from "./types.ts";
 import type { DiagnosticStep } from "../storage/diagnostics.ts";
@@ -102,7 +102,7 @@ export function createSubmission(ctx: SubmissionContext) {
         }
         if (!followup)
           throw new Error("TASK_EXISTS: use followup with a new request-id");
-        if (ctx.current(t).state !== "complete")
+        if (!["complete", "lost"].includes(ctx.current(t).state))
           throw new Error("PRIOR_RUN_NOT_COMPLETE");
       } else {
         if (followup) throw new Error("TASK_NOT_FOUND");
@@ -314,7 +314,7 @@ export function createSubmission(ctx: SubmissionContext) {
         throw new Error("RECOVERY_REQUIRES_EMPTY_COMPOSER");
       // A new page may still be loading. An owned completed page gets a short
       // hydration window before a guarded reload of that same conversation.
-      const previous = t.runs.at(-2);
+      const previous = previousTurn(t, r);
       const recoverableComposer =
         !!previous && !!t.url && !!t.binding?.owned && !recovery;
       for (
