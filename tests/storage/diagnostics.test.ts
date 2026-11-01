@@ -45,6 +45,31 @@ test("diagnostic codes keep the token and drop page text", () => {
   expect(diagnosticCode(new Error("transport disconnected after submit"))).toBe(
     "UNCLASSIFIED",
   );
+  // Failures seen before a send on 2026-11-01 must stay distinguishable.
+  expect(
+    diagnosticCode(new Error("Page URL changed; refusing model interaction")),
+  ).toBe("PAGE_URL_CHANGED");
+  expect(
+    diagnosticCode(
+      new Error("Response is generating; refusing model interaction"),
+    ),
+  ).toBe("PAGE_NOT_IDLE");
+  for (const message of [
+    "Closed model control did not confirm selected Pro",
+    "Model selection did not persist",
+    "Latest selection did not persist",
+    "MODEL_UNVERIFIED: Pro Power did not persist",
+  ])
+    expect(diagnosticCode(new Error(message))).toBe("MODEL_UNVERIFIED");
+  expect(
+    diagnosticCode(new Error("Model control unavailable or ambiguous")),
+  ).toBe("MODEL_CONTROL_UNAVAILABLE");
+  expect(diagnosticCode(new Error("COMMAND_TIMEOUT"))).toBe("COMMAND_TIMEOUT");
+  expect(
+    diagnosticCode(
+      new Error("COMMAND_FAILED: agent-browser (1): secret page text"),
+    ),
+  ).toBe("COMMAND_FAILED");
   expect(diagnosticsEnabled(() => undefined)).toBe(true);
   expect(diagnosticsEnabled(() => "true")).toBe(true);
   expect(diagnosticsEnabled(() => "false")).toBe(false);

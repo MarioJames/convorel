@@ -79,6 +79,11 @@ const CODES = new Set([
   "NAMING_COMPLETE",
   "NAMING_CONTROL_UNAVAILABLE",
   "NAMING_METADATA_UNAVAILABLE",
+  "PAGE_URL_CHANGED",
+  "MODEL_UNVERIFIED",
+  "MODEL_CONTROL_UNAVAILABLE",
+  "COMMAND_TIMEOUT",
+  "COMMAND_FAILED",
 ]);
 const SCHEMA = `
 create table diagnostic_event (
@@ -131,6 +136,17 @@ export function diagnosticCode(error: unknown) {
     )
   )
     return "NAMING_METADATA_UNAVAILABLE";
+  // The model step reports in prose; keep its outcomes apart before a send.
+  if (text.startsWith("Page URL changed;")) return "PAGE_URL_CHANGED";
+  if (text.startsWith("Response is generating;")) return "PAGE_NOT_IDLE";
+  if (/^(Model control unavailable|Unrecognized model UI response)/.test(text))
+    return "MODEL_CONTROL_UNAVAILABLE";
+  if (
+    /^(Closed model control did not confirm|(Model|Latest) selection did not persist|Latest model option disabled|Power control did not receive)/.test(
+      text,
+    )
+  )
+    return "MODEL_UNVERIFIED";
   const token = /^[A-Z][A-Z0-9_]*/.exec(text)?.[0];
   return token && CODES.has(token) ? token : "UNCLASSIFIED";
 }
