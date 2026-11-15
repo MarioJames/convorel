@@ -14,6 +14,12 @@ import (
 
 func TestTunnelRestartAndStop(t *testing.T) {
 	p := testPaths(t)
+	// "~/workspaces" must resolve inside a disposable home, not the developer's.
+	home := t.TempDir()
+	if e := os.Mkdir(filepath.Join(home, "workspaces"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	t.Setenv("HOME", home)
 	if e := config.Save(p, config.Config{Version: 1, Workspace: t.TempDir()}); e != nil {
 		t.Fatal(e)
 	}
