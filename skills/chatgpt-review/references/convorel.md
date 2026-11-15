@@ -1,196 +1,79 @@
-# 使用 Convorel
+# 使用 Convorel 1.0
 
-## 解析 CLI 与私有状态
+## 运行时与私有状态
 
-直接使用 `PATH` 中的 `convorel`（安装脚本默认链接到 `~/.local/bin/convorel`）：
+通过 PATH 使用独立安装的 `convorel`，先检查 `convorel version` 和 `convorel ask --help`。源码方式用 Go 1.27.4 构建 `go build -o /absolute/bin/convorel ./cmd/convorel`，再调用其绝对路径；不依赖技能目录旁存在源码，不用 eval 拼接命令。技能安装不等于运行时安装。
+
+入口为 `convorel [--config-dir PATH] [--state-dir PATH] COMMAND`，全局目录参数放在命令前。默认偏好文件是 `~/.config/convorel/preferences.json`，状态是 `~/.local/share/convorel`。已有任务必须沿用相同目录、ID 和配置 snapshot，后台等待者也一样。任务、诊断和内容数据库原地沿用；升级前停止全部旧进程。私有状态必须在 MCP 共享根之外。
+
+普通有头 Google Chrome 使用专用持久 profile，通过 loopback CDP 直连。不要使用验收工具的 Chromium/profile，也不要另建控制器。初始化及登录：
 
 ```bash
-convorel --help
+convorel setup --workspace /absolute/project
+convorel service install
+convorel login
 ```
 
-源码方式可显式调用 `bun --no-env-file /path/to/convorel/src/cli.ts`。使用绝对路径，保留含空格路径的引号；不要 `eval`、拼接命令串或猜测技能的 `../../src/cli.ts`。缺少 CLI（源码方式还有 Bun）时报告前置条件；安装技能不等于安装 Convorel 运行时。
+登录由用户在窗口完成，不代填凭据。外部 Chrome 用 `setup --workspace PATH --cdp http://127.0.0.1:PORT` 绑定，由用户负责启动和登录。不要擅自换 profile 绕过身份问题。daemon 管理自身 Chrome，默认无进行中轮次满 10 分钟后停止，下一次调用重新启动；等待回复期间不会闲置停止。
 
-入口为 `convorel [--config-dir PATH] [--state-dir PATH] COMMAND`，全局目录参数必须放在命令前。默认偏好文件为 `~/.config/convorel/preferences.json`，默认状态目录为 `~/.local/share/convorel`。下文使用默认目录；已有任务使用自定义目录时，每次调用及后台等待进程均须在命令前传入同一组目录参数。
+配置只从偏好文件读取，不接受模型环境覆盖。`config set project.url URL` 和 `config set project.name NAME` 成对设置。真实审查默认 Latest Pro（effort 5），测试验收用 Instant（`--effort 1`）。`config set model MODEL` 仅按明确选择设置。续谈保留原任务模型/项目 snapshot，不通过另建任务规避冲突。
 
-审查侧使用普通 Google Chrome 的有头窗口，通过 loopback CDP 连接。启动参数不得包含 `--headless`，登录 profile 与验收侧自带 Chromium 分开。Convorel 始终显式连接其已配置 CDP，不从 browser-harness 继承可执行路径、窗口模式或 profile；不得为审查修改验收侧 agent-browser 配置。
+MCP 的 `mcp.roots` 与任务 workspace 是两个独立边界。浏览器可用不代表代码访问已授权。隧道由 daemon 托管；不擅自扩根或启动重复隧道。`doctor --local` 只检查本地文件，`doctor` 检查浏览器连接，均不能证明远端已取得 MCP 访问。
 
-已有需求沿用其状态目录和配置目录。新绑定使用 MCP 允许根之外的持久私有目录，按用户授权的代码工作区初始化；默认由 Convorel 创建专用 Chrome profile 并等待用户登录一次，之后按需自动拉起：
+## 发送和续谈
 
-```bash
-convorel init --workspace /absolute/project
-```
-
-托管浏览器显示 `Login required` 或登录超时时，运行 `convorel browser start` 并请用户在打开的窗口登录；不要替用户输入凭据，也不要改用其他 profile。用户自己启动的浏览器使用 `--cdp PORT` 绑定，由用户负责启动和登录。
-
-Convorel 仅从偏好文件读取配置，不接受环境覆盖，不把个人配置写入技能。用 `convorel config set project.url URL` 和 `convorel config set project.name NAME` 成对设置项目；不要只提供其中一个或猜项目 URL。模型可选，默认 Latest + Power 末端 Pro；用户明确选择的模型通过 `convorel config set model MODEL` 配置。其他配置键为 `tunnel.id`（`tunnel_` 加 32 位十六进制）、`tunnel.apiKey`、`mcp.roots`（1–16 个绝对路径或 `~/` 路径的 JSON 数组）、`mcp.memoryRoots`（明确共享的规范 OpenViking URI 子树 JSON 数组，未设置不开放）、`mcp.memoryExecutable`（可选的 ov CLI 绝对路径）、`mcp.execDependencyRoots`（允许隔离构建读取的 node_modules 完整目录 JSON 数组，未设置不挂载）、`browser.executable`（`init` 保存的 agent-browser 绝对路径）、`browser.serial`（`true`/`false`）、`browser.actionIntervalMs`（默认 750，1–10000）、`browser.navigationWaitMs`（默认 1500，1–10000）、`locks.taskWaitMs`（正整数）、`release.baseUrl`（不含凭据、query、fragment 的 HTTP(S) URL）和 `diagnostics.enabled`（未设置或 `true` 时记录，`false` 关闭；其他值或偏好读取失败也关闭）。`diagnostics --task ID [--run UUID] [--fields LIST]` 读取私有诊断库，不打开浏览器，也不授权重试或重发。
-
-新 task 保存配置 snapshot，续谈保留既有模型/项目；后续修改配置或重新初始化不会迁移旧 task。新任务显式使用 `create --workspace PATH`，避免默认工作区和实际审查对象不同。先用 `conversation status --id ID --workspace PATH` 核对绑定；不匹配时返回 `workspaceMismatch` 和退出码 2。仅未发送的首轮可用 `rebind-workspace --id ID --run RUN_ID --from-workspace OLD --workspace NEW` 修正绑定，任务原文和 run 保留；含内置指引时更新生成的工作区上下文并记录旧 prompt/hash。已发送或投递未知时检查原 prompt 的路径/revision 并继续同一 run；不改状态 JSON、不创建重复审查。工作区绑定不等于 MCP 允许根；改绑不会改写已有浏览器草稿，旧草稿需另行核对处理。`doctor` 仅验证本地 CDP/MCP，不证明 ChatGPT 已取得代码访问；不要擅自安装工具、扩大共享根或启动重复隧道。
-
-## 准备和发送
-
-先用 `conversation list`，再用 `conversation status --id ID` 匹配需求和工作区；已有 active run 继续观察，已有适用结果直接复用。
-
-按 [review-prompt.md](review-prompt.md) 只编写本轮目标、已确认的方向、约束、验收要求及必要的 revision、文件引用、验证摘要和未决问题。绑定工作区及通用工具指引由 Convorel 自动附加，不复制命令手册。先检查请求与引用，再通过 stdin 直接入库，不创建 `/tmp` 或其他 prompt 交接文件。每轮保存原始 `input`、版本化 `promptContext` 和最终 `prompt`，重试沿用已保存文本；续谈新轮次使用当前指引。源码不自动内嵌，运行时也不决定审查人设和业务方向。
+先 `list`，再 `status --id ID`/`history --id ID`，匹配同一需求、工作区和已有结果。已有 active run 继续等待，已有适用审查直接复用。新请求遵循 [review-prompt.md](review-prompt.md)，只提供目标、用户确认的约束、验收要求及必要的 revision、文件引用和验证摘要。Convorel 自动追加 workspace/tool 指引并保存原文、guidance snapshot 和最终 prompt，不自动粘贴源码。使用 stdin 直接发送，不建立 prompt 交接文件。
 
 ```bash
-convorel conversation create --id ID --prompt-stdin true --workspace /absolute/project --type DES --topic '具体主题' <<'PROMPT'
-本轮目标、约束、验收要求和必要证据引用。
+convorel ask --id ID --request-id decision-v1 --workspace /absolute/project \
+  --type DES --topic '具体主题' --prompt-stdin <<'PROMPT'
+本轮目标、已确认的方向、约束、验收要求和必要证据引用。
 PROMPT
+convorel wait --id ID --run RUN_ID --timeout-seconds 60
 ```
 
-`create` 只将任务、配置 snapshot 和完整首轮 prompt 原子写入私有 `STATE_DIR/tasks.db`，不访问浏览器。短文本也可用 `--prompt '文本'`，与 `--prompt-stdin true` 二选一。创建成功退出 0 只代表入库成功；保存返回的 `currentRun`，按 ID 执行：
+`ask` 原子入库并发送，返回 `run`。`--request-id` 默认 initial，仅限该 task；显式稳定 key 便于追踪。相同 task/request/input 幂等返回原轮，历史 key 也返回原轮而非当前轮。冲突返回 `REQUEST_CONFLICT`。CLI 回执丢失时先检查原 task，不换 key/ID 重建。
+
+消费上一轮完整结果后：
 
 ```bash
-convorel conversation start --id ID --run RUN_ID --workspace /absolute/project
-```
-
-`start` 从数据库取出精确轮次并执行，不再接收 prompt。配置项目时在项目的新建对话入口创建；只发送并确认投递，首次命名延后到第一轮 `wait` 正常或超时返回前。重复 `create` 的当前 request key/正文幂等，冲突拒绝；若该 key 已属于历史轮次则返回 `REQUEST_RUN_SUPERSEDED` 和原 run ID，读取原轮结果，不把当前新轮误当成重试对象；重复 `start` 不重发已开始轮次，不自动重试失败。只有 `prepared` 的失败轮次可在检查后显式 `retry`。不能因为初次 CLI 回执丢失而换 ID 重建，先 `status --id ID` 找回已入库的 run。
-
-消费上一轮完整结果后，以完整新增说明创建后续轮次，再按返回的新 run 执行：
-
-```bash
-convorel conversation followup --id ID --prompt-stdin true --request-id UNIQUE_KEY <<'PROMPT'
-本轮完整新增说明。
+convorel followup --id ID --request-id decision-v2 --prompt-stdin <<'PROMPT'
+本轮完整新增说明及新证据。
 PROMPT
-convorel conversation start --id ID --run NEW_RUN_ID
+convorel wait --id ID --run NEW_RUN_ID --timeout-seconds 60
 ```
 
-`followup` 也只入库，要求上一轮已完成，执行时再次核验网页的旧轮次、草稿和模型。入库后检查失败保留同一 `prepared` 轮次，不能创建替代轮次绕过检查。
-
-旧 JSON 任务仍可读取；执行前需要 `convorel conversation migrate --id ID`。先确认该任务旧 CLI 操作和等待者均已结束，迁移会拒绝持有中的任务/等待锁。迁移保留原 JSON 字节并记录 hash，重复迁移不覆盖数据库；若旧版本后来改写原文件，新版本报 `LEGACY_TASK_CHANGED` 并停止，须保留双方记录核对，不能手改 hash 或删文件规避。配置和锁仍用私有文件；`conversations.db` 继续是独立内容归档，归档失败不改变 `tasks.db` 的投递状态。不要让旧版本继续操作已迁移任务。
-
-使用前核对实际 CLI 的 `conversation create --help` 是否说明自动附加 workspace/tool guidance 并保存 input/context/rendered prompt；仅更新技能不代表运行时已更新。缺少自动指引的旧运行时应先升级，或显式使用已验证的新源码入口，不把精简目标直接当作已附完整上下文，也不回退到临时 prompt 文件。
-
-## 新版界面与识别失败
-
-ChatGPT 分批更新界面，实际 DOM 是判断依据。运行时负责控件识别，技能不另写临时浏览器控制器。新版操作契约如下：
-
-维护或诊断时先用已安装版本的 `agent-browser skills get core` 核对命令能力。优先用 `snapshot -i -s <已核验范围>` 读取可访问性树，以 `role + accessible name` 选出唯一控件，再立即消费本次快照的 `@ref`；名称在整个页面唯一且身份已核验时，也可用 `find role ... --name ... --exact`。不按全页第一个同名按钮操作。局部快照的 `refs` 表可能包含全页条目，只采纳局部树实际列出的 ref。导航、菜单开关、动态加载或重新 snapshot 后重新定位，不把 ref 写入 task/run、配置或技能示例作为固定 ID。存在多个候选时停止；只有缺少语义候选且已有可靠结构证据时才使用结构选择器，不靠 fallback 消除歧义。发送所用快照在最终前置核验之后获取，避免模型菜单检查刷新 ref 后误用旧引用。
-
-语义定位解决“点哪个控件”，不能替代“操作哪一条会话/消息”的身份判断。会话 ID、用户消息 ID、助手消息 ID 与项目归属仍需独立核验。通常通过 agent-browser 的原生 click/fill/focus/press 执行操作；Markdown 捕获保留短时拦截页面 Copy 写入剪贴板的受控步骤，授权清空草稿保留逐字核对及编辑器输入事件，不为统一成 ref 牺牲这些契约。
-
-- 项目入口的编辑器不再保证有 `prompt-textarea` ID；核验唯一可见、可编辑的项目输入框和空历史，再填写已保存的本轮 prompt。
-- 模型按钮收起后可能只显示 `Pro`。打开绑定该输入框的模型菜单，确认 Latest 与 Power 末端 Pro；发送前再核验完整型号，不能把任意版本的 Pro 当作 Latest。菜单检查仅开关菜单，不提交消息或切换到低档模型。
-- Send 和 Stop 可能不再提供原有 test ID。正文暂时不变不代表完成；按本 run 的用户消息 ID、助手回复 ID、生成状态及回答操作栏共同判定。一个轮次中的用户 Copy、代码块 Copy 不能作为助手最终回答的证据；正文仍通过目标回答的 Copy 获取 Markdown。
-- 新版重命名入口位于目标会话的侧栏操作菜单，打开后在弹窗填写标题并保存；顶部 More 菜单未必提供重命名。目标必须绑定精确会话 ID，保存后读取服务返回的元数据，核验标题、实际 createdAt 和项目归属；不按“第一个菜单项”猜动作。
-
-`PROJECT_COMPOSER_NOT_READY`、`COMPOSER_MISSING` 或模型控件不匹配只说明自动化未识别到所需控件，不能据此断言网站宕机、账号失效或代码审查失败。先保存 task/run、投递状态及具体错误，检查真实页面是否仍有可用编辑器，并核对所用运行时是否包含该版 UI 适配；`doctor` 成功不能替代这一检查。确认属于改版时更新 Convorel 运行时及技能，再按原 task/run 恢复：未发送且 prepared 才显式 retry，已发送/投递未知只 resume/wait，命名失败只 organize；不能另建重复审查。登录、验证码或权限提示按其实际原因处理。
+`followup` 直接准备并发送，不需要第二条发送命令。它要求上一轮 complete，并核验已保存会话、前一轮身份、草稿和模型。入库后的 preflight 失败保留同一轮，不创建替代轮次绕过检查。
 
 ## 等待与恢复
 
-默认使用宿主支持的后台进程并保留进程/输出句柄，或分段前台等待：
+命令 stdout 是单个 JSON 文档。退出 0 表示请求的结果成功；ask/followup 的 0 是确认投递，wait/result 的 0 是回复完成。退出 2 表示 pending、拒绝、未知投递或等待超时；退出 1 表示输入/终态/传输错误。`status` 成功读取可退出 0，即使报告的轮次仍 pending。
 
-```bash
-convorel conversation wait --id ID --run RUN_ID --timeout-seconds 60
-convorel conversation status --id ID --run RUN_ID
-convorel conversation resume --id ID --run RUN_ID
-convorel conversation result --id ID --run RUN_ID
-```
+`wait` 返回 `reply.markdown`；完成不等后台命名。保存 task/run/URL 映射，通知和退出本身不能替代完整回复。等待进程被杀不影响 daemon 继续观察；可重新 wait 同一 run。精确历史轮次用 `result --id ID --run RUN_ID` 回读。没有独立工作时保持有界等待，不能启动后台等待后直接 idle。
 
-`wait` 大约每 60 秒观察一次。超时仅停止本地等待，不停止远端生成；检查返回状态，仍运行时继续监视。未启用 `browser.serial` 时，不同 task 的浏览器操作各在自己的 tab 上并行，不再因单一全局锁互相串行——一个 agent 等待回复不会阻止另一个 agent 先建自己的任务、发自己的 prompt；定时检查结果时各自争抢自己那一份已记录的 tab，读完即释放。同一 task 仅允许一个活跃等待者，CLI 用进程身份锁强制执行并固定原 run；重启前核对原进程是否已结束。同一 tab 被同任务另一操作短时占用时，CLI 退避并有限等待，超时才返回 `LOCK_BUSY`，绝不清除活属主的锁。SIGINT/SIGTERM 会唤醒本地休眠并释放锁。崩溃留下的锁仅在确认原进程身份已失效后恢复，不能因超时抢占：用 `convorel recover-lock --watch-task ID` 恢复等待锁，或按 `--task ID`/`--registry true`/`--tabs true`/`--name NAME` 恢复对应锁。`status`/`list` 的 `tab` 与 `locked` 字段显示每个任务自有 tab 及是否正被占用。等待期间继续独立工作；没有独立工作时分段等待直到完成或明确受阻，并及时报告实际状态，不把后台进程已启动当作交付完成。
+| phase | 处理 |
+| --- | --- |
+| prepared | 没有已派发 POST；检查 preflight 后可显式 `retry --id ID --run RUN_ID` |
+| rejected | 已确认非 2xx 拒绝；检查 deliveryFacts.postStatus 后可显式 retry |
+| delivered | 已确认对应 input_message；等待回复 |
+| delivery_unknown | 只观察同一轮；绝不重发 |
+| complete | 消费精确回复，检查 archive/naming，安全 finish |
+| failed/blocked/superseded/lost | 保留证据，核对状态；不自行授权发送 |
 
-Herdr 可用且确需增强时按 [herdr.md](herdr.md) 路由；无论收到何种通知，都须用同一 `--id`、`--run` 取得当前完整 `result`，不能以通知、退出码或最后可见的网页答案代替。
+HTTP 200 单独不能证明送达。重试沿用原 run 的冻结 prompt/marker/hash。归档失败、捕获缺口、命名失败或超时都不授权重发。`diagnostics --id ID --run RUN_ID --limit N` 读取私有事件，不能据此扩大授权。
 
-`resume` 只观察和核对，不发送消息或命名；URL 延迟时继续追踪原提交。只有状态为 `prepared` 时，才可显式 `conversation retry --id ID --run RUN_ID`，继续原来已保存的消息。项目首轮的任务自有页会导航回项目入口并替换当前页内容，随后重新核验模型、页面和提示词；借用页仍需遵守草稿核验。不得重试 `submitting`/`delivery_unknown`；未知发送或等待超时不能用新 ID 再发。
+## 新版界面与识别失败
 
-后续轮次显示 `delivery: confirmed`，但发送 10 分钟后刷新仍报可重试的 `HISTORY_HYDRATING`、页面一直没有本轮消息时，可以用 `conversation mark-lost --id ID --run RUN_ID --expected-user-message OLD_USER_ID --expected-url URL` 结算。这种情况不能靠等待解决，也不能新建会话绕过。它只刷新一次自有页面，读取服务端渲染进文档的会话数据：上一轮的 user 和回复都在、本轮 user ID 和 marker 都不在，才把本轮记为 `lost`（`nextAction: followup`）。之后在同一任务里用新 request-id 发 followup，旧 prompt 不会重发。核对失败时保留原状态，按错误码处理。
+直连 CDP 和嵌入页面脚本只操作唯一可见、可编辑控件，隐藏表单不作为候选。模型菜单验证五档 effort：1 Instant，5 Pro。会话、项目、用户消息和助手回复身份各自核验；Markdown 来自目标助手回答的 Copy，不能用用户/代码块 Copy 代替。
 
-项目首轮任务自有页上的旧草稿由显式 `retry` 导航项目入口时替换。若需要保留草稿，先读取并备份完整原文；若要在原页单独清空草稿，仅在用户明确授权删除该副本后使用 `conversation clear-draft --id ID --run RUN_ID --expected-draft-file /private/approved-draft.txt`。该命令只处理任务自有、无历史消息的新建页和未发送首轮；逐字核对草稿，持久保存备份，删除后实际读回确认。草稿已变、附件存在、页面身份不同或投递未知都会停止，不扩大到其他标签页。成功后再显式 retry 同一 run；命令成功回执不能代替空草稿、模型、页面和投递状态核验。
+`doctor --ui` 在恰好一个现有 ChatGPT 页面上检查 composer、send、modelMenu、effortSlider 和 rename；它不发送消息、不创建会话。缺失/禁用控件、多个候选、模型不匹配及登录障碍按实际回执区分。先核对已安装运行时版本，再检查加载与登录，不把选择器失效统称页面不可用。技能不写临时 CDP 控制器、不切低档规避真实审查模型要求、不移动已有会话绕过项目核验。
 
-`status` 的 `summary` 区分已确认投递、发送结果未知和未尝试发送，并返回当前阶段、最近观察时间、观察错误和下一步动作。`status` 退出 0 只表示本地状态读取成功；`start`/`retry` 退出 0 表示已确认发送或已完成；`resume`/`wait` 仅回复完成且要求的命名已核验时退出 0，未完成或需处理时退出 2，参数/基础设施等异常可退出 1。不要仅凭退出码取代精确轮次的 `result`。`wait` 仅对观察失败做最多三次连续尝试，不自动重发；登录、页面身份或草稿等需处理的问题不会被当作临时读取失败反复尝试。
+## 命名和收尾
 
-每次 `wait` 正常或超时返回前各执行一次命名检查。前置临时失败由下一次 `wait` 或 `finish` 检查点再试，不在观察循环里按定时退避反复改名。`summary.organization` 单独报告核验状态、累计次数、错误与下一步；`retryAt: wait_return` 表示下一次等待返回时检查。新版侧栏收起时先展开并定位目标会话；仅实际存在且绑定同一会话 ID 的旧版顶部菜单可作为替代入口。保存标题前持久化阶段；保存结果不明时只重新读取元数据核验，绝不自动再次保存。权限错误、归属变化、编辑中断或核验仍不匹配时停止自动操作。观察页关闭回执丢失时按原 target 与浏览器身份对账，保留草稿/附件和被接管页面。主页面消失但任务自有观察页仍存在时，将后者转为主页面并保留自有归属。`summary.organization.phase/recovery` 与 `summary.observerCleanup` 保留恢复依据。
+`ask --type TYPE --topic TOPIC` 请求命名；`--language zh` 仅在用户明确要求中文时使用。标题 `MMDD｜TYPE｜Topic` 的日期来自会话 createdAt 转 Asia/Shanghai。TYPE 默认 FEA/DES/FIX/OPT/REL/EXP/DOC/RES。命名不改变项目归属或正文；主题不明则保留原标题。命名在后台运行，用 `status.naming` 检查 pending/running/verified/failed/not_requested，与回复和 archive 分开报告。
 
-监听同一轮回复持续 2 分钟无变化时，先检查会话身份、草稿和附件，再主动刷新原标签页并等待历史加载。刷新只恢复观察，不发送消息；刷新后按原用户消息 ID 判定完成、仍生成或已被后续消息取代。正常长时间思考不算失败，连续 3 次刷新失败则提示检查；`summary.completionProbe` 暴露停滞时间、刷新次数及错误。草稿和附件存在时保留原页并报告延期。`wait` 的总超时仍然生效。
+消费完整回复后 `finish --id ID --run RUN_ID`，检查 cleanup 与 naming。仍观察或命名时会拒绝释放，稍后重试。finish 核验回复未变化、草稿为空和精确会话身份，仅关闭自有已完成标签页；失败保留证据，不因清理失败重发。保留远端会话、共享浏览器和登录态，清理本任务自有等待者或 lane。
 
-仅首轮仍为 `prepared`、从未执行发送、且原绑定标签页确定丢失时，原任务的 `retry` 可重新创建并认领标签页，继续同一个 run 与提示词；原标签页曾被借用也不妨碍重建。开页中断只留下 `opening` 记录时也可补建，可能遗留的未认领空页保留。持久化会话暂时空白、用户消息已确认或投递未知，都不能作为重建并重发的证据；其他任务已认领的标签页不被占用。
-项目首轮重试若重用任务自有标签页，先只读检查本 run 的用户消息标记；已出现时对账原投递，不导航或再发。否则导航回任务保存的项目入口并替换该页内容，再核验项目、模型和提示词。借用且仍存在的标签页不导航；先前投递未知的 run 不重发。
+## 版本同步
 
-浏览器动作默认间隔 750 毫秒，导航/新建页面后等待 1500 毫秒；同一 state root 的 CLI 共享节奏。用 `convorel config set browser.actionIntervalMs 1000`、`convorel config set browser.navigationWaitMs 2000` 可调慢，取值均为 1–10000 毫秒。只读观察不人为延迟；间隔不能保证避免平台风控，遇登录、验证码或权限问题须停止并报告。未知投递继续按原 run 观察，不重发；`wait` 超时报告保留投递状态与 `runState`。
-
-## 命名恢复、消费与清理
-
-首次命名发生在发送成功后的第一轮 `wait` 返回前，前提是已取得持久会话 URL；回复完成或超时都触发，不与发送操作穿插。`summary.organization.requested/title/phase/startedAt` 区分命名请求、目标标题与实际执行阶段，诊断事件进一步记录 metadata、locating、editing、save_pending、verifying、complete。只有 `verified: true` 才证明标题已保存并核验。
-
-每次 `wait` 正常结束或到达观察超时后，在返回前只读检查当前会话 ID 对应的可见侧边栏标题；`finish` 也先检查。侧边栏条目缺失或标题一致时不开观察页；同一差异已由远端元数据核验时不重复开页；新的差异才进一步核验并纠正。已核验标题的新一轮复核若在写前读取失败，返回 `revalidation_failed` 并停止自动重试，按回执显式 `organize`；首次命名前的临时故障仍可在后续检查点再试。不重发消息、不覆盖回复。这个命名步骤有界，但可能使命令晚于观察超时返回；SIGINT/SIGTERM 取消等待时跳过该步骤。权限/登录/身份冲突不会自动重试，编辑中断和不明保存仍按持久阶段处理。命名读回的元数据始终使用任务自有观察页，避免刷新原回复页。
-
-首次命名由第一轮 `wait` 返回触发。若返回的 `organization` 未核验成功，检查原因后在原任务显式重试命名；该操作也支持回复生成期间执行，不重发消息：
-
-```bash
-convorel conversation organize --id ID --run RUN_ID --type DES --topic '具体主题'
-```
-
-读取完整回复后，本地核对意见、记录取舍与证据限制，再释放页面：
-
-```bash
-convorel conversation finish --id ID --run RUN_ID
-```
-
-TYPE 默认英文代码；仅用户明确要求中文时为 `create` 或 `organize` 增加 `--language zh`，仍传英文 `--type` 代码。命名日期使用实际会话 `createdAt` 转 `Asia/Shanghai`，不能使用 `updatedAt`、本机当前日期或猜测日期。由 Convorel 按该固定命名时区处理，不自行改写 task snapshot。Topic 不重复项目名称；主题无法确定时保留原标题。只改会话标题并保留原项目归属；有成对配置时核验项目 ID，归属不符即报告错误，不移动会话。核验标题及适用的项目结果为 `verified: true`，发现不规范立即用相同规则纠正。
-
-命名必须返回 `verified: true`；失败返回独立的 `organization.error`，不撤销已确认的消息投递、不自动重发；`organize` 失败返回非零退出码，并保留已核验的 rename/project 步骤状态，表示整体未完成；记录错误，仍对已核验完成的轮次尝试 `finish`。`organizationPending` 保留失败信息，不要求保留可释放的自有标签页。finish 只释放经过核验的自有页面，保留会话历史、配置、借用页面和登录态；不授权关闭其他页或共享浏览器。
-
-单独释放任务自有等待进程/lane，记录保留对象和原因。提示词、run 映射、意见和回复留在 Convorel 私有状态或已有任务交付记录，不进入技能源码，不新增平行注册表。
-
-`finish` 在输入框尚未加载时最多只读等待 10 秒，等待期间不持有跨任务关闭锁。关闭仍核验同一会话/用户轮次、任务所有权、无草稿附件、未生成、没有后续用户消息。相同用户轮次的 assistant 回复发生变化不会单独阻止释放，回执以 `replyChanged: true` 明示；原捕获结果保持不变，这不是已取得最新正文的证明。续谈和内容捕获仍执行各自的严格核验。
-
-## 取回历史内容
-
-回读既往结论先查本地内容库，不为取回旧内容重新发送。区分三层结果：
-
-- **轮次完成**：`state=complete` 表示已确认该轮回复完成；不保证 Copy 成功，也不保证 SQLite 写入成功。
-- **Markdown 捕获**：`result` 中的 `reply.markdown` 是 Copy 得到的正文；没有 Markdown 时仅有渲染副本，不能冒充原文。缺失原因看 `reply.markdownError` 或 capture 的 `gaps`。
-- **归档写入**：完成路径在返回的 `task.archive` 中提供 `ArchiveNotice`，本次 `summary`/wait 同步透传 `archive`；CLI `result` 也会补写本地归档并返回 `archive`。`stored` 表示本次写入无缺口，`partial` 表示有缺口，`failed`/`unavailable` 表示写入失败或不可用；查看 `error`、`gaps`（含 `runId`/`code`）和可用的统计字段。notice 不写入任务 JSON；纯本地 status 不能凭缺省字段证明刚刚重试过归档。
-
-归档失败或不完整不改变 `state=complete`，也不授权重发。缺 Markdown 时 summary 为 `capture_pending`、`nextAction=capture`；本次归档失败时为 `archive_pending`，`resume`/`wait` 返回 2。成功归档的 prompt、Markdown 和渲染副本在私有内容库（`STATE_DIR/conversations.db`）按不可变版本保留：
-
-```bash
-convorel conversation search --query '关键词' --limit 20
-convorel conversation search --query '关键词' --task ID --role assistant
-convorel conversation history --id ID --run RUN_ID
-convorel conversation content --version VERSION_UUID
-convorel conversation archive --id ID
-convorel conversation archive --all true
-convorel conversation capture --id ID --run RUN_ID
-convorel conversation export --directory /private/snapshot
-convorel doctor --local true
-```
-
-少于三个字符的查询退化为字面量扫描；检索命中只反映每轮当前选中的正文，命中里的 `format` 说明它是 Copy 得到的 Markdown 还是页面渲染副本。历史轮次可能只留有渲染文本而没有 Markdown：此时 `history` 的 `reply` 为空、`capture_status` 为 `pending`（coverage 为 `markdown-incomplete`），引用时必须说明这一缺口，不能把 `reply_rendered` 当作原文。`content --version` 可按版本 ID 读回任意正文，含已被取代的版本，用来核对旧引用。`capture` 只在原提交消息与目标回复都仍挂载、回复仍呈最终态且渲染 hash 与保存值一致时补齐，点击后还会再读一次页面按正文 hash 复核归属，内容变了就记 `TARGET_CHANGED` 而不归档；复制控件自身约两秒的换标签会被有界等待，不影响已按正文确认的归属。`--from PATH` 让 `search`/`history`/`content` 读取导出的快照（目录或改名后的文件均可），不依赖偏好文件、工作区或 Chrome；导出即全部已归档内容的副本，按敏感数据管理，不放进 MCP 允许根。内容库缺失或写入失败只影响可检索性，不改变投递状态，也不构成重发依据；显式 `archive`/`capture` 用退出码 1 表示归档失败、2 表示存在缺口。
-
-恢复时保留原 task、run、状态根和已保存正文：
-
-- `archive.failed/unavailable`：先解决所报告的目录权限、空间或 SQLite 问题，再执行同一 run 的 `resume` 或 `conversation archive --id ID`。已完成轮次的 poll/resume 会补档；已保存的 Markdown 不重复复制或替换。读回 `history`/coverage 核验结果；不要删库或改任务 JSON 排障。
-- 缺 Markdown：已完成轮次的 `resume` 会重新核验同一页面的提交消息、回复身份与正文，再尝试 Copy；也可用同一 run 的 `capture` 显式重试。`archive` 只能重建本地已有内容，不能补出未捕获的正文。页面缺失、目标变更或 Copy 失败时保留缺口和渲染副本，不将最新网页答案冒认为该轮回复，也不重新发送问题。
-- 当前选择缺正文但已有版本 ID：先 `content --version VERSION_UUID` 读取不可变版本，保留证据；不要因为 `history.reply` 为空就认定原文已删除。`archive` 补写后再核对当前选择。
-- 页面入口或模型核验失败：`doctor` 成功只证明本地 CDP/MCP，不能代替真实项目入口、模型或远端 MCP 访问核验。`prepared` 的项目首轮按上文 retry：自有页返回项目入口，原绑定页确定丢失时在同一任务和 run 下重建并认领。投递未知不重发，也不新建 ID 绕过保护。
-
-## 接续已有会话
-
-优先复用已有 Convorel task。只需要旧内容时用 `search`/`history` 读回，不绑定也不打开会话。只有历史记录明确提供同一需求的会话 URL 和精确 user message ID，且没有旧监视者仍处理该轮时，才可绑定：
-
-```bash
-convorel conversation attach --id ID --url VERIFIED_URL --user-message VERIFIED_MESSAGE_ID
-```
-
-attach 不发送；保存其新 run ID 后走正常流程。不能从“最近可见答案”推断 message ID，不能复制旧私有 JSON 充当 Convorel 状态。保留历史档案；已打开的页面视为借用，缺少身份或提交结果证据时报告缺口，不创建替代会话。
-
-## 运行时与技能版本同步
-
-`convorel upgrade` 只升级运行时并提示检查技能，不自动同步已安装副本。用**升级后的可执行文件**、原安装目标显式检查：
-
-```bash
-convorel skills check --agent codex --scope user
-convorel skills update --agent codex --scope user
-# 自定义安装根目录（其中包含 chatgpt-review）
-convorel skills check --dir /absolute/custom-skills
-convorel skills update --dir /absolute/custom-skills
-```
-
-项目范围沿用 `--scope project --cwd /absolute/project`；多 Agent 沿用原 `--agent codex,claude-code`。每个安装根分别检查，不扫描或改动其他项目。`check` 只读，返回基线与内置版本、文件差异、本地修改和冲突；`current` 表示已接收当前内置版本，可仍有已保留的本地定制。`check` 非 current 退出 2；`update` 有冲突/无基线/未安装时退出 2，操作异常退出 1。
-
-新安装的 `.convorel-skill.json` 记录内置版本和文件 SHA-256，更新按旧基线、本地文件、新内置文件比较：仅本地改动保留，仅上游改动应用，双方改动同一文件且结果不同时整次拒绝更新。先读取 `conflicts`，保留定制副本，再人工协调；没有强制覆盖参数，不删 manifest 规避冲突。
-
-旧安装没有基线且并非完整匹配当前内置资源时，返回 `unmanaged`，不会猜测差异来源。取得可信的**真实旧版本 bundled skill 目录**后，用 `--baseline-dir /private/old-release/skills/chatgpt-review` 加到 check/update 命令，审核结果再更新。该路径直接指技能目录；不可拿当前定制目录充当旧基线。若旧版本不可确定，保留原安装，在独立临时目录用 `skills install --dir PATH` 导出新版供人工比对；不能把它冒充旧版本。
-
-更新在目标旁暂存完整目录，再切换目录；普通切换失败会回滚旧树。崩溃或回滚失败会留下 `.chatgpt-review.convorel-lock`，后续命令停止并给出路径。先读 `owner.json` 并确认原进程已结束，保留 `previous`/`staged` 与当前安装供核对：目标不存在且 previous 完整时可把 previous 恢复为原 canonical；目标仍存在时先核验其 manifest 与内容，不覆盖它。人工恢复并核验完毕后才清理该次锁目录，不因超时清锁，不删除唯一恢复副本。两次目录 rename 之间存在短暂路径空窗；更新期间避免其他 Agent 读取或编辑该技能，已加载旧指引的会话需要重新加载技能或开新会话。
+`convorel upgrade` 更新运行时；`convorel skills install --target /absolute/skills/chatgpt-review` 显式更新受管理且未修改的技能。保留用户定制，目标拒绝覆盖时先比较差异，不复制覆盖。运行时和技能升级分别核对版本及帮助；新指引不能用于未升级的运行时。

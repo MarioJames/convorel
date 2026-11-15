@@ -29,7 +29,7 @@ Prepare a concrete draft before requesting review. Include the goal and constrai
 
 Ask for failure-causing assumptions, concrete counterexamples, simpler established alternatives, and a distinction between verified defects and hypotheses. Request decision-blocking issues separately from optional improvements and ask what experiment would resolve a disagreement. Avoid a generic request for approval.
 
-Use the [Convorel conversation service](convorel.md) to create/reuse the session and manage its lifecycle. Prepare the complete message using [review-prompt.md](review-prompt.md); the service does not own the review strategy. Briefly tell the user which decision warrants review. Continue independent work while the watcher checks every 60 seconds.
+Use the [Convorel conversation service](convorel.md) to create/reuse the session and manage its lifecycle. Prepare the complete message using [review-prompt.md](review-prompt.md); the service does not own the review strategy. Briefly tell the user which decision warrants review. Continue independent work while the daemon observes and an exact-run wait subscribes to completion.
 
 ## Close the gate without a review loop
 

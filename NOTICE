@@ -1,5 +1,7 @@
-convorel
-Includes modified browser review components and the adapted chatgpt-review skill from MarioJames/skill-foundry (Apache-2.0).
+Convorel
+Copyright 2026 Convorel contributors
+Includes adapted browser page scripts and the chatgpt-review skill from MarioJames/skill-foundry (Apache-2.0).
 Includes adapted sensitive-file policy from XiaoDuoYa/codex-with-chatgpt (MIT).
-Uses agent-browser (Apache-2.0) and the official Model Context Protocol TypeScript SDK (MIT).
+Uses modernc.org/sqlite (BSD-3-Clause and public-domain SQLite), the official Model Context Protocol Go SDK (MIT), and github.com/coder/websocket (ISC).
+See THIRD_PARTY_LICENSES.md and the release licenses directory for upstream notices, including transitive dependencies.
 This is an independent community project, not an official OpenAI product.

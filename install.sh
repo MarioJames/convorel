@@ -23,7 +23,7 @@ die() {
 usage() {
   cat <<'EOF'
 install.sh [--version TAG] [--prefix DIR] [--bin-dir DIR] [--release-base URL] [--uninstall]
-  --version TAG     install a specific tag, e.g. v0.2.0 (default: latest release)
+  --version TAG     install a specific tag, e.g. v1.0.0 (default: latest release)
   --prefix DIR      installation directory (default: ~/.local/lib/convorel)
   --bin-dir DIR     directory to place the convorel link
   --dist-dir DIR    use already built artifacts from DIR instead of downloading
@@ -195,15 +195,8 @@ fi
 case "$(uname -s):$(uname -m)" in
   Linux:x86_64 | Linux:amd64) platform=linux-x64 ;;
   Linux:aarch64 | Linux:arm64) platform=linux-arm64 ;;
-  Darwin:arm64) platform=darwin-arm64 ;;
-  *) die "PLATFORM_UNSUPPORTED: supported releases are Linux x64/arm64 and macOS arm64" ;;
+  *) die "PLATFORM_UNSUPPORTED: supported releases are Linux x64/arm64" ;;
 esac
-if [ "${platform#linux-}" != "$platform" ]; then
-  if [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ] ||
-    { ldd --version 2>&1 | grep -qi musl; }; then
-    die "LIBC_UNSUPPORTED: this release ships glibc builds; on Alpine install convorel from source"
-  fi
-fi
 
 fetch() {
   if command -v curl >/dev/null; then curl -fsSL --connect-timeout 15 --max-time 180 --retry 3 -o "$2" "$1"
@@ -306,19 +299,12 @@ extracted="$staging/${archive%.tar.gz}"
 [ -f "$extracted/bin/convorel" ] && [ -x "$extracted/bin/convorel" ] ||
   die "ARTIFACT_INVALID: the archive does not contain bin/convorel"
 version_output() {
-  "$1" --version 9>&- &
-  local pid=$!
-  (sleep 30; kill "$pid" 2>/dev/null || true) 9>&- >/dev/null 2>&1 &
-  local timer=$!
-  local status=0
-  wait "$pid" || status=$?
-  kill "$timer" 2>/dev/null || true
-  return "$status"
+  timeout 30 "$1" version 9>&-
 }
 installed="$(version_output "$extracted/bin/convorel")" || die "VERSION_MISMATCH: downloaded binary could not report its version"
-[ "$installed" = "$release" ] || die "VERSION_MISMATCH: downloaded binary reports $installed, expected $release"
+[[ "$installed" == *"\"version\":\"$release\""* ]] || die "VERSION_MISMATCH: downloaded binary reports $installed, expected $release"
 
-# Every attempt gets an immutable directory: reinstall/downgrade never removes history.
+# Stage an immutable version directory before atomically switching the active link.
 target="$(mktemp -d "$install_dir/versions/$release-$platform.XXXXXXXX")"
 shopt -s dotglob nullglob
 mv "$extracted"/* "$target/"
@@ -329,7 +315,7 @@ ln -s "$target/bin/convorel" "$link_staging/convorel"
 switched=1
 mv -f "$link_staging/convorel" "$bin_dir/convorel"
 installed="$(version_output "$bin_dir/convorel")" || die "UPGRADE_UNVERIFIED: installed binary failed"
-[ "$installed" = "$release" ] || die "UPGRADE_UNVERIFIED: installed binary version differs"
+[[ "$installed" == *"\"version\":\"$release\""* ]] || die "UPGRADE_UNVERIFIED: installed binary version differs"
 # Build the next ownership ledger before publishing. Prior release files stay
 # owned across upgrades; stale fingerprints never authorize deleting edits.
 if [ -f "$manifest" ]; then cat "$manifest" > "$staging/owned"
@@ -351,12 +337,29 @@ if owned_link "$bin_dir/agent-browser"; then
   rm -f "$bin_dir/agent-browser"
   say "removed the previously bundled agent-browser link"
 fi
+# Prune only installer-owned, unchanged files in releases older than the active
+# release and the exact previous active release. Unknown/modified files survive.
+previous_dir="${old_convorel%/bin/convorel}"
+while IFS= read -r -d '' release_dir; do
+  [ "$release_dir" != "$target" ] && [ "$release_dir" != "$previous_dir" ] || continue
+  [ ! -L "$release_dir" ] || continue
+  while IFS= read -r -d '' kind && IFS= read -r -d '' fingerprint && IFS= read -r -d '' path; do
+    case "$path" in "$release_dir"/*) ;; *) continue ;; esac
+    safe_owned_path "$path" || continue
+    if [ "$kind" = f ] && [ ! -L "$path" ] && [ -f "$path" ] && [ "$(hash_of "$path")" = "$fingerprint" ]; then rm -f "$path"; fi
+  done < "$manifest"
+  while IFS= read -r -d '' kind && IFS= read -r -d '' fingerprint && IFS= read -r -d '' path; do
+    case "$path" in "$release_dir"|"$release_dir"/*) ;; *) continue ;; esac
+    [ "$kind" = d ] && safe_owned_path "$path" && [ ! -L "$path" ] || continue
+    rmdir "$path" 2>/dev/null || true
+  done < "$manifest"
+done < <(find "$install_dir/versions" -mindepth 1 -maxdepth 1 -type d -print0)
 [ -z "$old_convorel" ] || say "previous release retained at $old_convorel"
 say "installed convorel $installed -> $bin_dir/convorel"
-say "install agent-browser separately; init records the command it finds on PATH"
+say "next: convorel setup --workspace PATH, then convorel login"
 case ":$PATH:" in *":$bin_dir:"*) ;; *)
   say "add it to PATH with: export PATH=\"$bin_dir:\$PATH\""
   ;;
 esac
-say "next: start Chrome with --remote-debugging-port, then run convorel setup"
+say "optional: convorel service install"
 say "see https://github.com/$owner/$repository/blob/main/docs/quickstart.md"

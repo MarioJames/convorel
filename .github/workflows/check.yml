@@ -7,34 +7,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-go@v6
         with:
-          bun-version: 1.4.2
-      - name: Prepare sandbox execution dependencies
+          go-version-file: go.mod
+      - name: Prepare workspace sandbox dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap util-linux
-          # Ephemeral hosted runner only; follows containers/bubblewrap#728.
-          # The sandbox itself still unshares network/user namespaces and drops capabilities.
+          # Ephemeral hosted runner; the sandbox still unshares namespaces.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          bwrap --version
-          prlimit --version
-          bwrap --unshare-all --die-with-parent --cap-drop ALL --ro-bind / / --proc /proc --dev /dev --size 1048576 --tmpfs /tmp -- /bin/true
-      - run: bun install --frozen-lockfile
-      - run: bun run check
-      - run: bun run format:check
-      - run: bun run test:package
-  macos-arm64:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
-      - run: test "$(uname -m)" = arm64
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun test tests/process.test.ts tests/service/service.test.ts tests/storage/state.test.ts tests/workspace/workspace.test.ts tests/distribution/upgrade.test.ts tests/distribution/install-ownership.test.ts
-      - run: bun run test:package
-      - run: bun run test:install
-      - run: bun run test:browser --chrome "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      - name: Format
+        run: test -z "$(gofmt -l cmd internal scripts/*.go)"
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go build -o "$RUNNER_TEMP/convorel" ./cmd/convorel

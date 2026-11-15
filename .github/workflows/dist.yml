@@ -13,29 +13,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-go@v6
         with:
-          bun-version: 1.4.2
-      - run: bun install --frozen-lockfile
-      # test:install rebuilds dist/ for this platform only; keep it before dist.
-      - name: Build, install and drive the standalone artifact
-        run: bun run test:install
-      - name: Build every published target
-        run: bun run dist
+          go-version-file: go.mod
+      - run: scripts/build.sh
+      - name: Install acceptance
+        run: scripts/test-install.sh dist
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts
           path: dist/
           if-no-files-found: error
           retention-days: 14
-  macos-arm64:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.2
-      - run: test "$(uname -m)" = arm64
-      - run: bun install --frozen-lockfile
-      - name: Build, install and drive the macOS standalone artifact
-        run: bun run test:install
