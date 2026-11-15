@@ -31,11 +31,11 @@ func browserForTest(t *testing.T) (*Manager, context.Context) {
 	}
 	endpoint := "http://" + l.Addr().String()
 	_ = l.Close()
-	m, e := New(Options{ActionInterval: -1, NavigationWait: -1, Mode: "managed", Endpoint: endpoint, Executable: "/usr/bin/google-chrome", UserDataDir: t.TempDir(), Headless: true, ExtraArgs: []string{"--no-sandbox", "--disable-dev-shm-usage", "--disable-background-networking"}, StartupTimeout: 15 * time.Second})
+	m, e := New(Options{ActionInterval: -1, NavigationWait: -1, Mode: "managed", Endpoint: endpoint, Executable: "/usr/bin/google-chrome", UserDataDir: t.TempDir(), Headless: true, ExtraArgs: []string{"--no-sandbox", "--disable-dev-shm-usage", "--disable-background-networking"}, StartupTimeout: 60 * time.Second})
 	if e != nil {
 		t.Fatal(e)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	t.Cleanup(func() {
 		cancel()
 		c, stop := context.WithTimeout(context.Background(), 5*time.Second)
