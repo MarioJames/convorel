@@ -451,8 +451,9 @@ func TestNoPOSTRemainsPrepared(t *testing.T) {
 }
 
 func TestDifferentTasksObserveConcurrently(t *testing.T) {
-	r := newRig(t, fixture.Options{Markdown: "OK", SlowReply: 2 * time.Second}, time.Minute, nil)
-	other := fixture.New(fixture.Options{Markdown: "OK", SlowReply: 2 * time.Second})
+	r := newRig(t, fixture.Options{Markdown: "OK", SlowReply: 10 * time.Second}, time.Minute, nil)
+	// Replies outlast both sends even on a slow runner, so both runs are in flight together.
+	other := fixture.New(fixture.Options{Markdown: "OK", SlowReply: 10 * time.Second})
 	defer other.Close()
 	r.call(0, "ask", "--id", "parallel-a", "--prompt", "Only reply OK")
 	r.cfg.ProjectURL = other.URL + "/"
@@ -460,8 +461,8 @@ func TestDifferentTasksObserveConcurrently(t *testing.T) {
 	if r.browser.IdleInfo().InFlight != 2 {
 		t.Fatalf("expected two active runs, got %+v", r.browser.IdleInfo())
 	}
-	r.call(0, "wait", "--id", "parallel-a", "--timeout-seconds", "10")
-	r.call(0, "wait", "--id", "parallel-b", "--timeout-seconds", "10")
+	r.call(0, "wait", "--id", "parallel-a", "--timeout-seconds", "30")
+	r.call(0, "wait", "--id", "parallel-b", "--timeout-seconds", "30")
 	if len(r.fixture.Requests()) != 1 || len(other.Requests()) != 1 {
 		t.Fatal("cross-task submission contamination")
 	}
