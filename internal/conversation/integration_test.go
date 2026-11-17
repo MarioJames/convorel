@@ -741,3 +741,22 @@ func TestDraftReturnsWhenThePromptIsNotSent(t *testing.T) {
 		t.Fatalf("draft after a failed send: %q", draft)
 	}
 }
+func TestCLIMissionPrefixedTaskID(t *testing.T) {
+	r := newRig(t, fixture.Options{Markdown: "OK"}, time.Minute, nil)
+	ask := r.call(0, "ask", "--id", "m_f5fzpkyehi-mixed-period", "--prompt", "Only reply OK.", "--effort", "1")
+	if ask["delivery"] != "confirmed" {
+		t.Fatal(ask)
+	}
+	wait := r.call(0, "wait", "--id", "m_f5fzpkyehi-mixed-period", "--timeout-seconds", "10")
+	if wait["reply"].(map[string]any)["markdown"] != "OK" {
+		t.Fatal(wait)
+	}
+	bad := r.call(1, "ask", "--id", "M_Upper", "--prompt", "Only reply OK.", "--effort", "1")
+	e := bad["error"].(map[string]any)
+	if bad["code"] != "INVALID_TASK" || !strings.Contains(e["message"].(string), "lowercase letters, digits, '-' or '_'") {
+		t.Fatal(bad)
+	}
+	if len(r.fixture.Requests()) != 1 {
+		t.Fatal("rejected task id reached the page")
+	}
+}

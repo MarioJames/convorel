@@ -310,3 +310,18 @@ func TestDispatchIntentPersistsUnconfirmedRequestIdentity(t *testing.T) {
 		t.Fatal("request candidate prevented proven rejection", err)
 	}
 }
+func TestTaskIDAcceptsWeaverMissionPrefix(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	// Weaver mission IDs look like m_f5fzpkyehi; the skill tells agents to use
+	// <mission ID>-<dialogue name> verbatim as the Convorel task ID.
+	if _, err := s.CreateTask(ctx, task("m_f5fzpkyehi-mixed-period", run(firstRunID, "initial"))); err != nil {
+		t.Fatalf("mission-prefixed task id rejected: %v", err)
+	}
+	for _, id := range []string{"", "_lead", "Upper", "has space", "中文", strings.Repeat("a", 81)} {
+		_, err := s.CreateTask(ctx, task(id, run("bad-"+id, "bad-"+id)))
+		if err == nil || !strings.HasPrefix(err.Error(), "INVALID_TASK: ") || !strings.Contains(err.Error(), "task id") {
+			t.Fatalf("%q: want INVALID_TASK naming the id rule, got %v", id, err)
+		}
+	}
+}

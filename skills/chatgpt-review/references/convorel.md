@@ -32,7 +32,7 @@ PROMPT
 convorel wait --id ID --run RUN_ID --timeout-seconds 60
 ```
 
-`ask` 原子入库并发送，返回 `run`。`--request-id` 默认 initial，仅限该 task；显式稳定 key 便于追踪。相同 task/request/input 幂等返回原轮，历史 key 也返回原轮而非当前轮。冲突返回 `REQUEST_CONFLICT`。CLI 回执丢失时先检查原 task，不换 key/ID 重建。
+task ID 为 1–80 个小写字母、数字、`-` 或 `_`，以字母或数字开头，Weaver 主任务 ID（如 `m_f5fzpkyehi`）可原样作前缀；不合规则时返回 `INVALID_TASK` 并给出规则，改正 ID 后重发，此时消息尚未发送。`ask` 原子入库并发送，返回 `run`。`--request-id` 默认 initial，仅限该 task；显式稳定 key 便于追踪。相同 task/request/input 幂等返回原轮，历史 key 也返回原轮而非当前轮。冲突返回 `REQUEST_CONFLICT`。CLI 回执丢失时先检查原 task，不换 key/ID 重建。
 
 消费上一轮完整结果后：
 

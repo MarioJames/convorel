@@ -25,7 +25,11 @@ var (
 	ErrRetryNotAllowed     = errors.New("RETRY_NOT_ALLOWED")
 	ErrPriorRunNotComplete = errors.New("PRIOR_RUN_NOT_COMPLETE")
 )
-var taskIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,79}$`)
+
+// Task IDs allow "_" so Weaver mission IDs (m_xxx) can prefix them verbatim.
+var taskIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,79}$`)
+
+const taskIDRule = "task id must be 1-80 characters of lowercase letters, digits, '-' or '_', starting with a letter or digit"
 
 // SQLiteStore is owned by one daemon. Its mutex serializes all writes; SQLite
 // transactions make each document and its request claims durable together.
@@ -439,8 +443,11 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, t Task) (Task, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !taskIDPattern.MatchString(t.ID) || len(t.Runs) != 1 || t.CurrentRun != t.Runs[0].ID {
-		return Task{}, errors.New("INVALID_TASK")
+	if !taskIDPattern.MatchString(t.ID) {
+		return Task{}, fmt.Errorf("INVALID_TASK: %s, got %q", taskIDRule, t.ID)
+	}
+	if len(t.Runs) != 1 || t.CurrentRun != t.Runs[0].ID {
+		return Task{}, errors.New("INVALID_TASK: a new task needs exactly one current run")
 	}
 	r := t.Runs[0]
 	tx, err := s.tasks.BeginTx(ctx, nil)
