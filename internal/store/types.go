@@ -82,6 +82,19 @@ type Run struct {
 	SubmittedAt    string          `json:"submittedAt,omitempty"`
 	CompletedAt    string          `json:"completedAt,omitempty"`
 	LastObservedAt string          `json:"lastObservedAt,omitempty"`
+	Draft          *DraftBackup    `json:"draft,omitempty"`
+}
+
+// DraftBackup is an unsent composer draft this run moved aside to send its
+// prompt. State is saved until the text is back in its composer (restored), or
+// records why it is not (conflict, failed); Text is kept in every state.
+type DraftBackup struct {
+	Text       string `json:"text,omitempty"`
+	URL        string `json:"url"`
+	State      string `json:"state"`
+	SavedAt    string `json:"savedAt"`
+	RestoredAt string `json:"restoredAt,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 type Task struct {
 	RuntimeVersion int `json:"runtimeVersion,omitempty"`

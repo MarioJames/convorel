@@ -511,3 +511,46 @@ func TestRenameRequiresSaveAcknowledgement(t *testing.T) {
 		t.Fatal("optimistic sidebar accepted without 2xx acknowledgement")
 	}
 }
+
+func TestDraftIsClearedOnlyWhenUnchangedAndNeverArmsSend(t *testing.T) {
+	for _, editable := range []bool{false, true} {
+		m, ctx := browser(t)
+		s := fixture.New(fixture.Options{ContentEditable: editable})
+		p, _ := newPage(t, m, ctx, s)
+		if e := p.EnsureModel(ctx, "latest-pro", 1); e != nil {
+			t.Fatal(e)
+		}
+		if e := p.RestoreDraft(ctx, "my unsent note"); e != nil {
+			t.Fatal(e)
+		}
+		if draft, e := p.Draft(ctx); e != nil || draft != "my unsent note" {
+			t.Fatalf("draft: %q %v", draft, e)
+		}
+		// A put-back draft is not a prompt, and a prompt never types over it.
+		if _, e := p.Send(ctx); e == nil {
+			t.Fatal("restored draft armed a send")
+		}
+		if e := p.FillComposer(ctx, "prompt"); e == nil || !strings.Contains(e.Error(), "existing draft") {
+			t.Fatalf("typed over a draft: %v", e)
+		}
+		if e := p.ClearDraft(ctx, "another text"); e == nil || !strings.Contains(e.Error(), "draft changed") {
+			t.Fatalf("cleared an unsaved draft: %v", e)
+		}
+		if draft, _ := p.Draft(ctx); draft != "my unsent note" {
+			t.Fatalf("draft lost: %q", draft)
+		}
+		if e := p.ClearDraft(ctx, "my unsent note"); e != nil {
+			t.Fatal(e)
+		}
+		if draft, e := p.Draft(ctx); e != nil || draft != "" {
+			t.Fatalf("draft after clear: %q %v", draft, e)
+		}
+		if e := p.FillComposer(ctx, "prompt"); e != nil {
+			t.Fatal(e)
+		}
+		if len(s.Requests()) != 0 {
+			t.Fatal("draft handling sent a message")
+		}
+		s.Close()
+	}
+}

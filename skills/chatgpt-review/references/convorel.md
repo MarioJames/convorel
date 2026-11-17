@@ -43,7 +43,9 @@ PROMPT
 convorel wait --id ID --run NEW_RUN_ID --timeout-seconds 60
 ```
 
-`followup` 直接准备并发送，不需要第二条发送命令。它要求上一轮 complete，并核验已保存会话、前一轮身份、草稿和模型。入库后的 preflight 失败保留同一轮，不创建替代轮次绕过检查。
+`followup` 直接准备并发送，不需要第二条发送命令。它要求上一轮 complete，并核验已保存会话、前一轮身份和模型。入库后的 preflight 失败保留同一轮，不创建替代轮次绕过检查。
+
+输入框里已有未发送的草稿时不会卡住：Convorel 先把草稿存进任务记录，换成本轮 prompt 发送，用完输入框后再放回原处（续谈和未发出时放回同一标签页，首次发送后放回新会话输入框）。`status.draft.state` 为 `saved`、`restored`、`conflict`（原处已有更新的草稿，不覆盖）或 `failed`，未放回前 `status.draft.text` 保留原文，需要时转告用户。以前某轮留下的 Convorel prompt 直接丢弃，不恢复。带附件的草稿无法备份，该轮以 `composer: draft has attachments` 停下，请用户处理后再 `retry`。
 
 ## 等待与恢复
 
@@ -72,7 +74,7 @@ HTTP 200 单独不能证明送达。重试沿用原 run 的冻结 prompt/marker/
 
 `ask --type TYPE --topic TOPIC` 请求命名；`--language zh` 仅在用户明确要求中文时使用。标题 `MMDD｜TYPE｜Topic` 的日期来自会话 createdAt 转 Asia/Shanghai。TYPE 默认 FEA/DES/FIX/OPT/REL/EXP/DOC/RES。命名不改变项目归属或正文；主题不明则保留原标题。命名在后台运行，用 `status.naming` 检查 pending/running/verified/failed/not_requested，与回复和 archive 分开报告。
 
-消费完整回复后 `finish --id ID --run RUN_ID`，检查 cleanup 与 naming。仍观察或命名时会拒绝释放，稍后重试。finish 核验回复未变化、草稿为空和精确会话身份，仅关闭自有已完成标签页；失败保留证据，不因清理失败重发。保留远端会话、共享浏览器和登录态，清理本任务自有等待者或 lane。
+消费完整回复后 `finish --id ID --run RUN_ID`，检查 cleanup 与 naming。仍观察或命名时会拒绝释放，稍后重试。finish 核验回复未变化、输入框里没有本轮恢复之外的草稿和精确会话身份，仅关闭自有已完成标签页；失败保留证据，不因清理失败重发。保留远端会话、共享浏览器和登录态，清理本任务自有等待者或 lane。
 
 ## 版本同步
 

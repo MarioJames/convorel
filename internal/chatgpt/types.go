@@ -57,13 +57,18 @@ type SelfCheckReport struct {
 
 // Open uses projectURL's dedicated composer; Attach and VerifyIdentity never
 // silently substitute a different conversation. Send observes before dispatch.
-// ReadReply returns the same Markdown as the page's Copy control.
+// ReadReply returns the same Markdown as the page's Copy control. Draft,
+// ClearDraft and RestoreDraft move an unsent draft aside and back; none of
+// them can arm a send.
 type Page interface {
 	Open(context.Context, string) error
 	Attach(context.Context, Identity) error
 	VerifyIdentity(context.Context, Identity) error
 	EnsureModel(context.Context, string, int) error
 	FillComposer(context.Context, string) error
+	Draft(context.Context) (string, error)
+	ClearDraft(context.Context, string) error
+	RestoreDraft(context.Context, string) error
 	Send(context.Context) (<-chan SubmissionEvent, error)
 	ReadReply(context.Context, string) (Reply, error)
 	Rename(context.Context, string) error

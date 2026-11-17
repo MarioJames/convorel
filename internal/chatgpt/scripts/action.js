@@ -3,6 +3,9 @@ switch(args.action) {
  case 'identity': return {url:location.href,id:currentID(),messages:messageNodesFor().map(e=>({id:messageId(e),role:messageRole(e)}))};
  case 'focus': { const e=composer(); if(disabled(e))throw new Error('composer: disabled'); if(draft()!=='')throw new Error('composer: existing draft'); e.focus(); return true; }
  case 'draft': return draft();
+ // Displacing a draft is compare-and-select: the caller saved exactly this
+ // text, and uploads cannot be saved, so either mismatch stops before deletion.
+ case 'selectDraft': { const e=composer(); if(disabled(e))throw new Error('composer: disabled'); if(attachments())throw new Error('composer: draft has attachments'); if(draft()!==args.expected)throw new Error('composer: draft changed before replace'); e.focus(); if('value' in e)e.select(); else {const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r);} return true; }
  case 'send': if(draft()!==args.prompt)throw new Error('composer: draft changed before click');return coords(send());
  case 'model': return {expanded:model().getAttribute('aria-expanded')==='true',label:[controlLabel(model()),model().innerText,model().getAttribute('data-model-id'),model().getAttribute('data-value')].join('|'),...coords(model())};
  case 'modelState': {
@@ -37,8 +40,7 @@ switch(args.action) {
  case 'sliderFocus': {const s=slider(); if(disabled(s)||disabled(s.parentElement))throw new Error('effort-slider: disabled'); const target=s.closest('[role="menuitem"][tabindex]')||s; target.focus(); return true;}
  case 'snapshot': {
   const messages=messageNodesFor(); const generating=all('button').some(e=>e.matches('[data-testid="stop-button"], form[data-chatgpt-composer] button:has(svg path[d^="M4.5 5.75C4.5 5.05964"])') || ['Stop','Stop generating','Stop answering','停止','停止生成','中止','Arrêter'].includes(controlLabel(e)));
-  const attachments=all('button').some(e=>/remove (file|attachment)|移除附件|删除附件/i.test(controlLabel(e)));
-  return {url:location.href,conversationId:currentID(),generating,attachments,messages:messages.map(e=>({id:messageId(e),role:messageRole(e),text:messageText(e),model:e.getAttribute('data-message-model-slug')||'',final:messageRole(e)==='assistant'&&!generating&&messageCopies(e).filter(visible).length===1}))};
+  return {url:location.href,conversationId:currentID(),generating,attachments:attachments(),messages:messages.map(e=>({id:messageId(e),role:messageRole(e),text:messageText(e),model:e.getAttribute('data-message-model-slug')||'',final:messageRole(e)==='assistant'&&!generating&&messageCopies(e).filter(visible).length===1}))};
  }
  case 'options': return coords(options());
  case 'rename': return coords(rename());

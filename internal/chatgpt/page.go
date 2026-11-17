@@ -232,21 +232,80 @@ func (p *BrowserPage) FillComposer(ctx context.Context, prompt string) error {
 	if prompt == "" {
 		return errors.New("empty prompt")
 	}
+	if e := p.write(ctx, prompt); e != nil {
+		return e
+	}
+	p.prompt = prompt
+	return nil
+}
+
+// write types into an empty composer and verifies the exact resulting draft.
+func (p *BrowserPage) write(ctx context.Context, text string) error {
 	if e := p.eval(ctx, "focus", nil, nil); e != nil {
 		return e
 	}
-	if e := p.tab.InsertText(ctx, prompt); e != nil {
+	if e := p.tab.InsertText(ctx, text); e != nil {
 		return e
 	}
 	var draft string
 	if e := p.eval(ctx, "draft", nil, &draft); e != nil {
 		return e
 	}
-	if draft != prompt {
+	if draft != text {
 		return errors.New("composer: exact draft verification failed")
 	}
-	p.prompt = prompt
 	return nil
+}
+
+// Draft reads the unsent composer text without changing it.
+func (p *BrowserPage) Draft(ctx context.Context) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var draft string
+	e := p.eval(ctx, "draft", nil, &draft)
+	return draft, e
+}
+
+// ClearDraft empties the composer only while it still holds exactly expected,
+// the text the caller has already saved. It never arms a send.
+func (p *BrowserPage) ClearDraft(ctx context.Context, expected string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prompt = ""
+	if expected == "" {
+		return nil
+	}
+	if e := p.eval(ctx, "selectDraft", map[string]any{"expected": expected}, nil); e != nil {
+		return e
+	}
+	if e := p.key(ctx, "Backspace"); e != nil {
+		return e
+	}
+	var draft string
+	for i := 0; i < 20; i++ {
+		if e := p.eval(ctx, "draft", nil, &draft); e != nil {
+			return e
+		}
+		if draft == "" {
+			return nil
+		}
+		if e := pause(ctx, 50*time.Millisecond); e != nil {
+			return e
+		}
+	}
+	return errors.New("composer: draft was not cleared")
+}
+
+// RestoreDraft puts saved text back into an empty composer. The text is not a
+// prompt: Send keeps refusing until FillComposer supplies one.
+func (p *BrowserPage) RestoreDraft(ctx context.Context, text string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prompt = ""
+	if text == "" {
+		return nil
+	}
+	return p.write(ctx, text)
 }
 
 type modelState struct {

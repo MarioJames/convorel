@@ -595,3 +595,149 @@ func TestFirstSendRecoveryAfterChromeDeathBeforeInput(t *testing.T) {
 	}
 	r.eventually(func() bool { _, err := r.engine.Finish(r.ctx, "early-restart", ""); return err == nil })
 }
+
+// seedDraft leaves text in the composer at url the way a person, or an
+// interrupted earlier run, would: typed, stored by the page, tab closed.
+func (r *rig) seedDraft(url, text string) {
+	r.t.Helper()
+	if err := r.browser.EnsureStarted(r.ctx); err != nil {
+		r.t.Fatal(err)
+	}
+	tab, err := r.browser.NewTab(r.ctx, url)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer tab.Close(r.ctx)
+	page := chatgpt.New(tab)
+	r.eventually(func() bool { _, err := page.Draft(r.ctx); return err == nil })
+	if err = page.RestoreDraft(r.ctx, text); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// draftAt reads what a freshly loaded page at url shows in its composer.
+func (r *rig) draftAt(url string) string {
+	r.t.Helper()
+	tab, err := r.browser.NewTab(r.ctx, url)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	defer tab.Close(r.ctx)
+	page := chatgpt.New(tab)
+	var draft string
+	r.eventually(func() bool { draft, err = page.Draft(r.ctx); return err == nil })
+	return draft
+}
+func (r *rig) draftState(id string) string {
+	task, err := r.st.GetTask(r.ctx, id)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	for _, run := range task.Runs {
+		if run.ID == task.CurrentRun && run.Draft != nil {
+			return run.Draft.State
+		}
+	}
+	return ""
+}
+
+func TestLeftoverConvorelPromptIsDiscardedBeforeAsk(t *testing.T) {
+	r := newRig(t, fixture.Options{Markdown: "OK"}, time.Minute, nil)
+	r.seedDraft(r.fixture.URL+"/", "[CONVOREL:00000000-0000-4000-8000-00000000dead]\n\nprompt of an earlier run")
+	r.call(0, "ask", "--id", "leftover", "--prompt", "Only reply OK")
+	wait := r.call(0, "wait", "--id", "leftover", "--timeout-seconds", "10")
+	task, err := r.st.GetTask(r.ctx, "leftover")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests := r.fixture.Requests(); len(requests) != 1 || requests[0].Prompt != task.Runs[0].Prompt {
+		t.Fatalf("sent %+v", requests)
+	}
+	// Convorel's own leftover is not user work: nothing is saved or put back.
+	if _, saved := wait["draft"]; saved || task.Runs[0].Draft != nil {
+		t.Fatal("leftover prompt was kept as a draft", wait)
+	}
+	if draft := r.draftAt(r.fixture.URL + "/"); draft != "" {
+		t.Fatalf("leftover prompt is still shown: %q", draft)
+	}
+	// What was dropped stays traceable by its run marker.
+	events := r.call(0, "diagnostics", "--id", "leftover")["events"].([]any)
+	found := false
+	for _, event := range events {
+		e := event.(map[string]any)
+		found = found || e["code"] == "STALE_PROMPT_DISCARDED" && e["excerpt"] == "[CONVOREL:00000000-0000-4000-8000-00000000dead]"
+	}
+	if !found {
+		t.Fatal("discarded leftover left no diagnostic", events)
+	}
+}
+
+func TestUserDraftIsSavedReplacedAndRestored(t *testing.T) {
+	r := newRig(t, fixture.Options{Markdown: "OK"}, time.Minute, nil)
+	r.seedDraft(r.fixture.URL+"/", "my unsent note")
+	r.call(0, "ask", "--id", "draft", "--prompt", "Only reply OK")
+	r.call(0, "wait", "--id", "draft", "--timeout-seconds", "10")
+	task, err := r.st.GetTask(r.ctx, "draft")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests := r.fixture.Requests(); len(requests) != 1 || requests[0].Prompt != task.Runs[0].Prompt {
+		t.Fatalf("sent %+v", requests)
+	}
+	// The first send left the new-conversation composer; the note returns there.
+	r.eventually(func() bool { return r.draftState("draft") == "restored" })
+	codes := map[any]bool{}
+	for _, event := range r.call(0, "diagnostics", "--id", "draft")["events"].([]any) {
+		codes[event.(map[string]any)["code"]] = true
+	}
+	if !codes["DRAFT_SAVED"] || !codes["DRAFT_RESTORED"] {
+		t.Fatal("draft handling left no diagnostics", codes)
+	}
+	status := r.call(0, "status", "--id", "draft")
+	if draft := status["draft"].(map[string]any); draft["state"] != "restored" || draft["text"] != nil {
+		t.Fatal(status)
+	}
+	if draft := r.draftAt(r.fixture.URL + "/"); draft != "my unsent note" {
+		t.Fatalf("new-conversation draft: %q", draft)
+	}
+
+	// A draft typed into the conversation itself returns to the run's own tab.
+	tab, err := r.browser.AttachTab(r.ctx, task.Binding.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = chatgpt.New(tab).RestoreDraft(r.ctx, "note for this conversation"); err != nil {
+		t.Fatal(err)
+	}
+	r.call(0, "followup", "--id", "draft", "--request-id", "second", "--prompt", "next")
+	r.call(0, "wait", "--id", "draft", "--timeout-seconds", "10")
+	task, _ = r.st.GetTask(r.ctx, "draft")
+	if requests := r.fixture.Requests(); len(requests) != 2 || requests[1].Prompt != task.Runs[1].Prompt {
+		t.Fatalf("sent %+v", requests)
+	}
+	r.eventually(func() bool { return r.draftState("draft") == "restored" })
+	if draft, err := chatgpt.New(tab).Draft(r.ctx); err != nil || draft != "note for this conversation" {
+		t.Fatalf("conversation draft: %q %v", draft, err)
+	}
+	// The restored draft is stored by the page, so it does not hold the tab.
+	r.eventually(func() bool { _, err := r.engine.Finish(r.ctx, "draft", ""); return err == nil })
+	if draft := r.draftAt(r.fixture.URL + "/c/" + fixture.ConversationID); draft != "note for this conversation" {
+		t.Fatalf("conversation draft after finish: %q", draft)
+	}
+	if len(r.fixture.Requests()) != 2 {
+		t.Fatal("draft handling sent a message")
+	}
+}
+
+func TestDraftReturnsWhenThePromptIsNotSent(t *testing.T) {
+	r := newRig(t, fixture.Options{MissingSendButton: true}, time.Minute, nil)
+	r.seedDraft(r.fixture.URL+"/", "my unsent note")
+	ask := r.call(2, "ask", "--id", "unsent", "--prompt", "Only reply OK")
+	if ask["phase"] != "prepared" || len(r.fixture.Requests()) != 0 {
+		t.Fatal(ask)
+	}
+	r.eventually(func() bool { return r.draftState("unsent") == "restored" })
+	if draft := r.draftAt(r.fixture.URL + "/"); draft != "my unsent note" {
+		t.Fatalf("draft after a failed send: %q", draft)
+	}
+}

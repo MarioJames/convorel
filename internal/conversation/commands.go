@@ -160,7 +160,12 @@ func (e *Engine) Finish(ctx context.Context, id, rid string) (map[string]any, er
 			return nil, err
 		}
 		if dirty {
-			return nil, rpc.NewError("PAGE_NOT_IDLE", "draft must be preserved")
+			// A draft this run put back is already stored by the page; any
+			// other text is user work added since and keeps the tab open.
+			draft, er := page.Draft(ctx)
+			if er != nil || r.Draft == nil || r.Draft.State != "restored" || draft != r.Draft.Text {
+				return nil, rpc.NewError("PAGE_NOT_IDLE", "draft must be preserved")
+			}
 		}
 		e.release.Lock()
 		defer e.release.Unlock()

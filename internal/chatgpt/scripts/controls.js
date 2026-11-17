@@ -38,6 +38,7 @@ const editableText = root => {
  return read(root);
 };
 const draft = () => { const e=composer(); return 'value' in e ? e.value : editableText(e); };
+const attachments = () => all('button').some(e=>/remove (file|attachment)|移除附件|删除附件/i.test(controlLabel(e)));
 const currentID = () => { const m=location.pathname.match(/\/c\/([^/]+)/); return m ? decodeURIComponent(m[1]) : ''; };
 const sidebarEntry = () => {
  const id=currentID(); if(!id) throw new Error('rename: conversation identity missing');

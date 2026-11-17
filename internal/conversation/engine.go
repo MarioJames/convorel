@@ -192,7 +192,16 @@ func output(t store.Task, r store.Run) map[string]any {
 	case store.Prepared:
 		delivery = "not_sent"
 	}
-	return map[string]any{"id": t.ID, "run": r.ID, "phase": r.State, "delivery": delivery, "deliveryFacts": r.Delivery, "userMessageId": r.UserMessageID, "conversationId": r.Delivery.ConversationID, "reply": r.Reply, "naming": t.NamingState, "binding": t.Binding, "error": r.Error, "completedAt": r.CompletedAt}
+	v := map[string]any{"id": t.ID, "run": r.ID, "phase": r.State, "delivery": delivery, "deliveryFacts": r.Delivery, "userMessageId": r.UserMessageID, "conversationId": r.Delivery.ConversationID, "reply": r.Reply, "naming": t.NamingState, "binding": t.Binding, "error": r.Error, "completedAt": r.CompletedAt}
+	if r.Draft != nil {
+		// The text is reported only while it is not back in its composer.
+		draft := *r.Draft
+		if draft.State == "restored" {
+			draft.Text = ""
+		}
+		v["draft"] = draft
+	}
+	return v
 }
 func (e *Engine) Status(ctx context.Context, id, run string) (map[string]any, error) {
 	t, r, err := e.read(id, run)

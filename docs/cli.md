@@ -52,7 +52,7 @@ marked `?` may be absent.
 | `ask` | required `--id`; exactly one of `--prompt TEXT`, `--prompt-file PATH`, `--prompt-stdin`; optional `--request-id` (default `initial`), `--workspace`, paired `--type` and `--topic`, `--language en\|zh`, `--effort 1..5` | `id,run,phase,delivery,userMessageId?,conversationId?` | 0 confirmed delivery; 2 pending/rejected/unknown; 1 error |
 | `followup` | required `--id`, `--request-id`, one prompt source as for ask; optional `--effort 1..5` | `id,run,phase,delivery,userMessageId?,conversationId?` | same as ask |
 | `wait` | required `--id`; optional `--run`, `--timeout-seconds` (positive integer, default 60) | `id,run,phase,reply?` | 0 complete; 2 timeout/pending; 1 terminal error |
-| `status` | required `--id`; optional `--run` | `id,run,phase,delivery,naming,binding?` | 0 read succeeded; 1 error |
+| `status` | required `--id`; optional `--run` | `id,run,phase,delivery,naming,binding?,draft?` | 0 read succeeded; 1 error |
 | `result` | required `--id`; optional `--run` | `id,run,phase,reply?` | 0 complete; 2 pending; 1 terminal error |
 | `history` | required `--id` | `id,runs` (run records with identity, phase, delivery facts, saved prompt, reply when available) | 0 or 1 |
 | `retry` | required `--id`; optional `--run` | `id,run,phase,delivery,userMessageId?` | same as ask; 1 if retry forbidden |
@@ -97,7 +97,7 @@ Wait returns the saved reply as soon as it completes and does not await naming.
 Calling `wait` again on a completed run whose naming failed retries only the
 background naming operation, without sending a message. `status.naming` separately reports `{state,title?,verified,error?}`, with states
 `pending`, `running`, `verified`, `failed`, or `not_requested`. Naming failure
-never changes run delivery or reply success. Killing a wait process only removes
+never changes run delivery or reply success. `status.draft` appears only when the run moved a composer draft aside: `{state,url,savedAt,restoredAt?,error?,text?}` with states `saved`, `restored`, `conflict` or `failed`; `text` is present until the draft is back in its composer. Draft handling never changes run delivery or reply success either. Killing a wait process only removes
 that subscriber. The daemon continues observing; another wait reattaches.
 
 ## Other commands

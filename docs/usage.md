@@ -20,6 +20,8 @@ Keep task ID, run ID, configuration/state paths and returned conversation identi
 
 After consuming the preceding completed result, send a full new question with `followup --id ID --request-id UNIQUE_KEY --prompt TEXT`. It prepares and sends in the saved conversation and preserves its task configuration. `finish` safely releases an owned completed tab, preserving history and the remote conversation. It refuses active observation/naming, changed replies, conflicting identity or a new draft. Check `cleanup` and `naming`, then retry cleanup if background naming is still active.
 
+ChatGPT keeps an unsent draft in the browser profile and shows it again in every new tab, so a composer can already hold text when a run arrives. Convorel saves that draft on the run, replaces it with the prompt, and puts it back once the run is done with the composer: in the same tab for a follow-up or a prompt that was not sent, in the new-conversation composer after a first send. `status.draft` reports `saved`, `restored`, `conflict` (a newer draft is there now) or `failed`, and carries the text until it is back. A leftover Convorel prompt is dropped instead of restored. A draft with attachments is never touched; that run stops with `composer: draft has attachments`.
+
 ## Delivery and recovery
 
 | Phase | Meaning | Action |

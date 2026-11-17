@@ -44,6 +44,7 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 	}
 	if r.State == store.Complete {
 		signal()
+		e.restoreDraft(id, rid, page)
 		e.name(id, page)
 		return
 	}
@@ -94,8 +95,14 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 			e.failure(id, rid, "model", err)
 			return
 		}
+		// An unsent draft is moved aside, never sent along or typed over.
+		if err = e.displaceDraft(id, &r, page, obs); err != nil {
+			e.failure(id, rid, "fill", err)
+			return
+		}
 		if err = page.FillComposer(e.ctx, r.Prompt); err != nil {
 			e.failure(id, rid, "fill", err)
+			e.restoreDraft(id, rid, page)
 			return
 		}
 		// Persist intent before dispatch. Restart treats an interrupted intent as
@@ -127,6 +134,7 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 			}
 			e.failure(id, rid, "send", err)
 			if r.State != store.DeliveryUnknown {
+				e.restoreDraft(id, rid, page)
 				return
 			}
 			signal()
@@ -216,6 +224,7 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 			}
 			if r.State == store.Rejected {
 				e.publish(id)
+				e.restoreDraft(id, rid, page)
 				return
 			}
 			if r.State == store.Delivered || ev.Kind == chatgpt.StreamAborted {
@@ -224,6 +233,7 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 			if ev.Kind == chatgpt.StreamComplete && ev.AssistantMessageID != "" {
 				if e.complete(id, &r, page, ev.AssistantMessageID) {
 					signal()
+					e.restoreDraft(id, rid, page)
 					e.name(id, page)
 					return
 				}
@@ -323,6 +333,7 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 				}
 				if e.complete(id, &r, page, assistant) {
 					signal()
+					e.restoreDraft(id, rid, page)
 					e.name(id, page)
 					return
 				}
