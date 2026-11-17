@@ -19,7 +19,7 @@ var (
 	ErrTaskNotFound        = errors.New("TASK_NOT_FOUND")
 	ErrRunNotFound         = errors.New("RUN_MISSING")
 	ErrRequestNotFound     = errors.New("REQUEST_NOT_FOUND")
-	ErrRequestConflict     = errors.New("REQUEST_CONFLICT")
+	ErrRequestConflict     = errors.New("REQUEST_CONFLICT: this task already used the request id with different input, or the task already exists (use followup)")
 	ErrTransitionConflict  = errors.New("TRANSITION_CONFLICT")
 	ErrInvalidTransition   = errors.New("INVALID_TRANSITION")
 	ErrRetryNotAllowed     = errors.New("RETRY_NOT_ALLOWED")
@@ -362,12 +362,16 @@ func validPhase(p Phase) bool {
 	}
 	return false
 }
+
+// Request IDs are scoped to their task: agents reuse labels such as
+// decision-v1 for every review. Task IDs contain no ":".
 func requestKey(task, request string) string {
-	if request == "initial" {
-		return "task:" + task + ":initial"
-	}
-	return "global:" + request
+	return "task:" + task + ":" + request
 }
+
+// Up to 1.0.2 explicit request IDs were claimed as global:<request>. Such a
+// claim still replays for the task that owns it and no longer blocks others.
+func legacyRequestKey(request string) string { return "global:" + request }
 func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, error) {
 	var t Task
 	var doc string
@@ -401,6 +405,9 @@ func claim(ctx context.Context, tx *sql.Tx, task string, r Run) error {
 func lookup(ctx context.Context, tx *sql.Tx, task, request string) (Task, Run, error) {
 	var owner, run string
 	err := tx.QueryRowContext(ctx, "select task_id,run_id from request_claim where request_key=?", requestKey(task, request)).Scan(&owner, &run)
+	if errors.Is(err, sql.ErrNoRows) && request != "initial" {
+		err = tx.QueryRowContext(ctx, "select task_id,run_id from request_claim where request_key=? and task_id=?", legacyRequestKey(request), task).Scan(&owner, &run)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return Task{}, Run{}, ErrRequestNotFound
 	}

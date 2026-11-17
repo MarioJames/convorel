@@ -40,11 +40,12 @@ func TestIdempotencyAndGlobalClaims(t *testing.T) {
 	if _, err = s.CreateTask(ctx, task("three", explicit)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.CreateTask(ctx, task("four", explicit)); !errors.Is(err, ErrRequestConflict) {
-		t.Fatalf("global conflict %v", err)
+	// Agents reuse labels such as decision-v1 across tasks; keys are task scoped.
+	if _, err = s.CreateTask(ctx, task("four", run("other-id", "global-key"))); err != nil {
+		t.Fatalf("same request id in another task: %v", err)
 	}
-	if _, _, err = s.ByRequestID(ctx, "four", "global-key"); !errors.Is(err, ErrRequestConflict) {
-		t.Fatalf("foreign lookup %v", err)
+	if _, r4, err := s.ByRequestID(ctx, "four", "global-key"); err != nil || r4.ID != "other-id" {
+		t.Fatalf("task scoped lookup %+v %v", r4, err)
 	}
 	if _, err = s.AppendRun(ctx, "one", run("next", "followup")); !errors.Is(err, ErrPriorRunNotComplete) {
 		t.Fatalf("in flight append %v", err)
@@ -323,5 +324,26 @@ func TestTaskIDAcceptsWeaverMissionPrefix(t *testing.T) {
 		if err == nil || !strings.HasPrefix(err.Error(), "INVALID_TASK: ") || !strings.Contains(err.Error(), "task id") {
 			t.Fatalf("%q: want INVALID_TASK naming the id rule, got %v", id, err)
 		}
+	}
+}
+func TestLegacyGlobalRequestClaims(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	if _, err := s.CreateTask(ctx, task("old", run(firstRunID, "initial"))); err != nil {
+		t.Fatal(err)
+	}
+	// Up to 1.0.2 explicit request IDs were claimed as global:<request>.
+	legacy := run("legacy-run", "decision-v1")
+	if _, err := s.tasks.Exec("insert into request_claim values(?,?,?,?)", "global:decision-v1", "old", legacy.ID, legacy.InputHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ByRequestID(ctx, "new", "decision-v1"); !errors.Is(err, ErrRequestNotFound) {
+		t.Fatalf("another task's legacy claim must not block: %v", err)
+	}
+	if _, err := s.CreateTask(ctx, task("new", run("new-run", "decision-v1"))); err != nil {
+		t.Fatalf("reuse of a legacy key in a new task: %v", err)
+	}
+	if _, _, err := s.ByRequestID(ctx, "old", "decision-v1"); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("own legacy claim must still be found: %v", err)
 	}
 }

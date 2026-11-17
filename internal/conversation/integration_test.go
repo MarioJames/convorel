@@ -201,7 +201,6 @@ func TestCLICompletedNamingFollowup(t *testing.T) {
 	r.call(0, "followup", "--id", "first", "--prompt", "next", "--request-id", "follow", "--effort", "2")
 	r.call(0, "wait", "--id", "first", "--timeout-seconds", "10")
 	history := r.call(0, "history", "--id", "first")
-	r.call(1, "ask", "--id", "collision", "--request-id", "follow", "--prompt", "next")
 	if len(history["runs"].([]any)) != 2 || len(r.fixture.Requests()) != 2 {
 		t.Fatal(history)
 	}

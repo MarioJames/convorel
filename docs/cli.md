@@ -69,11 +69,13 @@ Pro); a supplied effort overrides that new run's effort. Continuation retains th
 task binding and its configuration snapshot. `--language` requires the naming
 pair. `finish` releases owned browser resources without deleting history.
 
-An explicit request ID is claimed atomically and globally with task/run creation.
-The legacy default `initial` is scoped to its task, so separate new tasks do not
-conflict; request lookup always takes both task ID and request ID. Repeating
-the same task/request/input resolves to the original run, never a second send.
-Different input or a different task using that key is `REQUEST_CONFLICT`. A replay
+A request ID is claimed atomically with task/run creation and is scoped to its
+task, including the default `initial`, so separate tasks may reuse labels such
+as `decision-v1`; request lookup always takes both task ID and request ID.
+Claims made by 1.0.2 and earlier under a global key still replay for the task
+that owns them and no longer block other tasks. Repeating the same
+task/request/input resolves to the original run, never a second send.
+Different input under that task's key is `REQUEST_CONFLICT`. A replay
 of an older run returns that original run, not a successor. This requires the
 store's transactional claim; the RPC request `id` alone is a correlation field,
 not the persistence mechanism. Retrying reuses the frozen prompt of the same run.
