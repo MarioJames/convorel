@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -68,7 +69,7 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 					e.failure(id, rid, "observe", errors.New("PRIOR_RUN_NOT_COMPLETE"))
 					return
 				}
-				if err = verifyAnchor(e.ctx, page, previous); err != nil {
+				if err = verifyAnchorFresh(e.ctx, page, previous); err != nil {
 					e.failure(id, rid, "observe", err)
 					return
 				}
@@ -391,6 +392,36 @@ func (e *Engine) bindURL(t store.Task, cid string, obs observable) error {
 		task.URL = u.String()
 		return nil
 	})
+}
+
+// verifyAnchorFresh brings the newest turn into view when the tab does not
+// render the anchor: ChatGPT keeps only turns near the viewport of a long
+// conversation in the DOM, and a tab left scrolled up omits the latest one.
+func verifyAnchorFresh(ctx context.Context, page chatgpt.Page, r store.Run) error {
+	err := verifyAnchor(ctx, page, r)
+	if err == nil || err.Error() != "SUBMITTED_MESSAGE_MISSING" {
+		return err
+	}
+	latest, ok := page.(interface{ ShowLatest(context.Context) error })
+	if !ok {
+		return err
+	}
+	// Rendering follows the scroll asynchronously; re-scroll while it settles.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if er := latest.ShowLatest(ctx); er != nil {
+			return fmt.Errorf("SUBMITTED_MESSAGE_MISSING: %w", er)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+		err = verifyAnchor(ctx, page, r)
+		if err == nil || err.Error() != "SUBMITTED_MESSAGE_MISSING" || time.Now().After(deadline) {
+			return err
+		}
+	}
 }
 func verifyAnchor(ctx context.Context, page chatgpt.Page, r store.Run) error {
 	obs, ok := page.(observable)

@@ -141,7 +141,7 @@ func (e *Engine) Finish(ctx context.Context, id, rid string) (map[string]any, er
 		if err = verifyResult(r); err != nil {
 			return nil, err
 		}
-		if err = verifyAnchor(ctx, page, r); err != nil {
+		if err = verifyAnchorFresh(ctx, page, r); err != nil {
 			return nil, err
 		}
 		if err = page.VerifyIdentity(ctx, identity(t, r, true)); err != nil {

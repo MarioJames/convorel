@@ -793,3 +793,40 @@ func TestFollowupQueuesBehindBackgroundNaming(t *testing.T) {
 		t.Fatal("followup was not sent exactly once")
 	}
 }
+
+// ChatGPT renders only the turns near the viewport of a long conversation.
+// A tab left scrolled to the top omits the latest exchange from its DOM; a
+// follow-up brings it into view instead of failing SUBMITTED_MESSAGE_MISSING,
+// and still sends exactly once.
+func TestFollowupFindsTurnScrolledOutOfView(t *testing.T) {
+	r := newRig(t, fixture.Options{Markdown: "OK"}, time.Minute, nil)
+	r.call(0, "ask", "--id", "scrolled", "--prompt", "Only reply OK.")
+	r.call(0, "wait", "--id", "scrolled", "--timeout-seconds", "10")
+	task, err := r.st.GetTask(r.ctx, "scrolled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab, err := r.browser.AttachTab(r.ctx, task.Binding.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Turn the transcript into a short scroller with older content above the
+	// last turn, rendering only what intersects the viewport.
+	var hidden bool
+	if err = tab.Evaluate(r.ctx, `(()=>{const m=document.querySelector('#messages');m.style.cssText='height:200px;overflow-y:auto';
+const spacer=document.createElement('div');spacer.style.height='4000px';m.prepend(spacer);
+const render=()=>{const box=m.getBoundingClientRect();for(const e of m.querySelectorAll('[data-message-author-role="user"],article')){const b=e.getBoundingClientRect();e.style.visibility=b.bottom>box.top&&b.top<box.bottom?'':'hidden'}};
+m.addEventListener('scroll',render);m.scrollTop=0;render();
+return getComputedStyle(m.querySelector('[data-message-author-role="user"]')).visibility==='hidden'})()`, &hidden); err != nil || !hidden {
+		t.Fatal("latest turn still rendered", err)
+	}
+	r.call(0, "followup", "--id", "scrolled", "--request-id", "second", "--prompt", "next")
+	wait := r.call(0, "wait", "--id", "scrolled", "--timeout-seconds", "10")
+	if wait["reply"].(map[string]any)["markdown"] != "OK" {
+		t.Fatal(wait)
+	}
+	if len(r.fixture.Requests()) != 2 {
+		t.Fatal("followup was not sent exactly once")
+	}
+	r.eventually(func() bool { _, err := r.engine.Finish(r.ctx, "scrolled", ""); return err == nil })
+}

@@ -38,6 +38,7 @@ switch(args.action) {
  }
  case 'latest': return coords(unique(all('[role="menuitemradio"]',modelMenu()).filter(e=>['Latest','最新','Le plus récent'].includes(controlLabel(e))),'Latest'));
  case 'sliderFocus': {const s=slider(); if(disabled(s)||disabled(s.parentElement))throw new Error('effort-slider: disabled'); const target=s.closest('[role="menuitem"][tabindex]')||s; target.focus(); return true;}
+ case 'showLatest': { let s=Array.from(document.querySelectorAll('[data-message-author-role], [data-user-message-bubble], [data-turn-key]')).at(-1)?.parentElement; while(s&&!(/(auto|scroll)/.test(getComputedStyle(s).overflowY)&&s.scrollHeight>s.clientHeight))s=s.parentElement; if(!s)return false; s.scrollTop=s.scrollHeight; return true; }
  case 'snapshot': {
   const messages=messageNodesFor(); const generating=all('button').some(e=>e.matches('[data-testid="stop-button"], form[data-chatgpt-composer] button:has(svg path[d^="M4.5 5.75C4.5 5.05964"])') || ['Stop','Stop generating','Stop answering','停止','停止生成','中止','Arrêter'].includes(controlLabel(e)));
   return {url:location.href,conversationId:currentID(),generating,attachments:attachments(),messages:messages.map(e=>({id:messageId(e),role:messageRole(e),text:messageText(e),model:e.getAttribute('data-message-model-slug')||'',final:messageRole(e)==='assistant'&&!generating&&messageCopies(e).filter(visible).length===1}))};

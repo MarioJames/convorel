@@ -186,6 +186,16 @@ func (p *BrowserPage) Attach(ctx context.Context, id Identity) error {
 	p.modelVerified = false
 	return nil
 }
+
+// ShowLatest scrolls the transcript to its newest turn. ChatGPT renders only
+// the turns near the viewport of a long conversation, so a tab left at the top
+// does not contain the latest exchange in its DOM. It never sends.
+func (p *BrowserPage) ShowLatest(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var moved bool
+	return p.eval(ctx, "showLatest", nil, &moved)
+}
 func (p *BrowserPage) VerifyIdentity(ctx context.Context, id Identity) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
