@@ -760,3 +760,37 @@ func TestCLIMissionPrefixedTaskID(t *testing.T) {
 		t.Fatal("rejected task id reached the page")
 	}
 }
+func TestFollowupQueuesBehindBackgroundNaming(t *testing.T) {
+	gate := make(chan struct{})
+	r := newRig(t, fixture.Options{Markdown: "OK"}, time.Minute, gate)
+	r.call(0, "ask", "--id", "m_queue-naming", "--prompt", "Only reply OK.", "--type", "DES", "--topic", "Queue")
+	r.call(0, "wait", "--id", "m_queue-naming", "--timeout-seconds", "10")
+	type result struct {
+		code int
+		out  string
+	}
+	done := make(chan result, 1)
+	go func() {
+		var out bytes.Buffer
+		args := []string{"--config-dir", r.paths.ConfigDir, "--state-dir", r.paths.StateDir, "followup", "--id", "m_queue-naming", "--request-id", "second", "--prompt", "next"}
+		code := cli.Run(r.ctx, args, strings.NewReader(""), &out)
+		done <- result{code, out.String()}
+	}()
+	select {
+	case got := <-done:
+		t.Fatalf("followup did not wait for naming: exit %d %s", got.code, got.out)
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(gate)
+	got := <-done
+	if got.code == 1 {
+		t.Fatalf("followup failed after naming finished: %s", got.out)
+	}
+	r.call(0, "wait", "--id", "m_queue-naming", "--timeout-seconds", "10")
+	if status := r.call(0, "status", "--id", "m_queue-naming"); status["naming"].(map[string]any)["state"] != "verified" {
+		t.Fatal(status)
+	}
+	if len(r.fixture.Requests()) != 2 {
+		t.Fatal("followup was not sent exactly once")
+	}
+}

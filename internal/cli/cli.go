@@ -162,6 +162,10 @@ func Run(ctx context.Context, args []string, in io.Reader, out io.Writer) int {
 		return c
 	}
 	deadline := time.Now().Add(rpc.DefaultTimeout)
+	if v.Command == "ask" || v.Command == "followup" {
+		// A follow-up may queue behind the previous reply's background naming.
+		deadline = time.Now().Add(2 * time.Minute)
+	}
 	if v.Command == "login" {
 		deadline = time.Now().Add(10*time.Minute + 2*time.Second)
 	}

@@ -36,6 +36,7 @@ type taskState struct {
 	mu     sync.Mutex
 	active bool
 	ready  chan struct{}
+	done   chan struct{}
 	page   chatgpt.Page
 	tab    cdp.Tab
 }
@@ -293,6 +294,16 @@ func (e *Engine) Ask(ctx context.Context, p map[string]string, followup bool) (m
 		state.mu.Unlock()
 		return nil, err
 	}
+	if followup && state.active {
+		if err = e.awaitBackground(ctx, state, id); err != nil {
+			state.mu.Unlock()
+			return nil, err
+		}
+		if t, err = e.opts.Store.GetTask(e.ctx, id); err != nil {
+			state.mu.Unlock()
+			return nil, err
+		}
+	}
 	if state.active {
 		state.mu.Unlock()
 		return nil, rpc.NewError("RUN_IN_FLIGHT", "one run per task may be active")
@@ -398,10 +409,54 @@ func (e *Engine) Wait(ctx context.Context, id, run string) (map[string]any, erro
 		}
 	}
 }
+
+// awaitBackground queues a follow-up behind work that still holds the tab after
+// the previous reply completed (naming, draft restore). It is entered and left
+// with s.mu held, and leaves the RUN_IN_FLIGHT check to the caller when the
+// previous run is not complete or the request deadline leaves no time to send.
+func (e *Engine) awaitBackground(ctx context.Context, s *taskState, id string) error {
+	for s.active {
+		t, err := e.opts.Store.GetTask(e.ctx, id)
+		if err != nil {
+			return err
+		}
+		complete := false
+		for _, r := range t.Runs {
+			if r.ID == t.CurrentRun {
+				complete = r.State == store.Complete
+			}
+		}
+		if !complete {
+			return nil
+		}
+		wait, cancel := ctx, context.CancelFunc(func() {})
+		if deadline, ok := ctx.Deadline(); ok {
+			wait, cancel = context.WithDeadline(ctx, deadline.Add(-sendReserve))
+		}
+		done := s.done
+		s.mu.Unlock()
+		select {
+		case <-done:
+		case <-wait.Done():
+		}
+		cancel()
+		s.mu.Lock()
+		if s.active && wait.Err() != nil {
+			return rpc.NewError("RUN_IN_FLIGHT", "the previous reply is complete but its conversation naming is still running; repeat the same followup shortly")
+		}
+	}
+	return nil
+}
+
+// sendReserve is the part of an ask/followup deadline kept for the send itself.
+const sendReserve = 30 * time.Second
+
 func (e *Engine) launch(s *taskState, id, rid string, send bool) <-chan struct{} {
 	s.active = true
 	s.ready = make(chan struct{})
 	ready := s.ready
+	s.done = make(chan struct{})
+	done := s.done
 	end := e.begin()
 	e.wg.Add(1)
 	go func() {
@@ -410,7 +465,7 @@ func (e *Engine) launch(s *taskState, id, rid string, send bool) <-chan struct{}
 		var once sync.Once
 		signal := func() { once.Do(func() { close(ready) }) }
 		defer signal()
-		defer func() { s.mu.Lock(); s.active = false; s.mu.Unlock() }()
+		defer func() { s.mu.Lock(); s.active = false; close(done); s.mu.Unlock() }()
 		for {
 			e.run(s, id, rid, send, signal)
 			task, run, err := e.read(id, rid)

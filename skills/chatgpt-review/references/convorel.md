@@ -43,7 +43,7 @@ PROMPT
 convorel wait --id ID --run NEW_RUN_ID --timeout-seconds 60
 ```
 
-`followup` 直接准备并发送，不需要第二条发送命令。它要求上一轮 complete，并核验已保存会话、前一轮身份和模型。入库后的 preflight 失败保留同一轮，不创建替代轮次绕过检查。
+`followup` 直接准备并发送，不需要第二条发送命令。它要求上一轮 complete，并核验已保存会话、前一轮身份和模型。上一轮已完成、后台命名仍在进行时，`followup` 排队等命名结束再发送（最多约 90 秒）；仍未结束则返回 `RUN_IN_FLIGHT`，消息未发送，稍后原样重试同一命令。入库后的 preflight 失败保留同一轮，不创建替代轮次绕过检查。
 
 输入框里已有未发送的草稿时不会卡住：Convorel 先把草稿存进任务记录，换成本轮 prompt 发送，用完输入框后再放回原处（续谈和未发出时放回同一标签页，首次发送后放回新会话输入框）。`status.draft.state` 为 `saved`、`restored`、`conflict`（原处已有更新的草稿，不覆盖）或 `failed`，未放回前 `status.draft.text` 保留原文，需要时转告用户。以前某轮留下的 Convorel prompt 直接丢弃，不恢复。带附件的草稿无法备份，该轮以 `composer: draft has attachments` 停下，请用户处理后再 `retry`。
 
