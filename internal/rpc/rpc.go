@@ -14,7 +14,7 @@ import (
 
 const MaxFrameBytes = 8 << 20
 const DefaultTimeout = 30 * time.Second
-const Version = "1.0.3"
+const Version = "1.0.4"
 
 // readBufferBytes keeps per-connection buffering small; frames are accumulated
 // and bounded explicitly in readFrame up to MaxFrameBytes.
