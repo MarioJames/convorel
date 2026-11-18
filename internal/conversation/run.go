@@ -78,7 +78,11 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 					return
 				}
 				reply, er := page.ReadReply(e.ctx, previous.Reply.ID)
-				if er != nil || reply.Markdown != previous.Reply.Markdown {
+				if er != nil {
+					e.failure(id, rid, "observe", fmt.Errorf("PRIOR_REPLY_UNREADABLE: %w", er))
+					return
+				}
+				if reply.Markdown != previous.Reply.Markdown {
 					e.failure(id, rid, "observe", errors.New("COMPLETED_TURN_CHANGED"))
 					return
 				}
@@ -244,7 +248,9 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 			if er != nil {
 				continue
 			}
-			if r.Delivery.ConversationID != "" && snap.ConversationID != "" && snap.ConversationID != r.Delivery.ConversationID {
+			// The address keeps ChatGPT's provisional local- identity for a moment
+			// after the stream has named the server conversation.
+			if r.Delivery.ConversationID != "" && snap.ConversationID != "" && !strings.HasPrefix(snap.ConversationID, "local-") && snap.ConversationID != r.Delivery.ConversationID {
 				e.failure(id, rid, "observe", errors.New("CONVERSATION_IDENTITY_CHANGED"))
 				signal()
 				return

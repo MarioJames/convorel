@@ -32,6 +32,9 @@ type Options struct {
 	HiddenExtraForm       bool
 	OmitStreamComplete    bool
 	ContentEditable       bool
+	ProvisionalURL        bool // first send shows /c/local-… until input_message, after the stream named the conversation
+	CopiedState           bool // the page's first copy is empty; after a click the Copy control reads Copied for a few seconds
+	ListMetadata          bool // a conversation page loads its metadata from the conversation list only
 	Markdown              string
 	ProjectID             string
 }
@@ -122,6 +125,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		if o.ProvisionalURL {
+			send("delta", map[string]any{"type": "conversation_detail_metadata", "conversation_id": ConversationID})
+		}
 		if o.BeforeInputDelay > 0 {
 			select {
 			case <-r.Context().Done():
@@ -172,7 +178,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"id": ConversationID, "create_time": time.Unix(0, int64(s.created*1e9)).UTC().Format(time.RFC3339Nano)}}})
+		var project any
+		if o.ProjectID != "" {
+			project = o.ProjectID
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{"id": ConversationID, "title": s.title, "create_time": time.Unix(0, int64(s.created*1e9)).UTC().Format(time.RFC3339Nano), "gizmo_id": project, "is_archived": false, "is_starred": nil, "pinned_time": nil}}})
 	case strings.HasPrefix(r.URL.Path, "/backend-api/conversations/") || strings.HasPrefix(r.URL.Path, "/backend-api/conversation/"):
 		if o.RequirePageAuth && r.Header.Get("Authorization") != "Bearer fixture-app-only" {
 			http.Error(w, "not found", 404)
@@ -223,6 +233,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if o.OmitInputIdentity {
 			html = strings.ReplaceAll(html, `author:{role:'user'}`, `author:{role:'prepared'}`)
+		}
+		if o.ListMetadata {
+			html = strings.Replace(html, `if(location.pathname.includes('/c/'))fetch('/backend-api/conversation/fixture-conversation',{headers:{Authorization:'Bearer fixture-app-only'}}).then(r=>r.json()).then(m=>{$('nav a').textContent=m.title});`, `if(location.pathname.includes('/c/'))fetch('/backend-api/conversations?offset=0&limit=20',{headers:{Authorization:'Bearer fixture-app-only'}}).then(r=>r.json()).then(l=>{const m=l.items.find(i=>i.id==='fixture-conversation');if(m)$('nav a').textContent=m.title});`, 1)
+		}
+		if o.CopiedState {
+			html = strings.Replace(html, `document.getElementById('reply-'+id).querySelector('button').onclick=()=>navigator.clipboard.writeText(markdown)`, `document.getElementById('reply-'+id).querySelector('button').onclick=e=>{const b=e.currentTarget;if(b.dataset.testid!=='copy-turn-action-button')return;navigator.clipboard.writeText(window.fixtureCopied?markdown:'');window.fixtureCopied=true;b.dataset.testid='copied';b.setAttribute('aria-label','Copied');setTimeout(()=>{b.dataset.testid='copy-turn-action-button';b.setAttribute('aria-label','Copy')},3500)}`, 1)
+		}
+		if o.ProvisionalURL {
+			html = strings.Replace(html, `try{const r=await fetch('/backend-api/f/conversation'`, `try{if(!location.pathname.includes('/c/'))history.replaceState(null,'','/c/local-chatgpt:fixture');const r=await fetch('/backend-api/f/conversation'`, 1)
 		}
 		s.mu.Lock()
 		var turns []map[string]string

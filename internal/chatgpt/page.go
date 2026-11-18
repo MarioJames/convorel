@@ -518,7 +518,9 @@ func (p *BrowserPage) ReadReply(ctx context.Context, id string) (Reply, error) {
 	}
 	var target Message
 	found := false
-	for attempt := 0; attempt < 30; attempt++ {
+	// Completion and a just-clicked "Copied" control both hide the Copy control
+	// for a moment; finality waits for it to return.
+	for attempt := 0; attempt < 60; attempt++ {
 		var s Snapshot
 		if e := p.eval(ctx, "snapshot", nil, &s); e != nil {
 			return Reply{}, e
@@ -563,11 +565,22 @@ func (p *BrowserPage) ReadReply(ctx context.Context, id string) (Reply, error) {
 		OK           bool
 		Text, Reason string
 	}
-	if e := p.eval(ctx, "copy", map[string]any{"id": target.ID}, &r); e != nil {
-		return Reply{}, e
-	}
-	if !r.OK {
-		return Reply{}, fmt.Errorf("copy: %s", r.Reason)
+	// After a click ChatGPT shows "Copied" in place of the Copy control for
+	// about two seconds. The first click on a freshly loaded page copies an
+	// empty payload, and a click may not reach the clipboard at all.
+	for attempt := 0; ; attempt++ {
+		if e := p.eval(ctx, "copy", map[string]any{"id": target.ID}, &r); e != nil {
+			return Reply{}, e
+		}
+		if r.OK {
+			break
+		}
+		if attempt == 7 || r.Reason != "COPY_BUTTON_MISSING" && r.Reason != "COPY_NOT_CAPTURED" && r.Reason != "COPY_PAYLOAD_EMPTY" {
+			return Reply{}, fmt.Errorf("copy: %s", r.Reason)
+		}
+		if e := pause(ctx, time.Second); e != nil {
+			return Reply{}, e
+		}
 	}
 	return Reply{ID: target.ID, Markdown: r.Text, Model: target.Model}, nil
 }

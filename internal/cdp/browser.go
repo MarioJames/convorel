@@ -347,6 +347,12 @@ func (m *Manager) attach(ctx context.Context, id string, owned bool) (*PageTab, 
 	if e = m.client.Call(ctx, "", "Target.attachToTarget", map[string]any{"targetId": id, "flatten": true}, &r); e != nil {
 		return nil, e
 	}
+	// ChatGPT parks a background tab's transcript in an inert hidden view, and
+	// only one tab per window is in front. Each driven tab sees itself as the
+	// visible, focused page for as long as this session stays attached.
+	if e = m.client.Call(ctx, r.ID, "Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true}, nil); e != nil {
+		return nil, e
+	}
 	t := newTab(m, id, r.ID, owned)
 	m.tabs[id] = t
 	return t, nil

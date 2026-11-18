@@ -830,3 +830,51 @@ return getComputedStyle(m.querySelector('[data-message-author-role="user"]')).vi
 	}
 	r.eventually(func() bool { _, err := r.engine.Finish(r.ctx, "scrolled", ""); return err == nil })
 }
+
+// ChatGPT keeps a provisional /c/local-… address for a moment after the
+// stream has already named the server conversation. That is the same
+// conversation, so the first send is confirmed rather than failed.
+func TestFirstSendToleratesProvisionalAddress(t *testing.T) {
+	r := newRig(t, fixture.Options{Markdown: "OK", ProvisionalURL: true, BeforeInputDelay: 1500 * time.Millisecond}, time.Minute, nil)
+	ask := r.call(0, "ask", "--id", "provisional", "--prompt", "Only reply OK.")
+	if ask["delivery"] != "confirmed" {
+		t.Fatal(ask)
+	}
+	wait := r.call(0, "wait", "--id", "provisional", "--timeout-seconds", "10")
+	if wait["reply"].(map[string]any)["markdown"] != "OK" || len(r.fixture.Requests()) != 1 {
+		t.Fatal(wait)
+	}
+	r.eventually(func() bool { _, err := r.engine.Finish(r.ctx, "provisional", ""); return err == nil })
+}
+
+// ChatGPT's first copy on a freshly loaded page is empty, and after each click
+// it shows "Copied" in place of the Copy control for a moment. Completion and
+// a follow-up sent right away both read replies through that control and must
+// wait these out rather than fail.
+func TestFollowupRightAfterCompletionWaitsForCopyControl(t *testing.T) {
+	r := newRig(t, fixture.Options{Markdown: "OK", CopiedState: true}, time.Minute, nil)
+	r.call(0, "ask", "--id", "copied", "--prompt", "Only reply OK.")
+	r.call(0, "wait", "--id", "copied", "--timeout-seconds", "10")
+	r.call(0, "followup", "--id", "copied", "--request-id", "second", "--prompt", "next")
+	wait := r.call(0, "wait", "--id", "copied", "--timeout-seconds", "15")
+	if wait["reply"].(map[string]any)["markdown"] != "OK" || len(r.fixture.Requests()) != 2 {
+		t.Fatal(wait)
+	}
+	r.eventually(func() bool { _, err := r.engine.Finish(r.ctx, "copied", ""); return err == nil })
+}
+
+// ChatGPT's current pages no longer fetch the single conversation after a
+// reload; its metadata arrives only in the conversation list. Naming reads it
+// there instead of timing out.
+func TestNamingReadsMetadataFromConversationList(t *testing.T) {
+	r := newRig(t, fixture.Options{Markdown: "OK", ListMetadata: true}, time.Minute, nil)
+	r.call(0, "ask", "--id", "listed", "--prompt", "Only reply OK.", "--type", "DES", "--topic", "Listed")
+	r.call(0, "wait", "--id", "listed", "--timeout-seconds", "10")
+	r.eventually(func() bool {
+		task, _ := r.st.GetTask(r.ctx, "listed")
+		return task.NamingState != nil && task.NamingState.State != "pending"
+	})
+	if status := r.call(0, "status", "--id", "listed"); status["naming"].(map[string]any)["title"] != "1114｜DES｜Listed" {
+		t.Fatal(status)
+	}
+}

@@ -522,3 +522,20 @@ func TestQueuedActionCancellation(t *testing.T) {
 		t.Fatalf("lease not released: %v", err)
 	}
 }
+
+// ChatGPT parks a background tab's transcript in an inert hidden view, so
+// every tab driven concurrently must see itself as the visible, focused one.
+func TestConcurrentTabsAllReportVisibleAndFocused(t *testing.T) {
+	m, ctx := browserForTest(t)
+	first, second := page(t, m, ctx), page(t, m, ctx)
+	for _, tab := range []*PageTab{first, second} {
+		var state struct {
+			Visibility string
+			Focus      bool
+		}
+		eval(t, tab, ctx, `({visibility:document.visibilityState,focus:document.hasFocus()})`, &state)
+		if state.Visibility != "visible" || !state.Focus {
+			t.Fatalf("tab %s reports %+v", tab.ID(), state)
+		}
+	}
+}

@@ -68,29 +68,51 @@ func (p *BrowserPage) readMetadata(ctx context.Context, since time.Time, reload 
 	for {
 		for _, r := range reader.Responses() {
 			u, e := url.Parse(r.URL)
-			if e != nil || r.At.Before(since) || r.Method != "GET" || r.Status != 200 || (u.Path != "/backend-api/conversation/"+id && u.Path != "/backend-api/conversations/"+id) {
+			if e != nil || r.At.Before(since) || r.Method != "GET" || r.Status != 200 {
+				continue
+			}
+			// Current pages load the conversation itself through the document and
+			// list it in the sidebar's conversation lists; older pages fetch it.
+			single := u.Path == "/backend-api/conversation/"+id || u.Path == "/backend-api/conversations/"+id
+			listed := u.Path == "/backend-api/conversations" || strings.HasPrefix(u.Path, "/backend-api/gizmos/") && strings.HasSuffix(u.Path, "/conversations")
+			if !single && !listed {
 				continue
 			}
 			body, err := reader.ResponseBody(ctx, r.RequestID)
 			if err != nil {
 				continue
 			}
-			var raw struct {
-				ID         string          `json:"conversation_id"`
-				Title      *string         `json:"title"`
-				Created    float64         `json:"create_time"`
-				Project    string          `json:"gizmo_id"`
-				Archived   *bool           `json:"is_archived"`
-				Starred    *bool           `json:"is_starred"`
-				PinnedTime json.RawMessage `json:"pinned_time"`
+			var raw rawMetadata
+			if single {
+				if json.Unmarshal(body, &raw) != nil || raw.ID != id {
+					return ConversationMetadata{}, errors.New("metadata: missing or mismatched target")
+				}
+			} else {
+				var list struct {
+					Items []rawMetadata `json:"items"`
+				}
+				if json.Unmarshal(body, &list) != nil {
+					continue
+				}
+				found := false
+				for _, item := range list.Items {
+					if item.ListID == id {
+						raw, found = item, true
+						raw.ID = id
+					}
+				}
+				if !found {
+					continue
+				}
 			}
-			if json.Unmarshal(body, &raw) != nil || raw.ID != id || raw.Title == nil || raw.Created <= 0 || raw.Archived == nil {
+			created, ok := raw.created()
+			if raw.Title == nil || !ok || raw.Archived == nil {
 				return ConversationMetadata{}, errors.New("metadata: missing or mismatched target")
 			}
 			if err = p.verify(ctx, Identity{URL: before.URL, ConversationID: id}); err != nil {
 				return ConversationMetadata{}, err
 			}
-			return ConversationMetadata{ConversationID: id, Title: *raw.Title, CreatedAt: time.Unix(int64(raw.Created), int64((raw.Created-float64(int64(raw.Created)))*1e9)).UTC(), ProjectID: raw.Project, Archived: *raw.Archived, Starred: raw.Starred, PinnedTime: raw.PinnedTime}, nil
+			return ConversationMetadata{ConversationID: id, Title: *raw.Title, CreatedAt: created, ProjectID: raw.Project, Archived: *raw.Archived, Starred: raw.Starred, PinnedTime: raw.PinnedTime}, nil
 		}
 		if err := pause(ctx, 100*time.Millisecond); err != nil {
 			return ConversationMetadata{}, fmt.Errorf("metadata: page GET not observed: %w", err)
@@ -251,4 +273,31 @@ func (p *BrowserPage) Rename(ctx context.Context, title string) error {
 			return fmt.Errorf("rename save unconfirmed; inspect before retrying: %w", err)
 		}
 	}
+}
+
+// rawMetadata is one conversation as the single fetch (conversation_id, Unix
+// seconds) or a list item (id, RFC 3339 time) describes it.
+type rawMetadata struct {
+	ID         string          `json:"conversation_id"`
+	ListID     string          `json:"id"`
+	Title      *string         `json:"title"`
+	Created    json.RawMessage `json:"create_time"`
+	Project    string          `json:"gizmo_id"`
+	Archived   *bool           `json:"is_archived"`
+	Starred    *bool           `json:"is_starred"`
+	PinnedTime json.RawMessage `json:"pinned_time"`
+}
+
+func (m rawMetadata) created() (time.Time, bool) {
+	var seconds float64
+	if json.Unmarshal(m.Created, &seconds) == nil && seconds > 0 {
+		return time.Unix(int64(seconds), int64((seconds-float64(int64(seconds)))*1e9)).UTC(), true
+	}
+	var stamp string
+	if json.Unmarshal(m.Created, &stamp) == nil {
+		if t, err := time.Parse(time.RFC3339Nano, stamp); err == nil {
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
 }
