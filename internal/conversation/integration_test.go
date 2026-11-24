@@ -364,6 +364,33 @@ func TestDeliveredReplyRecoversAfterLoginWithoutResending(t *testing.T) {
 	}
 }
 
+func TestDeliveredReplyRecoversAfterTargetClosesWithoutResending(t *testing.T) {
+	r := newRig(t, fixture.Options{Markdown: "OK", SlowReply: 4500 * time.Millisecond}, time.Minute, nil)
+	const id = "recover-closed-target"
+	ask := r.call(0, "ask", "--id", id, "--prompt", "Only reply OK")
+	task, err := r.st.GetTask(r.ctx, id)
+	if err != nil || task.Binding == nil {
+		t.Fatalf("missing original target: %v", err)
+	}
+	external, err := cdp.Dial(r.ctx, r.cfg.CDP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer external.Close()
+	var result struct{ Success bool }
+	if err = external.Call(r.ctx, "", "Target.closeTarget", map[string]string{"targetId": task.Binding.Target}, &result); err != nil || !result.Success {
+		t.Fatalf("externally closing target: %v", err)
+	}
+	got := r.call(0, "wait", "--id", id, "--timeout-seconds", "10")
+	if got["run"] != ask["run"] || got["reply"].(map[string]any)["markdown"] != "OK" ||
+		got["binding"].(map[string]any)["target"] == task.Binding.Target {
+		t.Fatal(got)
+	}
+	if len(r.fixture.Requests()) != 1 {
+		t.Fatal("reattachment duplicated the original submission")
+	}
+}
+
 func TestIdleChromeStopsAndRelaunches(t *testing.T) {
 	r := newRig(t, fixture.Options{Markdown: "OK", SlowReply: 500 * time.Millisecond}, 300*time.Millisecond, nil)
 	r.call(0, "ask", "--id", "idle", "--prompt", "Only reply OK")

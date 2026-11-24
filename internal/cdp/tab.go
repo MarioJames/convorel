@@ -31,6 +31,8 @@ type PageTab struct {
 
 var _ Tab = (*PageTab)(nil)
 
+var ErrTabReleased = errors.New("TAB_RELEASED")
+
 func newTab(m *Manager, id, session string, owned bool) *PageTab {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &PageTab{manager: m, client: m.client, id: id, session: session, owned: owned, ctx: ctx, cancel: cancel, events: newQueue[NetworkEvent]()}
@@ -45,10 +47,25 @@ func (t *PageTab) Owned() bool       { return t.owned }
 func (t *PageTab) call(ctx context.Context, method string, params, out any) error {
 	select {
 	case <-t.ctx.Done():
-		return errors.New("TAB_RELEASED")
+		return ErrTabReleased
 	default:
 	}
-	return t.client.Call(ctx, t.session, method, params, out)
+	err := t.client.Call(ctx, t.session, method, params, out)
+	if err != nil {
+		var protocol *ProtocolError
+		if errors.As(err, &protocol) && protocol.Code == -32001 {
+			// CDP's session-not-found code means this attachment cannot be reused.
+			t.cancel()
+			t.unsubscribe()
+			return fmt.Errorf("%w: %v", ErrTabReleased, err)
+		}
+		select {
+		case <-t.client.Done():
+			return fmt.Errorf("%w: %v", ErrTabReleased, err)
+		default:
+		}
+	}
+	return err
 }
 func (t *PageTab) Evaluate(ctx context.Context, expression string, out any) error {
 	var r struct {

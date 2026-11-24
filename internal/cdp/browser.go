@@ -326,7 +326,10 @@ func (m *Manager) AttachTab(ctx context.Context, id string) (Tab, error) {
 }
 func (m *Manager) attach(ctx context.Context, id string, owned bool) (*PageTab, error) {
 	if t := m.tabs[id]; t != nil {
-		return t, nil
+		if t.ctx.Err() == nil {
+			return t, nil
+		}
+		delete(m.tabs, id)
 	}
 	targets, e := m.client.Targets(ctx)
 	if e != nil {
@@ -339,6 +342,7 @@ func (m *Manager) attach(ctx context.Context, id string, owned bool) (*PageTab, 
 		}
 	}
 	if !found {
+		delete(m.owned, id)
 		return nil, errors.New("TARGET_NOT_FOUND")
 	}
 	var r struct {

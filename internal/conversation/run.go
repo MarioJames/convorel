@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MarioJames/convorel/internal/cdp"
 	"github.com/MarioJames/convorel/internal/chatgpt"
 	"github.com/MarioJames/convorel/internal/store"
 	"github.com/MarioJames/convorel/internal/workspace"
@@ -248,6 +249,13 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 		case <-ticker.C:
 			snap, er := obs.Snapshot(e.ctx)
 			if er != nil {
+				if errors.Is(er, cdp.ErrTabReleased) {
+					// The read-only recovery loop reopens the saved URL and
+					// verifies the original turn. It never replays the prompt.
+					s.page = nil
+					s.tab = nil
+					return
+				}
 				if errors.Is(er, chatgpt.ErrLoginRequired) && r.Error != er.Error() {
 					old := r
 					r.Error = er.Error()
