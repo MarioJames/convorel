@@ -233,6 +233,29 @@ func TestHiddenARIAThumbInVisiblePowerControl(t *testing.T) {
 	}
 }
 
+func TestVerifyRollingLatestLabelAtProEffort(t *testing.T) {
+	m, ctx := browser(t)
+	s := fixture.New(fixture.Options{})
+	defer s.Close()
+	p, tab := newPage(t, m, ctx, s)
+	if err := tab.Evaluate(ctx, `document.querySelector('#advanced [aria-checked=true]').textContent='Latest'`, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.EnsureModel(ctx, "", 5); err != nil {
+		t.Fatal(err)
+	}
+	var effort string
+	if err := tab.Evaluate(ctx, `document.querySelector('[role=slider]').getAttribute('aria-valuenow')`, &effort); err != nil || effort != "4" {
+		t.Fatalf("expected fifth effort position: %q, %v", effort, err)
+	}
+	if err := p.EnsureModel(ctx, "GPT-6 Pro", 5); err == nil || !strings.Contains(err.Error(), "MODEL_UNVERIFIED") {
+		t.Fatalf("Latest selection verified a pinned family: %v", err)
+	}
+	if len(s.Requests()) != 0 {
+		t.Fatal("model verification sent a message")
+	}
+}
+
 func TestNetworkFaultsAndDoctor(t *testing.T) {
 	m, ctx := browser(t)
 	for _, test := range []struct {

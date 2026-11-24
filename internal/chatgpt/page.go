@@ -382,7 +382,14 @@ func (p *BrowserPage) EnsureModel(ctx context.Context, expected string, effort i
 	normalized := strings.TrimSpace(strings.TrimPrefix(expected, "GPT-"))
 	familyNumber := strings.TrimPrefix(family, "GPT-")
 	rolling := expected == "" || expected == "latest-pro" || strings.EqualFold(expected, "Latest")
-	if !regexp.MustCompile(`^GPT-\d+(\.\d+)?( Sol)?$`).MatchString(family) || (rolling && !latest) || (!rolling && normalized != familyNumber && normalized != familyNumber+" Pro" && expected != "gpt-"+strings.ToLower(familyNumber)) {
+	numberedFamily := regexp.MustCompile(`^GPT-\d+(\.\d+)?( Sol)?$`).MatchString(family)
+	// Some menus name the checked rolling option itself instead of exposing its current GPT family.
+	latestLabel := family == "Latest" || family == "最新" || family == "Le plus récent"
+	verifiedFamily := latest && (numberedFamily || latestLabel)
+	if !rolling {
+		verifiedFamily = numberedFamily && (normalized == familyNumber || normalized == familyNumber+" Pro" || expected == "gpt-"+strings.ToLower(familyNumber))
+	}
+	if !verifiedFamily {
 		return fmt.Errorf("MODEL_UNVERIFIED: expected %q, selected %q (rolling=%v)", expected, family, latest)
 	}
 	for i := 0; i < 5; i++ {
