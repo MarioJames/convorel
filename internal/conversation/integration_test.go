@@ -329,6 +329,41 @@ func TestKilledWaitAndDaemonRecovery(t *testing.T) {
 		return nil
 	})
 }
+func TestDeliveredReplyRecoversAfterLoginWithoutResending(t *testing.T) {
+	r := newRig(t, fixture.Options{Markdown: "OK", SlowReply: 4500 * time.Millisecond}, time.Minute, nil)
+	const id = "recover-login"
+	ask := r.call(0, "ask", "--id", id, "--prompt", "Only reply OK")
+	task, err := r.st.GetTask(r.ctx, id)
+	if err != nil || task.Binding == nil {
+		t.Fatalf("missing original target: %v", err)
+	}
+	tab, err := r.browser.AttachTab(r.ctx, task.Binding.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = tab.Evaluate(r.ctx, `history.replaceState(null,'','/auth/login?returnTo=original')`, nil); err != nil {
+		t.Fatal(err)
+	}
+	r.eventually(func() bool {
+		status := r.call(0, "status", "--id", id)
+		return status["run"] == ask["run"] && status["phase"] == "delivered" &&
+			status["error"] == chatgpt.ErrLoginRequired.Error()
+	})
+	if err = chatgpt.New(tab).Attach(r.ctx, chatgpt.Identity{URL: task.URL, ConversationID: fixture.ConversationID}); !errors.Is(err, chatgpt.ErrLoginRequired) {
+		t.Fatalf("reattach on login page: %v", err)
+	}
+	if err = tab.Evaluate(r.ctx, `history.replaceState(null,'','/c/fixture-conversation')`, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := r.call(0, "wait", "--id", id, "--timeout-seconds", "10")
+	if got["run"] != ask["run"] || got["error"] != "" || got["reply"].(map[string]any)["markdown"] != "OK" {
+		t.Fatal(got)
+	}
+	if len(r.fixture.Requests()) != 1 {
+		t.Fatal("restoring the original conversation duplicated its submission")
+	}
+}
+
 func TestIdleChromeStopsAndRelaunches(t *testing.T) {
 	r := newRig(t, fixture.Options{Markdown: "OK", SlowReply: 500 * time.Millisecond}, 300*time.Millisecond, nil)
 	r.call(0, "ask", "--id", "idle", "--prompt", "Only reply OK")

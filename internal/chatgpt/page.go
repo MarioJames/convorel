@@ -18,6 +18,8 @@ import (
 //go:embed scripts/*.js
 var scripts embed.FS
 
+var ErrLoginRequired = errors.New("CHATGPT_LOGIN_REQUIRED: sign in to the browser used by Convorel, then reopen the original conversation in its tab")
+
 // BrowserPage implements Page. A page instance belongs to one tab and serializes
 // mutations. NetworkEvents has a single consumer while a send is being observed.
 type BrowserPage struct {
@@ -56,7 +58,7 @@ func (p *BrowserPage) expression(action string, extra map[string]any) string {
 	extra["expectedURL"] = p.bound.URL
 	extra["expectedID"] = p.bound.ConversationID
 	b, _ := json.Marshal(extra)
-	guard := `if(args.expectedURL){const u=new URL(args.expectedURL); if(location.origin!==u.origin)throw new Error('PAGE_IDENTITY_CHANGED'); if(args.expectedID && currentID()!==args.expectedID)throw new Error('CONVERSATION_IDENTITY_CHANGED'); if(!args.expectedID && location.href!==args.expectedURL){if(!args.submitted || !currentID() || (!currentID().startsWith('local-') && currentID()!==args.pendingID))throw new Error('PAGE_IDENTITY_CHANGED');}}`
+	guard := `if(args.expectedURL){const u=new URL(args.expectedURL); if(location.origin!==u.origin)throw new Error('PAGE_IDENTITY_CHANGED'); if(/^\/auth\/login\/?$/.test(location.pathname))throw new Error('CHATGPT_LOGIN_REQUIRED'); if(args.expectedID && currentID()!==args.expectedID)throw new Error('CONVERSATION_IDENTITY_CHANGED'); if(!args.expectedID && location.href!==args.expectedURL){if(!args.submitted || !currentID() || (!currentID().startsWith('local-') && currentID()!==args.pendingID))throw new Error('PAGE_IDENTITY_CHANGED');}}`
 	messages := jsFile("messages")
 	body := jsFile("action")
 	if action == "copy" {
@@ -65,7 +67,11 @@ func (p *BrowserPage) expression(action string, extra map[string]any) string {
 	return "(async()=>{const args=" + string(b) + ";" + jsFile("controls") + guard + messages + body + "})()"
 }
 func (p *BrowserPage) eval(ctx context.Context, action string, extra map[string]any, out any) error {
-	return p.tab.Evaluate(ctx, p.expression(action, extra), out)
+	err := p.tab.Evaluate(ctx, p.expression(action, extra), out)
+	if err != nil && strings.Contains(err.Error(), "CHATGPT_LOGIN_REQUIRED") {
+		return ErrLoginRequired
+	}
+	return err
 }
 func (p *BrowserPage) click(ctx context.Context, action string) error {
 	return p.clickArgs(ctx, action, nil)
@@ -216,6 +222,9 @@ func (p *BrowserPage) verify(ctx context.Context, id Identity) error {
 		b, f := url.Parse(r.URL)
 		if e != nil || f != nil || a.Scheme != b.Scheme || a.Host != b.Host {
 			return errors.New("PAGE_IDENTITY_CHANGED")
+		}
+		if b.Path == "/auth/login" || b.Path == "/auth/login/" {
+			return ErrLoginRequired
 		}
 	}
 	if id.ConversationID != "" && r.ID != id.ConversationID {
@@ -484,6 +493,9 @@ func (p *BrowserPage) Snapshot(ctx context.Context) (Snapshot, error) {
 	defer p.mu.Unlock()
 	var s Snapshot
 	e := p.eval(ctx, "snapshot", nil, &s)
+	if errors.Is(e, ErrLoginRequired) {
+		return Snapshot{}, e
+	}
 	if e != nil && p.submitted && p.bound.ConversationID == "" {
 		// Prepared-dispatch streams may not carry the canonical ID until the
 		// answer ends. Correlate the new URL using this run's unique saved marker.

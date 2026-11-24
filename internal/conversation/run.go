@@ -36,7 +36,9 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 	}
 	page, err := e.open(s, t, r)
 	if err != nil {
-		e.failure(id, rid, "observe", err)
+		if !errors.Is(err, chatgpt.ErrLoginRequired) || r.Error != err.Error() {
+			e.failure(id, rid, "observe", err)
+		}
 		return
 	}
 	t, r, err = e.read(id, rid)
@@ -246,6 +248,14 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 		case <-ticker.C:
 			snap, er := obs.Snapshot(e.ctx)
 			if er != nil {
+				if errors.Is(er, chatgpt.ErrLoginRequired) && r.Error != er.Error() {
+					old := r
+					r.Error = er.Error()
+					if err = e.persist(id, old, r); err != nil {
+						return
+					}
+					signal()
+				}
 				continue
 			}
 			// The address keeps ChatGPT's provisional local- identity for a moment
@@ -254,6 +264,14 @@ func (e *Engine) run(s *taskState, id, rid string, send bool, signal func()) {
 				e.failure(id, rid, "observe", errors.New("CONVERSATION_IDENTITY_CHANGED"))
 				signal()
 				return
+			}
+			if r.Error == chatgpt.ErrLoginRequired.Error() {
+				old := r
+				r.Error = ""
+				r.LastObservedAt = now()
+				if err = e.persist(id, old, r); err != nil {
+					return
+				}
 			}
 			// Unknown submissions may be recovered only by a unique saved run marker,
 			// never by position or an unrelated assistant response.
