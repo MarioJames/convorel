@@ -72,7 +72,7 @@ HTTP 200 单独不能证明送达。重试沿用原 run 的冻结 prompt/marker/
 
 ## 命名和收尾
 
-`ask --type TYPE --topic TOPIC` 请求命名；`--language zh` 仅在用户明确要求中文时使用。标题 `MMDD｜TYPE｜Topic` 的日期来自会话 createdAt 转 Asia/Shanghai。TYPE 默认 FEA/DES/FIX/OPT/REL/EXP/DOC/RES。命名不改变项目归属或正文；主题不明则保留原标题。命名在后台运行，用 `status.naming` 检查 pending/running/verified/failed/not_requested，与回复和 archive 分开报告。
+`ask --type TYPE --topic TOPIC` 请求命名；`--language zh` 仅在用户明确要求中文时使用。标题 `MMDD｜TYPE｜Topic` 的日期来自会话 createdAt 转 Asia/Shanghai。TYPE 默认 FEA/DES/FIX/OPT/REL/EXP/DOC/RES。同批不混用中英文 TYPE，Topic 简短具体且不重复项目名。命名不改变项目归属、正文、顺序、置顶或归档状态；主题不明则保留原标题。命名在后台运行，用 `status.naming` 检查 pending/running/verified/failed/not_requested，与回复和 archive 分开报告。
 
 消费完整回复后 `finish --id ID --run RUN_ID`，检查 cleanup 与 naming。仍观察或命名时会拒绝释放，稍后重试。finish 核验回复未变化、输入框里没有本轮恢复之外的草稿和精确会话身份，仅关闭自有已完成标签页；失败保留证据，不因清理失败重发。保留远端会话、共享浏览器和登录态，清理本任务自有等待者或 lane。
 
