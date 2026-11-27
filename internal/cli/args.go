@@ -187,5 +187,5 @@ func Help(name string) map[string]any {
 	if s, ok := Spec(name); ok {
 		specs = []CommandSpec{s}
 	}
-	return map[string]any{"usage": "convorel [--config-dir PATH] [--state-dir PATH] COMMAND [OPTIONS]", "commands": specs, "version": "1.0.5"}
+	return map[string]any{"usage": "convorel [--config-dir PATH] [--state-dir PATH] COMMAND [OPTIONS]", "commands": specs, "version": "1.0.6"}
 }
